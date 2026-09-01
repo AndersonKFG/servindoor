@@ -1,0 +1,633 @@
+:root {
+  /* PALETA CROMÁTICA OFICIAL SERVINDOOR (EXTRAÍDA DA LOGO) */
+  --serv-magenta: #d946ef;
+  --serv-magenta-dark: #a21caf;
+  --serv-purple: #a855f7;
+  --serv-violet: #7c3aed;
+  
+  --serv-copper: #ea580c;
+  --serv-amber: #f59e0b;
+  --serv-gold: #fbbf24;
+  --serv-yellow: #fde047;
+  
+  --serv-emerald: #10b981;
+  --serv-teal: #14b8a6;
+  --serv-cyan: #06b6d4;
+  --serv-blue: #3b82f6;
+  --serv-indigo: #4f46e5;
+
+  /* GRADIENTES DE ASSINATURA */
+  --serv-gradient: linear-gradient(135deg, #d946ef 0%, #f59e0b 50%, #06b6d4 100%);
+  --serv-gradient-hover: linear-gradient(135deg, #ec4899 0%, #fbbf24 50%, #22d3ee 100%);
+  --serv-text-gradient: linear-gradient(135deg, #f0abfc 0%, #fde047 50%, #67e8f9 100%);
+  --serv-gradient-subtle: linear-gradient(135deg, rgba(217, 70, 239, 0.14) 0%, rgba(245, 158, 11, 0.14) 50%, rgba(6, 182, 212, 0.14) 100%);
+
+  /* CORES BASE E AMBIENTAÇÃO CYBER DARK */
+  --bg-base: #07090e;
+  --bg-surface: #0b0f19;
+  --bg-card: #0f172a;
+  --bg-card-hover: #172033;
+  --border-glass: rgba(255, 255, 255, 0.09);
+  --border-glass-hover: rgba(255, 255, 255, 0.18);
+  --border-accent: rgba(6, 182, 212, 0.4);
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --text-subtle: #64748b;
+  --primary-accent: #06b6d4;
+  --primary-hover: #0ea5e9;
+  --primary-gradient: linear-gradient(135deg, #d946ef 0%, #06b6d4 100%);
+  --gold-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  --success-color: #10b981;
+  --warning-color: #f59e0b;
+  --danger-color: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-main);
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.font-outfit {
+  font-family: 'Outfit', sans-serif;
+}
+
+/* GRADIENTE DE TEXTO SERVINDOOR */
+.gradient-text-servindoor {
+  background: var(--serv-text-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* --- Layout Utilitários --- */
+.app-container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+@media (max-width: 576px) {
+  .app-container {
+    padding: 0 12px;
+  }
+}
+
+/* --- Cards VIP e Glassmorphism --- */
+.vip-glass-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.vip-card {
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+.vip-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.bg-primary {
+  background: rgba(6, 182, 212, 0.18) !important;
+  color: #22d3ee !important;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+}
+
+.bg-success {
+  background: rgba(16, 185, 129, 0.18) !important;
+  color: #34d399 !important;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.bg-warning {
+  background: rgba(245, 158, 11, 0.18) !important;
+  color: #fbbf24 !important;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.bg-danger {
+  background: rgba(239, 68, 68, 0.18) !important;
+  color: #f87171 !important;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.bg-secondary {
+  background: rgba(100, 116, 139, 0.18) !important;
+  color: #94a3b8 !important;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+.bg-servindoor {
+  background: var(--serv-gradient-subtle) !important;
+  color: #fde047 !important;
+  border: 1px solid rgba(253, 224, 71, 0.3);
+}
+
+/* --- BOTÕES MEGA VIP (HOME & RESGATE) --- */
+.btn-vip-mega {
+  background: var(--serv-gradient);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff !important;
+  font-weight: 800;
+  font-size: clamp(1.1rem, 3.5vw, 1.35rem);
+  min-height: 56px;
+  padding: 16px 28px;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(217, 70, 239, 0.45);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 100%;
+}
+
+.btn-vip-mega:hover {
+  background: var(--serv-gradient-hover);
+  transform: translateY(-3px);
+  box-shadow: 0 16px 45px rgba(245, 158, 11, 0.55);
+  filter: brightness(1.08);
+}
+
+.btn-reserva-continua {
+  background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%);
+  box-shadow: 0 10px 30px rgba(234, 88, 12, 0.45);
+}
+
+.btn-reserva-continua:hover {
+  box-shadow: 0 16px 45px rgba(234, 88, 12, 0.65);
+}
+
+.btn-vip-disabled {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #64748b;
+  font-weight: 700;
+  font-size: clamp(0.92rem, 3vw, 1.1rem);
+  min-height: 52px;
+  padding: 14px 20px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+  cursor: not-allowed;
+  width: 100%;
+}
+
+.btn-timer-badge {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+/* --- INFO CHIPS (RODAPÉ DOS LOTES NA HOME) --- */
+.chips-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.info-chip {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  padding: 8px 14px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info-chip-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  padding: 8px 14px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.info-chip-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: #fbbf24;
+  color: #ffffff;
+}
+
+/* --- BOTÕES DE AÇÃO EM TABELAS E CARDS (.btn-action-icon) --- */
+.btn-action-icon {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 0.95rem;
+  text-decoration: none;
+}
+
+.btn-action-icon:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-2px);
+}
+
+.btn-action-icon.text-info, .btn-action-icon.text-cyan {
+  color: #38bdf8;
+}
+.btn-action-icon.text-info:hover:not(:disabled), .btn-action-icon.text-cyan:hover:not(:disabled) {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: #06b6d4;
+  color: #22d3ee;
+}
+
+.btn-action-icon.text-warning, .btn-action-icon.text-gold {
+  color: #f59e0b;
+}
+.btn-action-icon.text-warning:hover:not(:disabled), .btn-action-icon.text-gold:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: #f59e0b;
+  color: #fbbf24;
+}
+
+.btn-action-icon.text-danger, .btn-action-icon.text-red {
+  color: #ef4444;
+}
+.btn-action-icon.text-danger:hover:not(:disabled), .btn-action-icon.text-red:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #f87171;
+}
+
+.btn-action-icon:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* --- BOTÕES PADRÃO DO SISTEMA --- */
+.btn-primary {
+  background: var(--serv-gradient);
+  border: none;
+  color: #ffffff !important;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 10px 20px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+  box-shadow: 0 4px 18px rgba(217, 70, 239, 0.35);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--serv-gradient-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(245, 158, 11, 0.45);
+  color: #ffffff;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.btn-danger:hover {
+  background: #ef4444;
+  color: #ffffff;
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+}
+
+/* BOTÃO TELÃO DE PROJEÇÃO */
+.btn-telao-pop {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  color: #000000 !important;
+  font-weight: 800;
+  font-size: 0.95rem;
+  padding: 10px 20px;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(245, 158, 11, 0.4);
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.btn-telao-pop:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.1);
+  box-shadow: 0 6px 25px rgba(245, 158, 11, 0.6);
+}
+
+/* --- TABELAS CUSTOMIZADAS (.custom-table) --- */
+.custom-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.custom-table th {
+  padding: 14px 16px;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  font-weight: 700;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.custom-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.88rem;
+  vertical-align: middle;
+}
+
+.custom-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* --- FORMULÁRIOS & CONTROLES --- */
+.form-group {
+  margin-bottom: 18px;
+}
+
+.form-label {
+  display: block;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.form-control, .form-select {
+  width: 100%;
+  background: #080d1a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.form-control:focus, .form-select:focus {
+  outline: none;
+  border-color: #06b6d4;
+  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.25);
+  background: #0d1527;
+}
+
+/* --- MODAIS REATIVOS --- */
+.modal-backdrop-custom {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.modal-content-custom {
+  background: #0d1322;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 22px;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);
+  width: 100%;
+  max-width: min(540px, calc(100vw - 24px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  animation: modalIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.92) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal-header-custom {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-body-custom {
+  padding: 20px 16px;
+}
+
+.modal-footer-custom {
+  padding: 14px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* --- TABELAS RESPONSIVAS --- */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-responsive::-webkit-scrollbar {
+  height: 6px;
+}
+
+.table-responsive::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.table-responsive::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+/* --- CLOCK DIGITS & HALO DO CRONÔMETRO --- */
+.clock-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0 24px;
+}
+
+.clock-digits {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.digit-box {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  padding: 12px 14px;
+  border-radius: 14px;
+  min-width: 68px;
+  text-align: center;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+
+.digit-number {
+  font-family: 'Outfit', sans-serif;
+  font-size: clamp(1.8rem, 4.5vw, 2.5rem);
+  font-weight: 900;
+  color: #ffffff;
+  display: block;
+  line-height: 1;
+}
+
+.digit-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  margin-top: 6px;
+  display: block;
+}
+
+.digit-sep {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #475569;
+  margin: 0 2px;
+  padding-bottom: 12px;
+}
+
+/* --- RESPONSIVIDADE MOBILE --- */
+@media (max-width: 576px) {
+  .digit-box {
+    min-width: 48px;
+    padding: 10px 4px;
+    border-radius: 10px;
+  }
+  .digit-number {
+    font-size: 1.45rem;
+  }
+  .digit-label {
+    font-size: 0.55rem;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+  }
+  .digit-sep {
+    font-size: 1.1rem;
+    margin: 0 1px;
+    padding-bottom: 8px;
+  }
+  .vip-card {
+    border-radius: 18px;
+  }
+}

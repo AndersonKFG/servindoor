@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+gunicorn
+sqlmodel
+asyncpg
+python-dotenv
+jinja2
+python-multipart
+requests
+pydantic-settings
+python-jose[cryptography]
+passlib[argon2]
+argon2-cffi
+qrcode[pil]
+pillow

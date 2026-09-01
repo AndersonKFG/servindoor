@@ -1,0 +1,66 @@
+services:
+  # --- Banco de Dados PostgreSQL 16 Otimizado Localmente ---
+  db:
+    image: postgres:16-alpine
+    container_name: festa_db
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-festa_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    # Tuning de performance para consultas instantâneas e baixa latência (VPS 16GB RAM)
+    command: >
+      postgres
+      -c shared_buffers=4GB
+      -c work_mem=64MB
+      -c effective_cache_size=12GB
+      -c maintenance_work_mem=512MB
+      -c max_connections=200
+      -c random_page_cost=1.1
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d festa_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - festa_net
+
+  # --- Aplicação Web FastAPI de Alta Performance ---
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: festa_web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-festa_db}
+      SECRET_KEY: ${SECRET_KEY:-festa-servidor-super-secret-key-ultra-fast-2026}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-120}
+      DB_ECHO: "false"
+      WORKERS_COUNT: ${WORKERS_COUNT:-4}
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    networks:
+      - festa_net
+
+volumes:
+  postgres_data:
+    name: festa_postgres_data
+
+networks:
+  festa_net:
+    name: festa_network
+    driver: bridge

@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+.vite/
+.vite-temp/
+
+# Environment Variables & Secrets
+.env
+*.env
+!.env.example
+
+# Uploads & User-generated Media
+app/static/uploads/fotos/*
+!app/static/uploads/fotos/.gitkeep
+app/static/uploads/premios/*
+!app/static/uploads/premios/.gitkeep
+app/static/uploads/entregas/*
+!app/static/uploads/entregas/.gitkeep
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+*.Zone.Identifier
+
+# Database & Logs
+*.sqlite
+*.sqlite3
+*.log
