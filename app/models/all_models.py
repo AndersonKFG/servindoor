@@ -208,3 +208,12 @@ class EstadoSorteio(SQLModel, table=True):
     sorteando: bool = Field(default=False)
     timestamp_inicio: int = Field(default=0)
     premio_id: Optional[int] = Field(default=None, nullable=True)
+
+
+class GatekeeperTentativa(SQLModel, table=True):
+    __tablename__ = "gatekeeper_tentativas"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ip: str = Field(index=True)
+    data_tentativa: datetime = Field(default_factory=datetime.utcnow, index=True)
+    sucesso: bool = Field(default=False)

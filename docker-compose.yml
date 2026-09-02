@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-festa_db}
       PGDATA: /var/lib/postgresql/data/pgdata
-    # Tuning de performance para consultas instantâneas e baixa latência (VPS 16GB RAM)
+    # Tuning de performance mantido para a VPS
     command: >
       postgres
       -c shared_buffers=4GB
@@ -21,8 +21,7 @@ services:
       -c random_page_cost=1.1
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # A porta externa foi desativada por segurança
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d festa_db"]
       interval: 5s
@@ -51,11 +50,12 @@ services:
       WORKERS_COUNT: ${WORKERS_COUNT:-4}
       GATEKEEPER_ENABLED: ${GATEKEEPER_ENABLED:-true}
       SITE_ACCESS_PIN: ${SITE_ACCESS_PIN:-123456}
-      SITE_ACCESS_EXPIRE_DAYS: ${SITE_ACCESS_EXPIRE_DAYS:-30}
+      SITE_ACCESS_EXPIRE_DAYS: ${SITE_ACCESS_EXPIRE_DAYS:-7}
+      GATEKEEPER_MAX_TENTATIVAS: ${GATEKEEPER_MAX_TENTATIVAS:-3}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      - .:/app
+      - ./app/static/fotos:/app/app/static/fotos
     networks:
       - festa_net
 

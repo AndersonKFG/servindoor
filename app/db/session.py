@@ -38,7 +38,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db():
     """Inicializa automaticamente todas as tabelas do sistema e executa migracoes estruturais"""
-    from app.models.all_models import Usuario, Lote, Ingresso, Secretaria, ReservaIngresso, LogAcesso, Eixo, Premio, Ganhador, EstadoSorteio  # noqa
+    from app.models.all_models import Usuario, Lote, Ingresso, Secretaria, ReservaIngresso, LogAcesso, Eixo, Premio, Ganhador, EstadoSorteio, GatekeeperTentativa  # noqa
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 

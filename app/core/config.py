@@ -20,9 +20,10 @@ class Settings(BaseSettings):
 
     # Gatekeeper / Controle de Acesso Antecipado por PIN
     GATEKEEPER_ENABLED: bool = True
-    SITE_ACCESS_PIN: str = "123456"
-    SITE_ACCESS_EXPIRE_DAYS: int = 30
+    SITE_ACCESS_PIN: str = "123456"  # Suporta números, letras (maiúsculas/minúsculas) e símbolos (ex: S3rv#2026)
+    SITE_ACCESS_EXPIRE_DAYS: int = 7
     SITE_ACCESS_COOKIE_NAME: str = "servindoor_gate_token"
+    GATEKEEPER_MAX_TENTATIVAS: int = 3  # Máximo de tentativas falhas por dispositivo a cada 24 horas
 
     # Servidor
     WORKERS_COUNT: int = 4
