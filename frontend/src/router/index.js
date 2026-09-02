@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import AcessoPinView from '../views/AcessoPinView.vue'
 import HomeView from '../views/HomeView.vue'
 import ResgateView from '../views/ResgateView.vue'
 import SucessoView from '../views/SucessoView.vue'
@@ -18,6 +19,12 @@ import EntregaPremiosView from '../views/EntregaPremiosView.vue'
 import MeusPremiosView from '../views/MeusPremiosView.vue'
 
 const routes = [
+  {
+    path: '/acesso',
+    name: 'acesso',
+    component: AcessoPinView,
+    meta: { publicoGatekeeper: true, hideNav: true }
+  },
   { path: '/', name: 'home', component: HomeView },
   { path: '/resgate/:loteId', name: 'resgate', component: ResgateView },
   { path: '/sucesso/:ingressoId', name: 'sucesso', component: SucessoView },
@@ -39,6 +46,32 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+
+// Interceptador Global do Gatekeeper (Validação de Dispositivo por PIN)
+router.beforeEach((to, from, next) => {
+  const gateToken = localStorage.getItem('servindoor_gate_token')
+
+  // Se o usuário está acessando a tela de código (/acesso)
+  if (to.meta.publicoGatekeeper) {
+    if (gateToken) {
+      // Se o dispositivo já tem liberação, redireciona para a página principal
+      return next({ path: '/' })
+    }
+    return next()
+  }
+
+  // Se o dispositivo ainda não foi liberado, redireciona imediatamente para /acesso
+  // e memoriza a URL pretendida no parâmetro redirect
+  if (!gateToken) {
+    return next({
+      path: '/acesso',
+      query: { redirect: to.fullPath }
+    })
+  }
+
+  next()
 })
 
 export default router

@@ -24,6 +24,15 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/acesso': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        bypass: (req) => {
+          if (req.method === 'GET' && req.headers.accept && req.headers.accept.includes('text/html')) {
+            return '/index.html'
+          }
+        }
+      },
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true

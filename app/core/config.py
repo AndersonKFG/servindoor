@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
 
+    # Gatekeeper / Controle de Acesso Antecipado por PIN
+    GATEKEEPER_ENABLED: bool = True
+    SITE_ACCESS_PIN: str = "123456"
+    SITE_ACCESS_EXPIRE_DAYS: int = 30
+    SITE_ACCESS_COOKIE_NAME: str = "servindoor_gate_token"
+
     # Servidor
     WORKERS_COUNT: int = 4
 
