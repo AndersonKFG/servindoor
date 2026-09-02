@@ -1,3 +1,4 @@
+import os
 import asyncio
 import time
 from datetime import datetime
@@ -229,6 +230,20 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
     )
 
     return response
+
+
+@router.get("/api/time")
+async def get_server_time(t: Optional[str] = None):
+    """Endpoint de altíssima precisão NTP para sincronização de relógios dos clientes"""
+    agora = datetime.now()
+    now_ms = int(agora.timestamp() * 1000)
+    return JSONResponse(
+        content={
+            "server_time_ms": now_ms,
+            "server_time_iso": agora.isoformat()
+        },
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+    )
 
 
 @router.get("/api/lote/live-status")

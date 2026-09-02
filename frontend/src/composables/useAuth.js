@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 const currentUser = ref(null)
 const isCheckingAuth = ref(false)
 const hasCheckedAuth = ref(false)
+const sessaoSubstituida = ref(false)
 
 export function useAuth() {
   const isAuthenticated = computed(() => currentUser.value !== null)
@@ -43,10 +44,15 @@ export function useAuth() {
         const data = await res.json()
         if (data.autenticado && data.usuario) {
           currentUser.value = data.usuario
+          sessaoSubstituida.value = false
         } else {
           currentUser.value = null
         }
       } else {
+        const errData = await res.json().catch(() => ({}))
+        if (errData.sessao_substituida) {
+          sessaoSubstituida.value = true
+        }
         currentUser.value = null
       }
     } catch (e) {
@@ -63,6 +69,7 @@ export function useAuth() {
   function clearAuth() {
     currentUser.value = null
     hasCheckedAuth.value = false
+    sessaoSubstituida.value = false
   }
 
   return {
@@ -74,6 +81,7 @@ export function useAuth() {
     isAdmin,
     isPortaria,
     isEntregador,
+    sessaoSubstituida,
     hasRole,
     checkAuth,
     clearAuth

@@ -33,9 +33,11 @@ os.makedirs("app/static/uploads/fotos", exist_ok=True)
 os.makedirs("app/static/uploads/premios", exist_ok=True)
 os.makedirs("app/static/uploads/entregas", exist_ok=True)
 os.makedirs("app/static/dist/assets", exist_ok=True)
+os.makedirs("app/static/dist/images", exist_ok=True)
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.mount("/assets", StaticFiles(directory="app/static/dist/assets"), name="assets")
+app.mount("/images", StaticFiles(directory="app/static/dist/images"), name="images")
 
 # --- LIGANDO OS FIOS (Incluindo os roteadores) ---
 app.include_router(public.router)
@@ -50,7 +52,12 @@ VUE_INDEX_PATH = 'app/static/dist/index.html'
 
 @app.get('/{full_path:path}')
 async def catch_all_spa(full_path: str):
-    if full_path.startswith('api/') or full_path.startswith('static/') or full_path.startswith('assets/'):
+    if (
+        full_path.startswith('api/')
+        or full_path.startswith('static/')
+        or full_path.startswith('assets/')
+        or full_path.startswith('images/')
+    ):
         raise HTTPException(status_code=404, detail='Recurso não encontrado.')
     if os.path.exists(VUE_INDEX_PATH):
         return FileResponse(VUE_INDEX_PATH)

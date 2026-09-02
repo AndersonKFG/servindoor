@@ -18,6 +18,94 @@ const reservaExpiraEmMs = ref(null)
 const tempoRestanteSegundos = ref(300)
 
 // Form fields
+// Estado de Seleção Amigável de Data de Nascimento (Ano -> Mês -> Dia)
+const nascAno = ref('')
+const nascMes = ref('')
+const nascDia = ref('')
+
+const anoAtual = new Date().getFullYear() // 2026
+const anoMaximo = anoAtual - 18 // 2008 (mínimo 18 anos)
+const anoMinimo = 1930
+
+const anosDisponiveis = computed(() => {
+  const lista = []
+  for (let a = anoMaximo; a >= anoMinimo; a--) {
+    lista.push(a)
+  }
+  return lista
+})
+
+const meses = [
+  { valor: '01', nome: 'Janeiro' },
+  { valor: '02', nome: 'Fevereiro' },
+  { valor: '03', nome: 'Março' },
+  { valor: '04', nome: 'Abril' },
+  { valor: '05', nome: 'Maio' },
+  { valor: '06', nome: 'Junho' },
+  { valor: '07', nome: 'Julho' },
+  { valor: '08', nome: 'Agosto' },
+  { valor: '09', nome: 'Setembro' },
+  { valor: '10', nome: 'Outubro' },
+  { valor: '11', nome: 'Novembro' },
+  { valor: '12', nome: 'Dezembro' }
+]
+
+const diasDisponiveis = computed(() => {
+  let totalDias = 31
+  const m = parseInt(nascMes.value)
+  const a = parseInt(nascAno.value)
+
+  if ([4, 6, 9, 11].includes(m)) {
+    totalDias = 30
+  } else if (m === 2) {
+    if (a) {
+      const isLeap = (a % 4 === 0 && a % 100 !== 0) || (a % 400 === 0)
+      totalDias = isLeap ? 29 : 28
+    } else {
+      totalDias = 29
+    }
+  }
+
+  const lista = []
+  for (let d = 1; d <= totalDias; d++) {
+    lista.push(d < 10 ? '0' + d : String(d))
+  }
+  return lista
+})
+
+function sincronizarDataNascimento() {
+  if (nascAno.value && nascMes.value && nascDia.value) {
+    form.value.data_nascimento = `${nascAno.value}-${nascMes.value}-${nascDia.value}`
+  } else {
+    form.value.data_nascimento = ''
+  }
+}
+
+watch([nascAno, nascMes], () => {
+  if (nascDia.value && diasDisponiveis.value.length > 0) {
+    const maxDia = diasDisponiveis.value[diasDisponiveis.value.length - 1]
+    if (parseInt(nascDia.value) > parseInt(maxDia)) {
+      nascDia.value = maxDia
+    }
+  }
+  sincronizarDataNascimento()
+})
+
+watch(nascDia, () => {
+  sincronizarDataNascimento()
+})
+
+watch(() => form.value.data_nascimento, (val) => {
+  if (val && val.includes('-')) {
+    const parts = val.split('-')
+    if (parts.length === 3) {
+      nascAno.value = parts[0]
+      nascMes.value = parts[1]
+      nascDia.value = parts[2]
+    }
+  }
+})
+
 const form = ref({
   cpf: '',
   data_nascimento: '',
@@ -30,11 +118,113 @@ const form = ref({
   foto_base64: ''
 })
 
+// ============================================================================
+// PERSISTÊNCIA AUTOMÁTICA DE RASCUNHO (Dentro dos 5 minutos de reserva)
+// ============================================================================
+const DRAFT_STORAGE_PREFIX = 'festa_resgate_draft_'
+
+function salvarRascunhoFormulario() {
+  try {
+    const temDados = form.value.cpf || form.value.nome || form.value.telefone || form.value.email || nascAno.value || form.value.foto_base64
+    if (!temDados) return
+
+    const rascunho = {
+      cpf: form.value.cpf,
+      data_nascimento: form.value.data_nascimento,
+      nascAno: nascAno.value,
+      nascMes: nascMes.value,
+      nascDia: nascDia.value,
+      nome: form.value.nome,
+      secretaria_id: form.value.secretaria_id,
+      setor: form.value.setor,
+      vinculo: form.value.vinculo,
+      telefone: form.value.telefone,
+      email: form.value.email,
+      foto_base64: form.value.foto_base64,
+      salvoEm: Date.now()
+    }
+    localStorage.setItem(DRAFT_STORAGE_PREFIX + loteId, JSON.stringify(rascunho))
+  } catch (e) {
+    console.warn('Erro ao salvar rascunho local:', e)
+  }
+}
+
+function restaurarRascunhoFormulario() {
+  try {
+    const raw = localStorage.getItem(DRAFT_STORAGE_PREFIX + loteId)
+    if (!raw) return false
+
+    const draft = JSON.parse(raw)
+    // Se o rascunho foi salvo há mais de 10 minutos, descarta
+    if (Date.now() - (draft.salvoEm || 0) > 10 * 60 * 1000) {
+      limparRascunhoFormulario()
+      return false
+    }
+
+    if (draft.cpf) form.value.cpf = draft.cpf
+    if (draft.nome) form.value.nome = draft.nome
+    if (draft.secretaria_id) form.value.secretaria_id = draft.secretaria_id
+    if (draft.setor) form.value.setor = draft.setor
+    if (draft.vinculo) form.value.vinculo = draft.vinculo
+    if (draft.telefone) form.value.telefone = draft.telefone
+    if (draft.email) form.value.email = draft.email
+    if (draft.foto_base64) form.value.foto_base64 = draft.foto_base64
+
+    if (draft.nascAno) nascAno.value = draft.nascAno
+    if (draft.nascMes) nascMes.value = draft.nascMes
+    if (draft.nascDia) nascDia.value = draft.nascDia
+    if (draft.data_nascimento) form.value.data_nascimento = draft.data_nascimento
+
+    if (draft.cpf && draft.cpf.replace(/\D/g, '').length === 11) {
+      validarCpfServidor(draft.cpf)
+    }
+    return true
+  } catch (e) {
+    console.warn('Erro ao restaurar rascunho:', e)
+    return false
+  }
+}
+
+function limparRascunhoFormulario() {
+  try {
+    localStorage.removeItem(DRAFT_STORAGE_PREFIX + loteId)
+  } catch (e) {
+    // Ignore
+  }
+}
+
+watch(
+  () => [
+    form.value.cpf,
+    form.value.nome,
+    form.value.secretaria_id,
+    form.value.setor,
+    form.value.vinculo,
+    form.value.telefone,
+    form.value.email,
+    form.value.foto_base64,
+    nascAno.value,
+    nascMes.value,
+    nascDia.value
+  ],
+  () => {
+    salvarRascunhoFormulario()
+  }
+)
+
 const submitting = ref(false)
 const errorMessage = ref('')
 const showModalTempo = ref(false)
 const showModalExpirado = ref(false)
-const showModalInterrompido = ref(false)
+const modalFeedback = ref({
+  show: false,
+  titulo: 'Resgate Interrompido',
+  subtitulo: 'Este lote foi temporariamente pausado ou encerrado pela administração do evento.',
+  icone: 'bi-pause-circle-fill',
+  corIcone: 'text-warning',
+  btnTexto: 'Voltar à Página Inicial',
+  btnIcone: 'bi-house-door'
+})
 const showModalDesistir = ref(false)
 const showModalDesistidaOutroNavegador = ref(false)
 const desistindo = ref(false)
@@ -212,6 +402,7 @@ function updateCountdown() {
 
   if (dist <= 0) {
     tempoRestanteSegundos.value = 0
+    limparRascunhoFormulario()
     showModalExpirado.value = true
     if (timerInterval) clearInterval(timerInterval)
     return
@@ -239,7 +430,8 @@ async function verificarStatusReservaServidor() {
     if (data.status === 'expirada' && data.motivo === 'tempo_esgotado') {
       if (timerInterval) clearInterval(timerInterval)
       if (statusPollInterval) clearInterval(statusPollInterval)
-      showModalExpirado.value = true
+      limparRascunhoFormulario()
+    showModalExpirado.value = true
       return
     }
 
@@ -281,8 +473,62 @@ async function carregarDadosResgate() {
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}))
-      errorMessage.value = errData.detail || 'Não foi possível reservar uma vaga no lote.'
-      showModalInterrompido.value = true
+      const codigo = errData.codigo || errData.code || ''
+      const msgTexto = (typeof errData.detail === 'object' ? errData.detail?.mensagem : errData.detail) || errData.mensagem || 'Não foi possível reservar uma vaga no lote.'
+      errorMessage.value = msgTexto
+
+      if (codigo === 'esgotado' || msgTexto.includes('já foram resgatados') || msgTexto.includes('Esgotado')) {
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Ingressos Esgotados!',
+          subtitulo: 'Todos os ingressos deste lote já foram resgatados por outros participantes. Fique atento aos próximos lotes!',
+          icone: 'bi-ticket-detailed-fill',
+          corIcone: 'text-danger',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+      } else if (codigo === 'em_preenchimento' || msgTexto.includes('preenchimento') || msgTexto.includes('outros servidores')) {
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Vagas em Preenchimento!',
+          subtitulo: 'No momento, todas as vagas restantes estão sendo preenchidas por outros servidores no tempo limite de 5 minutos. Se alguém desistir ou o tempo expirar, a vaga voltará automaticamente para a tela inicial!',
+          icone: 'bi-hourglass-split',
+          corIcone: 'text-warning',
+          btnTexto: 'Acompanhar na Página Inicial',
+          btnIcone: 'bi-arrow-repeat'
+        }
+      } else if (msgTexto.includes('pausado') || msgTexto.includes('inativo')) {
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Lote Pausado',
+          subtitulo: msgTexto,
+          icone: 'bi-pause-circle-fill',
+          corIcone: 'text-warning',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+      } else if (msgTexto.includes('encerrado')) {
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Lote Encerrado',
+          subtitulo: msgTexto,
+          icone: 'bi-archive-fill',
+          corIcone: 'text-secondary',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+      } else {
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Aviso de Resgate',
+          subtitulo: msgTexto,
+          icone: 'bi-exclamation-triangle-fill',
+          corIcone: 'text-warning',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+      }
+
       loading.value = false
       return
     }
@@ -301,8 +547,43 @@ async function carregarDadosResgate() {
     const statusRes = await fetch("/api/lote/live-status?lote_id=" + loteId, { cache: 'no-store' })
     if (statusRes.ok) {
       const st = await statusRes.json()
-      if (!st.has_lote || st.status_slug === 'pausado' || st.status_slug === 'encerrado') {
-        showModalInterrompido.value = true
+      if (!st.has_lote || st.status_slug === 'esgotado') {
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Ingressos Esgotados!',
+          subtitulo: 'Todos os ingressos deste lote já foram resgatados por outros participantes.',
+          icone: 'bi-ticket-detailed-fill',
+          corIcone: 'text-danger',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+        loading.value = false
+        return
+      }
+      if (st.status_slug === 'pausado') {
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Lote Pausado',
+          subtitulo: 'Este lote foi temporariamente pausado pela administração do evento.',
+          icone: 'bi-pause-circle-fill',
+          corIcone: 'text-warning',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+        loading.value = false
+        return
+      }
+      if (st.status_slug === 'encerrado') {
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Lote Encerrado',
+          subtitulo: 'O período de resgate deste lote já foi encerrado.',
+          icone: 'bi-archive-fill',
+          corIcone: 'text-secondary',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+        loading.value = false
         return
       }
       lote.value = {
@@ -334,6 +615,7 @@ async function carregarDadosResgate() {
       ]
     }
 
+    restaurarRascunhoFormulario()
     updateCountdown()
     timerInterval = setInterval(updateCountdown, 1000)
     statusPollInterval = setInterval(verificarStatusReservaServidor, 1500)
@@ -347,6 +629,7 @@ async function carregarDadosResgate() {
 
 // Desistir da vaga reservada
 async function executarDesistencia() {
+  limparRascunhoFormulario()
   if (!tokenReserva.value) {
     router.push('/')
     return
@@ -445,10 +728,12 @@ async function handleSubmit() {
 
     const data = await res.json()
     if (data.ingresso_id) {
+      limparRascunhoFormulario()
       router.push('/sucesso/' + data.ingresso_id)
       return
     }
     if (data.redirect_url) {
+      limparRascunhoFormulario()
       router.push(data.redirect_url)
       return
     }
@@ -483,7 +768,7 @@ onUnmounted(() => {
   <div class="resgate-page">
     <div class="app-container">
       
-      <!-- Barra Sticky Superior do Tempo Reservado -->
+      <!-- Barra Flutuante Superior do Tempo Reservado (Acompanha a rolagem da tela) -->
       <div class="sticky-timer-bar" :class="{ 'timer-critical': isTimerCritical }">
         <div class="timer-info-left">
           <span class="timer-pill" :class="{ 'critical': isTimerCritical }">
@@ -497,13 +782,16 @@ onUnmounted(() => {
 
         <div class="timer-actions-right">
           <button type="button" class="btn-timer-help" @click="showModalTempo = true">
-            <i class="bi bi-question-circle-fill me-1"></i> O que é este tempo?
+            <i class="bi bi-question-circle-fill me-1"></i> <span class="help-label">Ajuda</span>
           </button>
           <button type="button" class="btn-desistir-top" @click="showModalDesistir = true">
-            <i class="bi bi-x-circle me-1"></i> Desistir da Vaga
+            <i class="bi bi-x-circle me-1"></i> <span>Desistir</span>
           </button>
         </div>
       </div>
+
+      <!-- Espaçador para a barra flutuante fixa -->
+      <div class="sticky-timer-spacer"></div>
 
       <div class="form-wrapper">
         <div class="vip-card form-card">
@@ -568,24 +856,72 @@ onUnmounted(() => {
                   <span v-else class="form-text">Digite os 11 dígitos do CPF.</span>
                 </div>
 
-                <!-- DATA DE NASCIMENTO COM VALIDAÇÃO 18+ ANOS -->
+                <!-- DATA DE NASCIMENTO AMIGÁVEL (ANO -> MÊS -> DIA) -->
                 <div class="form-group">
-                  <label class="form-label" for="data_nascimento">
+                  <label class="form-label">
                     Data de Nascimento <span class="text-danger">*</span>
                   </label>
-                  <input
-                    id="data_nascimento"
-                    v-model="form.data_nascimento"
-                    type="date"
-                    class="form-control"
-                    :class="{ 'is-invalid': idadeInvalida }"
-                    required
-                  />
-                  <!-- Alerta de menor de 18 anos -->
+
+                  <div class="date-select-grid">
+                    <!-- 1. ANO PRIMEIRO -->
+                    <div class="select-col col-ano">
+                      <select
+                        id="nasc-ano"
+                        v-model="nascAno"
+                        class="form-select date-select"
+                        required
+                        aria-label="Ano de Nascimento"
+                      >
+                        <option value="" disabled>Ano</option>
+                        <option v-for="a in anosDisponiveis" :key="a" :value="String(a)">
+                          {{ a }}
+                        </option>
+                      </select>
+                    </div>
+
+                    <!-- 2. MÊS SEGUNDO -->
+                    <div class="select-col col-mes">
+                      <select
+                        id="nasc-mes"
+                        v-model="nascMes"
+                        class="form-select date-select"
+                        :disabled="!nascAno"
+                        required
+                        aria-label="Mês de Nascimento"
+                      >
+                        <option value="" disabled>Mês</option>
+                        <option v-for="m in meses" :key="m.valor" :value="m.valor">
+                          {{ m.valor }} - {{ m.nome }}
+                        </option>
+                      </select>
+                    </div>
+
+                    <!-- 3. DIA TERCEIRO -->
+                    <div class="select-col col-dia">
+                      <select
+                        id="nasc-dia"
+                        v-model="nascDia"
+                        class="form-select date-select"
+                        :disabled="!nascMes"
+                        required
+                        aria-label="Dia de Nascimento"
+                      >
+                        <option value="" disabled>Dia</option>
+                        <option v-for="d in diasDisponiveis" :key="d" :value="d">
+                          {{ d }}
+                        </option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <!-- Alerta de validação de idade -->
                   <div v-if="idadeInvalida" class="text-danger small mt-1 fw-bold">
                     <i class="bi bi-shield-x me-1"></i> Resgate permitido apenas para maiores de 18 anos.
                   </div>
-                  <span v-else class="form-text">Exclusivo para maiores de 18 anos.</span>
+                  <div v-else-if="form.data_nascimento" class="text-success small mt-1">
+                    <i class="bi bi-check-circle me-1"></i> Data selecionada: {{ nascDia }}/{{ nascMes }}/{{ nascAno }}
+                  </div>
+                  <span v-else class="form-text">Selecione o Ano, depois o Mês e o Dia.</span>
                 </div>
 
                 <!-- NOME COMPLETO -->
@@ -836,23 +1172,23 @@ onUnmounted(() => {
       </template>
     </Modal>
 
-    <!-- Modal: Lote Interrompido -->
+    <!-- Modal Dinâmico de Feedback do Resgate (Esgotado, Em Preenchimento, Pausado, Encerrado) -->
     <Modal
-      :show="showModalInterrompido"
-      title="Resgate Interrompido"
-      icon="bi-pause-circle-fill"
-      icon-color="text-warning"
-      :max-width="'460px'"
+      :show="modalFeedback.show"
+      :title="modalFeedback.titulo"
+      :icon="modalFeedback.icone"
+      :icon-color="modalFeedback.corIcone"
+      :max-width="'480px'"
       @close="router.push('/')"
     >
       <div class="text-center py-2">
-        <p class="text-muted">
-          Este lote foi temporariamente pausado ou encerrado pela administração do evento.
+        <p class="text-muted font-outfit" style="font-size: 0.95rem; line-height: 1.5;">
+          {{ modalFeedback.subtitulo }}
         </p>
       </div>
       <template #footer>
         <router-link to="/" class="btn-primary w-100">
-          <i class="bi bi-house-door me-1"></i> Voltar à Página Inicial
+          <i :class="['bi', modalFeedback.btnIcone, 'me-1']"></i> {{ modalFeedback.btnTexto }}
         </router-link>
       </template>
     </Modal>
@@ -866,23 +1202,73 @@ onUnmounted(() => {
 }
 
 .sticky-timer-bar {
-  position: sticky;
-  top: 70px;
-  z-index: 100;
-  background: rgba(17, 24, 39, 0.95);
+  position: fixed;
+  top: 68px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 32px);
+  max-width: 860px;
+  z-index: 990;
+  background: rgba(15, 23, 42, 0.96);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(245, 158, 11, 0.2);
   border-radius: 16px;
-  padding: 12px 20px;
-  margin-bottom: 24px;
+  padding: 10px 18px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-wrap: wrap;
   gap: 12px;
   transition: all 0.3s ease;
+}
+
+.sticky-timer-spacer {
+  height: 64px;
+  margin-bottom: 14px;
+}
+
+/* Data de Nascimento: Grid Amigável Ano -> Mês -> Dia */
+.date-select-grid {
+  display: flex;
+  gap: 8px;
+}
+
+.col-ano {
+  flex: 1.1;
+}
+
+.col-mes {
+  flex: 1.5;
+}
+
+.col-dia {
+  flex: 0.9;
+}
+
+.date-select {
+  padding: 10px 8px;
+  background: #0f172a;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  color: #ffffff;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.2s ease;
+}
+
+.date-select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.date-select:focus {
+  border-color: var(--primary-accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+  outline: none;
 }
 
 .sticky-timer-bar.timer-critical {
@@ -1136,6 +1522,31 @@ onUnmounted(() => {
   }
   .form-card {
     padding: 24px 16px;
+  }
+}
+@media (max-width: 640px) {
+  .sticky-timer-bar {
+    top: 58px;
+    width: calc(100% - 16px);
+    padding: 8px 12px;
+    border-radius: 12px;
+  }
+  .sticky-timer-spacer {
+    height: 56px;
+    margin-bottom: 10px;
+  }
+  .timer-text {
+    display: none;
+  }
+  .btn-timer-help .help-label {
+    display: none;
+  }
+  .date-select-grid {
+    gap: 6px;
+  }
+  .date-select {
+    padding: 9px 6px;
+    font-size: 0.82rem;
   }
 }
 </style>

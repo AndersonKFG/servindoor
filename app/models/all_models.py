@@ -69,6 +69,8 @@ class Usuario(SQLModel, table=True):
     ultimo_acesso: Optional[datetime] = Field(default=None, nullable=True)
     deleted_at: Optional[datetime] = Field(default=None, nullable=True)
     ativo: bool = Field(default=True)
+    session_id: Optional[str] = Field(default=None, nullable=True)
+    session_device_info: Optional[str] = Field(default=None, nullable=True)
 
     # Relacionamentos
     secretaria: Optional[Secretaria] = Relationship(back_populates="usuarios")

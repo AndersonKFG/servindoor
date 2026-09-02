@@ -298,12 +298,17 @@ async def pagina_resgate(
 
         if vagas_disponiveis <= 0:
             if lote.quantidade_resgatada >= lote.quantidade_total:
-                msg = "Todos os ingressos deste lote já foram resgatados."
+                msg = "Todos os ingressos deste lote já foram resgatados por outros servidores."
+                codigo = "esgotado"
             else:
-                msg = "Todas as vagas restantes estão temporariamente em processo de preenchimento por outros servidores. Aguarde alguns instantes na tela inicial para tentar caso alguma vaga seja liberada."
+                msg = "Todas as vagas restantes estão temporariamente em processo de preenchimento por outros servidores. Aguarde alguns instantes na tela inicial para tentar caso alguma vaga seja liberada!"
+                codigo = "em_preenchimento"
             
             if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                raise HTTPException(status_code=400, detail=msg)
+                return JSONResponse(
+                    status_code=400,
+                    content={"codigo": codigo, "detail": msg, "mensagem": msg}
+                )
             if os.path.exists(VUE_INDEX_PATH):
                 return FileResponse(VUE_INDEX_PATH)
             return templates.TemplateResponse(

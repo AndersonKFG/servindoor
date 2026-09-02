@@ -1,4 +1,5 @@
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useServerTime } from './useServerTime'
 
 function getDeviceFingerprint() {
   try {
@@ -33,6 +34,7 @@ function getDeviceFingerprint() {
 }
 
 export function useLoteStatus(loteIdParam = null) {
+  const { calibrarComResposta } = useServerTime()
   const loading = ref(true)
   const hasLote = ref(false)
   const modoFesta = ref(false)
@@ -58,12 +60,19 @@ export function useLoteStatus(loteIdParam = null) {
     try {
       const deviceFp = getDeviceFingerprint()
       const base = loteIdParam ? `/api/lote/live-status?lote_id=${loteIdParam}&device_fingerprint=${deviceFp}` : `/api/lote/live-status?device_fingerprint=${deviceFp}`
+      const t0 = Date.now()
       const res = await fetch(base, { 
         cache: 'no-store',
         headers: { 'X-Device-Fingerprint': deviceFp }
       })
+      const t1 = Date.now()
       if (!res.ok) return
       const data = await res.json()
+
+      // Sincronização contínua de relógio
+      if (data.server_time_ms) {
+        calibrarComResposta(data.server_time_ms, t0, t1)
+      }
 
       hasLote.value = data.has_lote
       modoFesta.value = data.modo_festa

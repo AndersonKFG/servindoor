@@ -462,6 +462,9 @@ async function desistirVagaPelaHome() {
     minhaReservaExpiraEmMs.value = null
     minhaReservaToken.value = null
     tempoReservaFormatado.value = ''
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith('festa_resgate_draft_')).forEach(k => localStorage.removeItem(k))
+    } catch(e) {}
     showModalDesistirHome.value = false
   } catch (e) {
     console.error('Erro ao desistir:', e)
@@ -582,15 +585,15 @@ const cardClass = computed(() => {
             <div class="hero-logo-card" :class="{ 'spinning': isSpinning }">
               <!-- Logo 1: Servindoor -->
               <img
-                v-if="sponsorIndex === 0"
-                src="/images/logo_servindoor_sem-fundo.png"
+                v-show="sponsorIndex === 0"
+                src="/images/logo_servindoor_sem-fundo.png?v=2026"
                 alt="Servindoor • A Festa do Servidor 2026"
                 class="hero-logo-img logo-servindoor"
               />
               <!-- Logo 2: Bradesco -->
               <img
-                v-else
-                src="/images/logo_bradesco_sem-fundo.png"
+                v-show="sponsorIndex === 1"
+                src="/images/logo_bradesco_sem-fundo.png?v=2026"
                 alt="Bradesco • Patrocinador Master"
                 class="hero-logo-img logo-bradesco"
               />

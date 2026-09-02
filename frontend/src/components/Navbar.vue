@@ -1,15 +1,35 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
 const route = useRoute()
-const { currentUser, isAuthenticated, isStaff, isAdminGeral, isAdmin, isPortaria, isEntregador, checkAuth, clearAuth } = useAuth()
+const { currentUser, isAuthenticated, isStaff, isAdminGeral, isAdmin, isPortaria, isEntregador, sessaoSubstituida, checkAuth, clearAuth } = useAuth()
 const mobileMenuOpen = ref(false)
+
+let authHeartbeat = null
+
+watch(sessaoSubstituida, (val) => {
+  if (val) {
+    clearAuth()
+    window.location.href = '/login?motivo=sessao_substituida'
+  }
+})
 
 onMounted(async () => {
   await checkAuth()
+  authHeartbeat = setInterval(async () => {
+    if (currentUser.value) {
+      await checkAuth(true)
+    }
+  }, 8000)
+})
+
+onUnmounted(() => {
+  if (authHeartbeat) {
+    clearInterval(authHeartbeat)
+  }
 })
 
 watch(

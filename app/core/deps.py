@@ -38,6 +38,7 @@ async def get_current_user(
             algorithms=[settings.ALGORITHM]
         )
         cpf: str = payload.get("sub")
+        token_sid: Optional[str] = payload.get("sid")
         if not cpf:
             raise HTTPException(status_code=401, detail="Token inválido")
     except JWTError:
@@ -60,6 +61,26 @@ async def get_current_user(
 
     if not user:
         raise HTTPException(status_code=401, detail="Usuário não encontrado ou inativo.")
+
+    # Validação de Sessão Única por Conta (Single Device Enforcement)
+    # Se o usuário possui um session_id ativo no banco e o token deste request tem um sid diferente,
+    # significa que a conta foi conectada em outro dispositivo e esta sessão foi revogada!
+    if user.session_id and token_sid and user.session_id != token_sid:
+        if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Sessão encerrada: sua conta foi conectada em outro dispositivo."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            headers={"Location": "/login?motivo=sessao_substituida"}
+        )
+
+    # Atualiza o timestamp de último acesso
+    from datetime import datetime
+    user.ultimo_acesso = datetime.now()
+    session.add(user)
+    await session.commit()
 
     return user
 
