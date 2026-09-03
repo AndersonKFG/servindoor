@@ -392,9 +392,11 @@ onUnmounted(() => {
           >
             <div class="card-top-badges font-outfit">
               <span class="badge-categoria">
+                <i class="bi bi-tag-fill me-1"></i>
                 {{ item.categoria === 'categoria_1' ? 'CATEGORIA GERAL' : 'EIXO SETORIAL' }}
               </span>
               <span class="badge-eixo">
+                <i class="bi bi-diagram-3-fill me-1"></i>
                 {{ item.eixo_nome || 'TODOS OS PRESENTES' }}
               </span>
             </div>
@@ -414,13 +416,18 @@ onUnmounted(() => {
 
                 <div class="info-live-servidor">
                   <span class="info-tag text-cyan font-outfit">
-                    <i class="bi bi-person-check-fill me-1"></i> SERVIDOR
+                    <i class="bi bi-person-check-fill me-1"></i> SERVIDOR PARTICIPANTE
                   </span>
                   <h2 class="live-nome font-outfit">{{ getNomeServidor(item) }}</h2>
                   <div v-if="status === 'sorteando'" class="status-roleta-tag font-outfit">
                     <span class="pulse-dot"></span> Sorteando ao vivo...
                   </div>
-                  <div v-else class="status-espera-tag font-outfit">Aguardando sorteio...</div>
+                  <div v-else-if="item.ganhador" class="status-ganhador-tag font-outfit">
+                    <i class="bi bi-trophy-fill text-warning me-1"></i> {{ item.ganhador.secretaria || 'Contemplado' }}
+                  </div>
+                  <div v-else class="status-espera-tag font-outfit">
+                    <i class="bi bi-hourglass-split text-warning me-1"></i> Pronto na Mesa de Sorteio
+                  </div>
                 </div>
               </div>
 
@@ -993,28 +1000,73 @@ onUnmounted(() => {
 .cards-grid-tray {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  max-width: 1380px;
+  margin: 0 auto;
+  gap: 24px;
+  padding: 24px;
   align-content: center;
 }
 
 .card-sorteio-live {
-  background: rgba(15, 23, 42, 0.9);
-  border: 1.5px solid rgba(255, 255, 255, 0.12);
-  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(16px);
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-radius: 20px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   transition: all 0.3s ease;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
 }
-.card-sorteando-live { border-color: rgba(56, 189, 248, 0.5); }
+.card-sorteando-live {
+  border-color: #38bdf8;
+  box-shadow: 0 0 28px rgba(56, 189, 248, 0.3);
+}
+
+.card-top-badges {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: rgba(8, 12, 22, 0.95);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.badge-categoria {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 4px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge-eixo {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  padding: 4px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
 
 .card-body-live {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 10px 14px;
-  gap: 8px;
+  padding: 18px 20px;
+  gap: 16px;
   flex: 1;
 }
 
@@ -1031,8 +1083,8 @@ onUnmounted(() => {
 }
 
 .circle-box-live {
-  width: 68px;
-  height: 68px;
+  width: 76px;
+  height: 76px;
   border-radius: 50%;
   overflow: hidden;
   display: flex;
@@ -1043,16 +1095,19 @@ onUnmounted(() => {
 }
 .circle-servidor-live {
   border: 3px solid #38bdf8;
-  box-shadow: 0 0 14px rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.4);
 }
 .circle-premio-live {
   border: 3px solid #ef4444;
-  box-shadow: 0 0 14px rgba(239, 68, 68, 0.4);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.4);
 }
 .circle-photo-live {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center;
+  border-radius: 50%;
+  display: block;
 }
 .circle-placeholder-live {
   font-size: 1.6rem;

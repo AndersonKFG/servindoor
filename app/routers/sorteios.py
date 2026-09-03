@@ -1037,3 +1037,117 @@ async def consultar_meus_premios(
         "servidor_nome": nome_mascarado,
         "premios": premios_data
     })
+
+# =========================================================================
+# GESTÃO DE SECRETARIAS (CRUD ADMIN + ROTA PÚBLICA DE RESGATE)
+# =========================================================================
+
+@router.get("/api/secretarias")
+async def listar_secretarias_publicas(session: AsyncSession = Depends(get_session)):
+    """Retorna todas as secretarias oficiais para formulários de resgate e cadastros"""
+    stmt = select(Secretaria).options(selectinload(Secretaria.eixo)).order_by(Secretaria.nome)
+    res = await session.execute(stmt)
+    secretarias = res.scalars().all()
+    return JSONResponse(content=[
+        {
+            "id": s.id,
+            "nome": s.nome,
+            "sigla": s.sigla,
+            "eixo_id": s.eixo_id,
+            "eixo_nome": s.eixo.nome if s.eixo else None
+        }
+        for s in secretarias
+    ])
+
+
+@router.get("/api/sorteios/secretarias")
+async def listar_secretarias_admin(
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_admin)
+):
+    """Retorna todas as secretarias com detalhes para o painel administrativo"""
+    stmt = select(Secretaria).options(
+        selectinload(Secretaria.eixo),
+        selectinload(Secretaria.usuarios)
+    ).order_by(Secretaria.nome)
+    res = await session.execute(stmt)
+    secretarias = res.scalars().all()
+
+    stmt_eixos = select(Eixo).order_by(Eixo.nome)
+    res_eixos = await session.execute(stmt_eixos)
+    eixos = res_eixos.scalars().all()
+
+    return JSONResponse(content={
+        "secretarias": [
+            {
+                "id": s.id,
+                "nome": s.nome,
+                "sigla": s.sigla,
+                "eixo_id": s.eixo_id,
+                "eixo_nome": s.eixo.nome if s.eixo else None,
+                "total_servidores": len(s.usuarios) if s.usuarios else 0
+            }
+            for s in secretarias
+        ],
+        "eixos": [
+            {"id": e.id, "nome": e.nome, "descricao": e.descricao}
+            for e in eixos
+        ]
+    })
+
+
+@router.post("/api/sorteios/secretarias")
+async def salvar_secretaria_admin(
+    nome: str = Form(...),
+    sigla: Optional[str] = Form(None),
+    eixo_id: Optional[int] = Form(None),
+    secretaria_id: Optional[int] = Form(None),
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_admin)
+):
+    """Cria ou edita uma Secretaria e seu vínculo de Eixo"""
+    if not nome or not nome.strip():
+        raise HTTPException(status_code=400, detail="O nome da secretaria é obrigatório.")
+
+    if secretaria_id:
+        sec = await session.get(Secretaria, secretaria_id)
+        if not sec:
+            raise HTTPException(status_code=404, detail="Secretaria não encontrada.")
+        sec.nome = nome.strip()
+        sec.sigla = sigla.strip().upper() if sigla and sigla.strip() else None
+        sec.eixo_id = eixo_id if eixo_id and eixo_id > 0 else None
+        session.add(sec)
+    else:
+        sec = Secretaria(
+            nome=nome.strip(),
+            sigla=sigla.strip().upper() if sigla and sigla.strip() else None,
+            eixo_id=eixo_id if eixo_id and eixo_id > 0 else None
+        )
+        session.add(sec)
+
+    await session.commit()
+    await session.refresh(sec)
+    return JSONResponse(content={"sucesso": True, "id": sec.id})
+
+
+@router.delete("/api/sorteios/secretarias/{sec_id}")
+async def excluir_secretaria_admin(
+    sec_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_admin)
+):
+    """Exclui uma secretaria desvinculando servidores ou impedindo caso haja vínculos"""
+    sec = await session.get(Secretaria, sec_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="Secretaria não encontrada.")
+
+    # Desvincula servidores para não quebrar chaves estrangeiras
+    stmt_users = select(Usuario).where(Usuario.secretaria_id == sec_id)
+    res_users = await session.execute(stmt_users)
+    for u in res_users.scalars().all():
+        u.secretaria_id = None
+        session.add(u)
+
+    await session.delete(sec)
+    await session.commit()
+    return JSONResponse(content={"sucesso": True})

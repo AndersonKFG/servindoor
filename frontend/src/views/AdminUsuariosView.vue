@@ -960,8 +960,9 @@ onUnmounted(() => {
 
 /* FILTROS */
 .filter-card {
-  padding: 16px;
+  padding: 18px;
   border-radius: 16px;
+  margin-bottom: 28px;
 }
 
 .filter-grid {

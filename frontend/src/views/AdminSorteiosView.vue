@@ -11,6 +11,95 @@ const premios = ref([])
 const totalPresentes = ref(0)
 const eixos = ref([])
 const todasSecretarias = ref([])
+const secretariasList = ref([])
+const buscaSecretaria = ref('')
+const filtroEixoSec = ref('')
+const showModalSecretaria = ref(false)
+const salvandoSec = ref(false)
+const secretariaForm = ref({ id: null, nome: '', sigla: '', eixo_id: '' })
+
+const secretariasFiltradas = computed(() => {
+  return secretariasList.value.filter(s => {
+    if (filtroEixoSec.value && String(s.eixo_id) !== String(filtroEixoSec.value)) {
+      return false
+    }
+    if (buscaSecretaria.value.trim()) {
+      const q = buscaSecretaria.value.toLowerCase().trim()
+      const matchNome = (s.nome || '').toLowerCase().includes(q)
+      const matchSigla = (s.sigla || '').toLowerCase().includes(q)
+      const matchEixo = (s.eixo_nome || '').toLowerCase().includes(q)
+      if (!matchNome && !matchSigla && !matchEixo) return false
+    }
+    return true
+  })
+})
+
+function abrirNovaSecretaria() {
+  secretariaForm.value = { id: null, nome: '', sigla: '', eixo_id: '' }
+  showModalSecretaria.value = true
+}
+
+function abrirEditarSecretaria(sec) {
+  secretariaForm.value = {
+    id: sec.id,
+    nome: sec.nome,
+    sigla: sec.sigla || '',
+    eixo_id: sec.eixo_id || ''
+  }
+  showModalSecretaria.value = true
+}
+
+async function handleSalvarSecretaria() {
+  if (!secretariaForm.value.nome.trim()) {
+    showToast('O nome da secretaria é obrigatório.', 'error')
+    return
+  }
+  salvandoSec.value = true
+  try {
+    const formData = new FormData()
+    formData.append('nome', secretariaForm.value.nome.trim())
+    if (secretariaForm.value.sigla) {
+      formData.append('sigla', secretariaForm.value.sigla.trim())
+    }
+    if (secretariaForm.value.eixo_id) {
+      formData.append('eixo_id', secretariaForm.value.eixo_id)
+    }
+    if (secretariaForm.value.id) {
+      formData.append('secretaria_id', secretariaForm.value.id)
+    }
+
+    const res = await fetch('/api/sorteios/secretarias', { method: 'POST', body: formData })
+    if (res.ok) {
+      showModalSecretaria.value = false
+      showToast('Secretaria salva com sucesso!', 'success')
+      await carregarDados()
+    } else {
+      const d = await res.json()
+      showToast(d.detail || 'Erro ao salvar secretaria.', 'error')
+    }
+  } catch (e) {
+    console.error('Erro salvando secretaria:', e)
+    showToast('Erro de comunicação ao salvar secretaria.', 'error')
+  } finally {
+    salvandoSec.value = false
+  }
+}
+
+async function handleExcluirSecretaria(secId) {
+  if (!confirm('Deseja realmente excluir esta secretaria? Servidores associados ficarão sem vínculo.')) return
+  try {
+    const res = await fetch('/api/sorteios/secretarias/' + secId, { method: 'DELETE' })
+    if (res.ok) {
+      showToast('Secretaria excluída com sucesso.', 'success')
+      await carregarDados()
+    } else {
+      const d = await res.json()
+      showToast(d.detail || 'Erro ao excluir secretaria.', 'error')
+    }
+  } catch (e) {
+    console.error('Erro excluindo secretaria:', e)
+  }
+}
 const historicoGanhadores = ref([])
 
 // Estados da Mesa de Rodada do Telão
@@ -79,6 +168,12 @@ async function carregarDados(silent = false) {
       const dataE = await resEixos.json()
       eixos.value = dataE.eixos || []
       todasSecretarias.value = dataE.todas_secretarias || []
+    }
+
+    const resSec = await fetch('/api/sorteios/secretarias')
+    if (resSec.ok) {
+      const dataSec = await resSec.json()
+      secretariasList.value = dataSec.secretarias || []
     }
 
     const resTelao = await fetch('/api/sorteios/live-telao')
@@ -507,7 +602,15 @@ onMounted(() => {
           :class="['tab-btn font-outfit', { active: activeTab === 'eixos' }]"
           @click="activeTab = 'eixos'"
         >
-          <i class="bi bi-diagram-3-fill me-1"></i> Eixos & Secretarias ({{ eixos.length }})
+          <i class="bi bi-diagram-3-fill me-1"></i> Eixos Temáticos ({{ eixos.length }})
+        </button>
+
+        <button
+          type="button"
+          :class="['tab-btn font-outfit', { active: activeTab === 'secretarias' }]"
+          @click="activeTab = 'secretarias'"
+        >
+          <i class="bi bi-building-fill me-1"></i> Secretarias Municipais ({{ secretariasList.length }})
         </button>
 
         <button
@@ -880,7 +983,94 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- ABA 4: HISTÓRICO -->
+            <!-- ABA 4: CRUD SECRETARIAS -->
+      <div v-if="activeTab === 'secretarias'" class="tab-pane">
+        <div class="tab-actions-header">
+          <div>
+            <h3 class="font-outfit text-white fw-bold mb-1">Gestão de Secretarias & Órgãos</h3>
+            <p class="text-muted small mb-0">Cadastre, edite siglas e vincule as secretarias municipais aos Eixos Temáticos.</p>
+          </div>
+          <button type="button" class="btn-primary font-outfit" @click="abrirNovaSecretaria">
+            <i class="bi bi-plus-circle me-1"></i> Nova Secretaria
+          </button>
+        </div>
+
+        <!-- FILTRO DE BUSCA -->
+        <div class="vip-glass-card filter-card mb-4">
+          <div class="filter-grid-sec">
+            <div class="search-box">
+              <i class="bi bi-search search-icon"></i>
+              <input
+                v-model="buscaSecretaria"
+                type="text"
+                class="form-control filter-input font-outfit"
+                placeholder="Buscar por nome, sigla ou eixo..."
+              />
+            </div>
+            <div class="select-box">
+              <select v-model="filtroEixoSec" class="form-select filter-select font-outfit">
+                <option value="">Todos os Eixos Temáticos</option>
+                <option v-for="e in eixos" :key="e.id" :value="e.id">{{ e.nome }}</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- TABELA DE SECRETARIAS -->
+        <div class="vip-glass-card table-card">
+          <div class="table-responsive">
+            <table class="custom-table">
+              <thead>
+                <tr>
+                  <th>Órgão / Secretaria Oficial</th>
+                  <th>Sigla</th>
+                  <th>Eixo Temático Vinculado</th>
+                  <th>Servidores</th>
+                  <th class="text-end">Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="s in secretariasFiltradas" :key="s.id">
+                  <td>
+                    <div class="d-flex align-items-center gap-2">
+                      <i class="bi bi-building text-primary fs-5"></i>
+                      <strong class="text-white font-outfit">{{ s.nome }}</strong>
+                    </div>
+                  </td>
+                  <td>
+                    <span v-if="s.sigla" class="badge-sigla font-outfit">{{ s.sigla }}</span>
+                    <span v-else class="text-muted small">-</span>
+                  </td>
+                  <td>
+                    <span v-if="s.eixo_nome" class="badge-eixo-sec font-outfit">
+                      <i class="bi bi-diagram-3-fill me-1"></i> {{ s.eixo_nome }}
+                    </span>
+                    <span v-else class="text-muted small font-outfit">Sem Eixo Vinculado</span>
+                  </td>
+                  <td>
+                    <span class="text-subtle font-outfit">{{ s.total_servidores || 0 }} servidores</span>
+                  </td>
+                  <td class="text-end">
+                    <button type="button" class="btn-action-icon me-2" title="Editar Secretaria" @click="abrirEditarSecretaria(s)">
+                      <i class="bi bi-pencil-fill text-info"></i>
+                    </button>
+                    <button type="button" class="btn-action-icon" title="Excluir Secretaria" @click="handleExcluirSecretaria(s.id)">
+                      <i class="bi bi-trash-fill text-danger"></i>
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="secretariasFiltradas.length === 0">
+                  <td colspan="5" class="text-center py-4 text-muted font-outfit">
+                    Nenhuma secretaria encontrada.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ABA 5: HISTÓRICO -->
       <div v-if="activeTab === 'historico'" class="tab-pane">
         <div class="tab-actions-header">
           <h3 class="font-outfit text-white fw-bold mb-0">Histórico de Ganhadores</h3>
@@ -1028,6 +1218,42 @@ onMounted(() => {
         <div class="modal-footer-box">
           <button type="button" class="btn-secondary" @click="showModalEixo = false">Cancelar</button>
           <button type="submit" class="btn-primary">Salvar Eixo</button>
+        </div>
+      </form>
+    </Modal>
+
+        <!-- MODAL SECRETARIA -->
+    <Modal
+      :show="showModalSecretaria"
+      :title="secretariaForm.id ? 'Editar Secretaria / Órgão' : 'Nova Secretaria / Órgão'"
+      icon="bi-building-fill"
+      @close="showModalSecretaria = false"
+    >
+      <form @submit.prevent="handleSalvarSecretaria">
+        <div class="form-group">
+          <label class="form-label">Nome Oficial da Secretaria *</label>
+          <input v-model="secretariaForm.nome" type="text" class="form-control font-outfit" placeholder="Ex: Secretaria Municipal de Educação" required />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Sigla Oficial (opcional)</label>
+          <input v-model="secretariaForm.sigla" type="text" class="form-control font-outfit" placeholder="Ex: SME, SMS, SEMOB..." />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Eixo Temático Associado</label>
+          <select v-model="secretariaForm.eixo_id" class="form-select font-outfit">
+            <option value="">Nenhum (Sem eixo)</option>
+            <option v-for="e in eixos" :key="e.id" :value="e.id">{{ e.nome }}</option>
+          </select>
+          <small class="text-muted d-block mt-1">Vincula servidores desta secretaria aos sorteios da Categoria 2 do eixo escolhido.</small>
+        </div>
+
+        <div class="modal-footer-box">
+          <button type="button" class="btn-secondary font-outfit" @click="showModalSecretaria = false">Cancelar</button>
+          <button type="submit" class="btn-primary font-outfit" :disabled="salvandoSec">
+            {{ salvandoSec ? 'Salvando...' : 'Salvar Secretaria' }}
+          </button>
         </div>
       </form>
     </Modal>
@@ -2086,6 +2312,45 @@ onMounted(() => {
   background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
   border-color: #34d399 !important;
   box-shadow: 0 0 20px rgba(16, 185, 129, 0.4) !important;
+}
+
+
+.mesa-stage-control-panel {
+  margin-bottom: 42px;
+}
+
+.catalogo-section {
+  margin-top: 36px;
+}
+
+.catalogo-header {
+  margin-bottom: 24px;
+}
+
+.filter-grid-sec {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 14px;
+}
+
+.badge-sigla {
+  background: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #38bdf8;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.badge-eixo-sec {
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  color: #c084fc;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
 }
 
 </style>

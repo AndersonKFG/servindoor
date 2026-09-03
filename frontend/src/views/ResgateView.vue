@@ -951,7 +951,7 @@ onUnmounted(() => {
                   <select id="secretaria" v-model="form.secretaria_id" class="form-select" required>
                     <option value="" disabled>Selecione sua secretaria oficial</option>
                     <option v-for="sec in secretarias" :key="sec.id" :value="sec.id">
-                      {{ sec.nome }}
+                      {{ sec.nome }}{{ sec.sigla ? ' (' + sec.sigla + ')' : '' }}
                     </option>
                   </select>
                 </div>
