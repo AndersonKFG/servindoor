@@ -6,7 +6,7 @@ import os
 import secrets
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Request, Depends, Form, HTTPException, status, Query
+from fastapi import APIRouter, Request, Depends, Form, HTTPException, status, Query, Body
 from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, func, or_, desc
@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.session import get_session
 from app.models.all_models import (
-    Eixo, Secretaria, Usuario, Premio, Ganhador, LogAcesso, EstadoSorteio,
+    Eixo, Secretaria, Usuario, Premio, Ganhador, LogAcesso, EstadoSorteio, Ingresso,
     MovimentoTipo, PremioCategoria, UserRole
 )
 from app.core.deps import get_current_admin, get_current_staff, get_current_entregador
@@ -1151,3 +1151,136 @@ async def excluir_secretaria_admin(
     await session.delete(sec)
     await session.commit()
     return JSONResponse(content={"sucesso": True})
+
+
+@router.post("/api/sorteios/validar-ganhador-entrega")
+async def validar_ganhador_entrega(
+    identificador: str = Body(..., embed=True),
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_entregador)
+):
+    """
+    Valida se o participante (por QR Code do Ingresso ou CPF) é um ganhador oficial
+    e verifica se possui prêmios pendentes de retirada.
+    """
+    termo = identificador.strip()
+    if not termo:
+        raise HTTPException(status_code=400, detail="Identificador não fornecido.")
+
+    usuario = None
+
+    # 1. Busca por Token do QR Code do Ingresso (UUID ou token longo)
+    if len(termo) > 15 or "-" in termo:
+        stmt_ing = (
+            select(Ingresso)
+            .where(Ingresso.qr_code_token == termo, Ingresso.deleted_at.is_(None))
+            .options(selectinload(Ingresso.usuario).selectinload(Usuario.secretaria))
+        )
+        res_ing = await session.execute(stmt_ing)
+        ingresso = res_ing.scalars().first()
+        if ingresso:
+            usuario = ingresso.usuario
+
+    # 2. Se não encontrou por QR Code, tenta por CPF
+    if not usuario:
+        cpf_limpo = "".join([c for c in termo if c.isdigit()]).zfill(11)
+        if len(cpf_limpo) == 11 and cpf_limpo != "00000000000":
+            stmt_usr = (
+                select(Usuario)
+                .where(Usuario.cpf == cpf_limpo, Usuario.deleted_at.is_(None), Usuario.ativo == True)
+                .options(selectinload(Usuario.secretaria))
+            )
+            res_usr = await session.execute(stmt_usr)
+            usuario = res_usr.scalars().first()
+
+    if not usuario:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "sucesso": False,
+                "status": "nao_encontrado",
+                "mensagem": "Nenhum participante ou ingresso localizado com este código/CPF."
+            }
+        )
+
+    cpf_fmt = f"{usuario.cpf[:3]}.{usuario.cpf[3:6]}.{usuario.cpf[6:9]}-{usuario.cpf[9:]}" if len(usuario.cpf) == 11 else usuario.cpf
+    foto_rosto = usuario.foto_rosto_url or usuario.foto_url
+
+    # 3. Busca todos os sorteios deste usuário
+    stmt_ganhador = (
+        select(Ganhador)
+        .where(Ganhador.usuario_id == usuario.id, Ganhador.anulado == False)
+        .options(
+            selectinload(Ganhador.premio),
+            selectinload(Ganhador.responsavel_entrega)
+        )
+        .order_by(Ganhador.entregue.asc(), desc(Ganhador.data_sorteio))
+    )
+    res_ganhador = await session.execute(stmt_ganhador)
+    sorteios = res_ganhador.scalars().all()
+
+    # Caso A: Não foi contemplado com nenhum prêmio
+    if not sorteios:
+        return JSONResponse(content={
+            "sucesso": False,
+            "status": "nao_ganhador",
+            "mensagem": f"O participante {usuario.nome} não foi sorteado em nenhum prêmio.",
+            "servidor": {
+                "nome": usuario.nome,
+                "cpf": cpf_fmt,
+                "secretaria": usuario.secretaria.nome if usuario.secretaria else "Geral",
+                "foto": foto_rosto
+            }
+        })
+
+    # Caso B: Tem prêmio pendente de entrega
+    pendentes = [g for g in sorteios if not g.entregue]
+    if pendentes:
+        ganhador_alvo = pendentes[0]
+        p = ganhador_alvo.premio
+        return JSONResponse(content={
+            "sucesso": True,
+            "status": "pendente",
+            "ganhador_id": ganhador_alvo.id,
+            "servidor": {
+                "id": usuario.id,
+                "nome": usuario.nome,
+                "cpf": cpf_fmt,
+                "secretaria": usuario.secretaria.nome if usuario.secretaria else "Geral",
+                "setor": usuario.setor,
+                "telefone": usuario.telefone,
+                "foto_rosto": foto_rosto
+            },
+            "premio": {
+                "id": p.id if p else None,
+                "nome": p.nome if p else "Prêmio Oficial",
+                "descricao": p.descricao if p else "",
+                "foto": p.foto_url if p else None,
+                "categoria": "Categoria 1 (Geral)" if str(ganhador_alvo.categoria) == "categoria_1" else "Categoria 2 (Eixo)",
+                "data_sorteio": ganhador_alvo.data_sorteio.strftime("%d/%m/%Y às %H:%M")
+            },
+            "total_premios_pendentes": len(pendentes)
+        })
+
+    # Caso C: Todos os prêmios já foram entregues
+    historico_entregas = []
+    for g in sorteios:
+        historico_entregas.append({
+            "premio_nome": g.premio.nome if g.premio else "Prêmio",
+            "data_entrega": g.data_entrega.strftime("%d/%m/%Y às %H:%M") if g.data_entrega else "-",
+            "foto_entrega_url": g.foto_entrega_url,
+            "responsavel": g.responsavel_entrega.nome if g.responsavel_entrega else "Equipe"
+        })
+
+    return JSONResponse(content={
+        "sucesso": False,
+        "status": "ja_entregue",
+        "mensagem": f"Todos os prêmios de {usuario.nome} já foram entregues anteriormente.",
+        "servidor": {
+            "nome": usuario.nome,
+            "cpf": cpf_fmt,
+            "secretaria": usuario.secretaria.nome if usuario.secretaria else "Geral",
+            "foto": foto_rosto
+        },
+        "entregas": historico_entregas
+    })
