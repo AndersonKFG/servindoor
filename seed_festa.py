@@ -34,6 +34,75 @@ SETORES = [
 
 VINCULOS = ["Efetivo", "Efetivo", "Efetivo", "Comissionado", "Contrato Temporário"]
 
+PREMIO_FOTOS_MAP = {
+    "Smart TV 65": "/static/uploads/premios/cat_tv.jpg",
+    "Smart TV 55": "/static/uploads/premios/cat_tv.jpg",
+    "Smart TV 50": "/static/uploads/premios/cat_tv.jpg",
+    "PlayStation": "/static/uploads/premios/cat_ps5.jpg",
+    "Xbox": "/static/uploads/premios/cat_xbox.jpg",
+    "Nintendo Switch": "/static/uploads/premios/cat_switch.jpg",
+    "iPhone": "/static/uploads/premios/cat_iphone.jpg",
+    "Galaxy S24": "/static/uploads/premios/cat_samsung_phone.jpg",
+    "Galaxy A55": "/static/uploads/premios/cat_samsung_phone.jpg",
+    "Redmi": "/static/uploads/premios/cat_redmi.jpg",
+    "Dell": "/static/uploads/premios/cat_laptop_dell.jpg",
+    "Lenovo": "/static/uploads/premios/cat_laptop_lenovo.jpg",
+    "iPad": "/static/uploads/premios/cat_tablet_apple.jpg",
+    "Tab S9": "/static/uploads/premios/cat_tablet_samsung.jpg",
+    "Boombox": "/static/uploads/premios/cat_speaker_jbl.jpg",
+    "PartyBox": "/static/uploads/premios/cat_speaker_jbl.jpg",
+    "Charge 5": "/static/uploads/premios/cat_speaker_jbl.jpg",
+    "Philco 12L": "/static/uploads/premios/cat_air_fryer.jpg",
+    "Mondial": "/static/uploads/premios/cat_air_fryer.jpg",
+    "Xiaomi Robot": "/static/uploads/premios/cat_robot_vacuum.jpg",
+    "WAP Robot": "/static/uploads/premios/cat_robot_vacuum.jpg",
+    "Nespresso": "/static/uploads/premios/cat_coffee_nespresso.jpg",
+    "Dolce Gusto": "/static/uploads/premios/cat_coffee_maker.jpg",
+    "Micro-ondas": "/static/uploads/premios/cat_microwave.jpg",
+    "Aro 29": "/static/uploads/premios/cat_bike.jpg",
+    "Bicicleta Elétrica": "/static/uploads/premios/cat_ebike.jpg",
+    "Apple Watch": "/static/uploads/premios/cat_smartwatch.jpg",
+    "Galaxy Watch": "/static/uploads/premios/cat_smartwatch_samsung.jpg",
+    "Sony WH-1000XM4": "/static/uploads/premios/cat_headphones.jpg",
+    "AirPods": "/static/uploads/premios/cat_airpods.jpg",
+    "Kit Ferramentas": "/static/uploads/premios/cat_tools.jpg",
+    "Parafusadeira": "/static/uploads/premios/cat_drill.jpg",
+    "Purificador": "/static/uploads/premios/cat_water_purifier.jpg",
+    "Climatizador": "/static/uploads/premios/cat_air_cooler.jpg",
+    "Mala": "/static/uploads/premios/cat_suitcase.jpg",
+    "Kindle": "/static/uploads/premios/cat_kindle.jpg",
+    "Cadeira": "/static/uploads/premios/cat_chair.jpg",
+    "Mochila": "/static/uploads/premios/cat_backpack.jpg",
+    "Echo Show": "/static/uploads/premios/cat_echo_show.jpg",
+    "Cafeteira": "/static/uploads/premios/cat_coffee_maker.jpg",
+    "Pressão Arterial": "/static/uploads/premios/cat_pressure_monitor.jpg",
+    "Bioimpedância": "/static/uploads/premios/cat_smart_scale.jpg",
+    "Nutribullet": "/static/uploads/premios/cat_blender.jpg",
+    "Massageadora": "/static/uploads/premios/cat_massage_gun.jpg",
+    "Umidificador": "/static/uploads/premios/cat_diffuser.jpg",
+    "Beach Tennis": "/static/uploads/premios/cat_tennis.jpg",
+    "Echo Dot": "/static/uploads/premios/cat_echo_dot.jpg",
+    "Bolas": "/static/uploads/premios/cat_balls.jpg",
+    "Wacom": "/static/uploads/premios/cat_wacom.jpg",
+    "Projetor": "/static/uploads/premios/cat_projector.jpg",
+    "Kärcher": "/static/uploads/premios/cat_pressure_washer.jpg",
+    "Trena": "/static/uploads/premios/cat_laser_measure.jpg",
+    "Compressor": "/static/uploads/premios/cat_tire_pump.jpg",
+    "Térmica": "/static/uploads/premios/cat_cooler.jpg",
+    "Aspirador de Pó e Água": "/static/uploads/premios/cat_robot_vacuum.jpg",
+    "Câmera": "/static/uploads/premios/cat_security_cam.jpg",
+    "Fechadura": "/static/uploads/premios/cat_digital_lock.jpg",
+    "Lanterna": "/static/uploads/premios/cat_flashlight.jpg",
+    "Primeiros Socorros": "/static/uploads/premios/cat_first_aid.jpg",
+    "Cofre": "/static/uploads/premios/cat_safe.jpg",
+}
+
+def resolver_foto_premio(nome):
+    for k, v in PREMIO_FOTOS_MAP.items():
+        if k.lower() in nome.lower():
+            return v
+    return "/static/uploads/premios/cat_tv.jpg"
+
 def gerar_nome_completo():
     p = random.choice(PRIMEIROS_NOMES)
     s1 = random.choice(SOBRENOMES)
@@ -49,11 +118,20 @@ def gerar_cpf(idx):
     return str(num)[:11]
 
 async def seed():
+    # Garante que todas as tabelas existam automaticamente
+    from sqlmodel import SQLModel
+    from app.db.session import engine
+    import app.models.all_models
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
     print("🚀 INICIANDO POVOAMENTO COMPLETO DO BANCO DE DADOS...")
     senha_padrao_hash = get_password_hash("Festa@2026")
 
     async with async_session() as session:
-        # =========================================================================
+        
+
+# =========================================================================
         # 1. EIXOS (5 EIXOS ESTRUTURADOS)
         # =========================================================================
         print("\n📌 1. Configurando 5 Eixos...")
@@ -178,7 +256,7 @@ async def seed():
                     ativo=True,
                     email=f"{nome_eq.lower().replace(' ', '.')}@servindoor.com.br",
                     telefone="(11) 98111-2233",
-                    ultimo_acesso=datetime.now() - timedelta(minutes=random.randint(5, 60))
+                    ultimo_acesso=None
                 )
                 session.add(user)
             else:
@@ -189,7 +267,7 @@ async def seed():
                 user.setor = setor_eq
                 user.senha_hash = senha_padrao_hash
                 user.ativo = True
-                user.ultimo_acesso = datetime.now() - timedelta(minutes=random.randint(5, 60))
+                user.ultimo_acesso = None
                 session.add(user)
         await session.commit()
         print("✅ 20 Usuários de Equipe prontos com credenciais e permissões (Senha: Festa@2026)!")
@@ -317,7 +395,9 @@ async def seed():
                 email=email,
                 telefone=telefone,
                 validado=True,
-                ativo=True
+                ativo=True,
+                foto_rosto_url=f"/static/uploads/fotos/perfil_{(i % 70) + 1}.jpg",
+                ultimo_acesso=None
             )
             novos_usuarios.append(u)
 
@@ -483,7 +563,8 @@ async def seed():
                 quantidade=1,
                 quantidade_sorteada=0,
                 ativo=True,
-                ordem=ordem_cont
+                ordem=ordem_cont,
+                foto_url=resolver_foto_premio(nome_p)
             )
             todos_premios.append(p)
             ordem_cont += 1
@@ -499,7 +580,8 @@ async def seed():
                     quantidade=1,
                     quantidade_sorteada=0,
                     ativo=True,
-                    ordem=ordem_cont
+                    ordem=ordem_cont,
+                    foto_url=resolver_foto_premio(nome_p)
                 )
                 todos_premios.append(p)
                 ordem_cont += 1
