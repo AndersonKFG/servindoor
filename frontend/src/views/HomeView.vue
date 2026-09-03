@@ -22,6 +22,7 @@ const {
   dataAberturaIso,
   dataFestaIso,
   dataFestaFormatada,
+  fetchLiveStatus,
   startPolling,
   stopPolling
 } = useLoteStatus()
@@ -393,11 +394,20 @@ function tickMotorRelogio() {
   const distancia = targetDate - agora
 
   if (distancia <= 0) {
+    // Se o lote estava agendado e o tempo de abertura zerou, transiciona instantaneamente no cliente
+    if (statusInfo.value.status_slug === 'agendado' && !modoFesta.value) {
+      statusInfo.value.status_slug = 'aberto'
+      statusInfo.value.status_label = 'ABERTO'
+      statusInfo.value.badge_class = 'bg-success'
+      // Sincroniza em segundo plano com o servidor imediatamente, sem esperar os 1.5s do polling
+      fetchLiveStatus()
+    }
+
     if (statusInfo.value.status_slug === 'aberto' && !confetesDisparados.value) {
-      isHalo10s.value = false
-      isState1min.value = false
       soltarConfetes()
     }
+    isHalo10s.value = false
+    isState1min.value = false
     dias.value = '00'
     horas.value = '00'
     minutos.value = '00'

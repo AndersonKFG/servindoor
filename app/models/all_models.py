@@ -1,3 +1,4 @@
+from sqlalchemy import BigInteger, Column
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List
@@ -206,8 +207,10 @@ class EstadoSorteio(SQLModel, table=True):
 
     id: int = Field(default=1, primary_key=True)
     sorteando: bool = Field(default=False)
-    timestamp_inicio: int = Field(default=0)
+    status: str = Field(default="idle")  # idle, preparando, sorteando, finalizado
+    timestamp_inicio: int = Field(default=0, sa_column=Column(BigInteger, default=0))
     premio_id: Optional[int] = Field(default=None, nullable=True)
+    dados_rodada: Optional[str] = Field(default="[]", nullable=True)
 
 
 class GatekeeperTentativa(SQLModel, table=True):

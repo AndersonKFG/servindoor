@@ -286,7 +286,19 @@ async def live_status(
     cache_entry = _live_status_cache.get(cache_key)
     agora_mono = time.monotonic()
 
+    # Validação inteligente de cache: invalida se o lote era 'agendado' mas já atingiu data_abertura,
+    # ou se era 'aberto' mas já ultrapassou data_fechamento
+    cache_valido = False
     if cache_entry and (agora_mono - cache_entry["time"] < _CACHE_TTL):
+        status_slug_cached = cache_entry.get("status_info", {}).get("status_slug")
+        if status_slug_cached == "agendado" and lote.data_abertura and agora >= lote.data_abertura:
+            cache_valido = False
+        elif status_slug_cached == "aberto" and lote.data_fechamento and agora > lote.data_fechamento:
+            cache_valido = False
+        else:
+            cache_valido = True
+
+    if cache_valido:
         reservas_ativas = cache_entry["reservas_ativas"]
         vagas_disponiveis = cache_entry["vagas_disponiveis"]
         status_info = cache_entry["status_info"]

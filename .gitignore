@@ -41,9 +41,9 @@ frontend/node_modules/
 !.env.example
 
 # Uploads & User-generated Media
-app/static/uploads/fotos/*
+# app/static/uploads/fotos/*
 !app/static/uploads/fotos/.gitkeep
-app/static/uploads/premios/*
+# app/static/uploads/premios/*
 !app/static/uploads/premios/.gitkeep
 app/static/uploads/entregas/*
 !app/static/uploads/entregas/.gitkeep

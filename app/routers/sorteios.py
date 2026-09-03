@@ -1,3 +1,6 @@
+from pydantic import BaseModel
+import json
+import time
 import base64
 import os
 import secrets
@@ -30,63 +33,79 @@ live_sorteio_state = {
     "premio_id": None
 }
 
+class ItemMesaPreparar(BaseModel):
+    premio_id: int
+    quantidade: int
+
+class PrepararMesaRequest(BaseModel):
+    itens: List[ItemMesaPreparar]
+
 @router.get("/api/sorteios/live-telao")
 async def live_telao(session: AsyncSession = Depends(get_session)):
-    """Retorna o estado do telão de projeção em tempo real"""
-    # 1. Busca os últimos ganhadores ativos (não anulados)
+    """Retorna o estado do telão de projeção em tempo real com suporte a baterias de prêmios"""
+    # 1. Busca estado persistido da mesa de sorteio
+    stmt_estado = select(EstadoSorteio).where(EstadoSorteio.id == 1)
+    res_estado = await session.execute(stmt_estado)
+    estado_atual = res_estado.scalars().first()
+    if not estado_atual:
+        estado_atual = EstadoSorteio(id=1, status="idle", sorteando=False, timestamp_inicio=0, dados_rodada="[]")
+        session.add(estado_atual)
+        await session.commit()
+        await session.refresh(estado_atual)
+
+    agora_ms = int(datetime.now().timestamp() * 1000)
+
+    # Autotransição: se está sorteando e já passaram pelo menos 13s (13000ms), transiciona para finalizado
+    if estado_atual.status == "sorteando" and estado_atual.timestamp_inicio > 0:
+        if agora_ms - estado_atual.timestamp_inicio >= 13000:
+            estado_atual.status = "finalizado"
+            estado_atual.sorteando = False
+            session.add(estado_atual)
+            await session.commit()
+            await session.refresh(estado_atual)
+
+    # 2. Itens preparados da rodada atual
+    try:
+        premios_rodada = json.loads(estado_atual.dados_rodada or "[]")
+    except Exception:
+        premios_rodada = []
+
+    # 3. Busca ganhadores QUE AINDA NÃO RESGATARAM O PRÊMIO (entregue == False) e não anulados
     stmt_ultimos = (
         select(Ganhador)
-        .where(Ganhador.anulado == False)
+        .where(Ganhador.anulado == False, Ganhador.entregue == False)
         .options(
             selectinload(Ganhador.usuario).selectinload(Usuario.secretaria),
             selectinload(Ganhador.premio).selectinload(Premio.eixo),
             selectinload(Ganhador.eixo)
         )
         .order_by(desc(Ganhador.data_sorteio))
-        .limit(10)
+        .limit(100)
     )
+
+    # NÃO DÁ SPOILER: se ainda estiver sorteando, exclui os ganhadores da rodada atual da barra lateral
+    if estado_atual.status == "sorteando":
+        ids_atuais = [
+            it.get("ganhador", {}).get("id")
+            for it in premios_rodada
+            if it.get("ganhador", {}).get("id")
+        ]
+        if ids_atuais:
+            stmt_ultimos = stmt_ultimos.where(Ganhador.id.not_in(ids_atuais))
+
     res_ultimos = await session.execute(stmt_ultimos)
     ganhadores_raw = res_ultimos.scalars().all()
 
-    ultimo = ganhadores_raw[0] if ganhadores_raw else None
-    
-    ultimo_dict = None
-    if ultimo:
-        u = ultimo.usuario
-        p = ultimo.premio
-        ultimo_dict = {
-            "ganhador_id": ultimo.id,
-            "servidor": {
-                "id": u.id if u else None,
-                "nome": u.nome if u else "Servidor Sorteado",
-                "cpf": f"{u.cpf[:3]}.***.***-{u.cpf[-2:]}" if u and len(u.cpf) == 11 else (u.cpf if u else ""),
-                "setor": u.setor if u else "",
-                "vinculo": u.vinculo if u else "",
-                "foto_url": u.foto_rosto_url or u.foto_url if u else None,
-                "secretaria": {
-                    "id": u.secretaria.id if u and u.secretaria else None,
-                    "nome": u.secretaria.nome if u and u.secretaria else "Geral"
-                } if u else None
-            },
-            "premio": {
-                "id": p.id if p else None,
-                "nome": p.nome if p else "Prêmio",
-                "descricao": p.descricao if p else "",
-                "foto_url": p.foto_url if p else None,
-                "categoria": p.categoria.value if p and hasattr(p.categoria, "value") else (p.categoria if p else "categoria_1"),
-                "eixo_nome": p.eixo.nome if p and p.eixo else None
-            },
-            "categoria": ultimo.categoria.value if hasattr(ultimo.categoria, "value") else str(ultimo.categoria),
-            "data_sorteio": ultimo.data_sorteio.isoformat()
-        }
-
     historico = []
-    for g in ganhadores_raw[1:]:
+    for g in ganhadores_raw:
         u = g.usuario
         p = g.premio
+        cpf_u = u.cpf or ""
+        cpf_fmt = f"{cpf_u[:3]}.***.***-{cpf_u[-2:]}" if len(cpf_u) == 11 else cpf_u
         historico.append({
             "ganhador_id": g.id,
             "servidor_nome": u.nome if u else "Servidor",
+            "servidor_cpf": cpf_fmt,
             "servidor_foto": u.foto_rosto_url or u.foto_url if u else None,
             "secretaria_nome": u.secretaria.nome if u and u.secretaria else "Geral",
             "premio_nome": p.nome if p else "Prêmio",
@@ -94,7 +113,7 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
             "data_sorteio": g.data_sorteio.strftime("%H:%M:%S")
         })
 
-    # 2. Busca apenas servidores que estão atualmente DENTRO do evento (último log = entrada)
+    # 4. Busca amostra ampla de servidores presentes para a roleta (sem o limite fixo de 25)
     subq_ultimo_log = (
         select(func.max(LogAcesso.id).label("max_id"))
         .group_by(LogAcesso.usuario_id)
@@ -107,7 +126,8 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
         .join(subq_ultimo_log, LogAcesso.id == subq_ultimo_log.c.max_id)
         .where(LogAcesso.tipo == MovimentoTipo.entrada, Usuario.deleted_at.is_(None), Usuario.ativo == True)
         .options(selectinload(Usuario.secretaria))
-        .limit(25)
+        .order_by(func.random())
+        .limit(60)
     )
     res_presentes = await session.execute(stmt_presentes)
     presentes_raw = res_presentes.scalars().all()
@@ -122,24 +142,266 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
         for u in presentes_raw
     ]
 
-    # Busca estado persistido do sorteio para suporte multi-worker
-    stmt_estado = select(EstadoSorteio).where(EstadoSorteio.id == 1)
-    res_estado = await session.execute(stmt_estado)
-    estado_atual = res_estado.scalars().first()
-    sorteio_em_andamento = estado_atual.sorteando if estado_atual else False
-    timestamp_inicio = estado_atual.timestamp_inicio if estado_atual else 0
-
     return JSONResponse(
         content={
-            "ultimo_ganhador": ultimo_dict,
-            "ultimos_ganhadores": historico,
-            "sorteio_em_andamento": sorteio_em_andamento,
-            "timestamp_inicio": timestamp_inicio,
+            "status": estado_atual.status,  # idle, preparando, sorteando, finalizado
+            "sorteio_em_andamento": estado_atual.sorteando,
+            "timestamp_inicio": estado_atual.timestamp_inicio,
+            "duracao_ms": 10000,
+            "premios_rodada": premios_rodada,
             "candidatos_animacao": candidatos_animacao,
-            "total_presentes": len(presentes_raw)
+            "ultimos_ganhadores": historico
         },
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
     )
+
+
+@router.post("/api/sorteios/mesa/preparar")
+async def preparar_mesa(
+    payload: PrepararMesaRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_admin)
+):
+    """Prepara os prêmios da rodada que serão exibidos no Telão antes do sorteio"""
+    if not payload.itens:
+        raise HTTPException(status_code=400, detail="Selecione pelo menos um prêmio para preparar a rodada.")
+
+    premios_rodada = []
+    item_counter = 1
+
+    for item_req in payload.itens:
+        if item_req.quantidade <= 0:
+            continue
+        premio = await session.get(Premio, item_req.premio_id)
+        if not premio or not premio.ativo:
+            raise HTTPException(status_code=404, detail=f"Prêmio ID {item_req.premio_id} não encontrado ou inativo.")
+
+        disponiveis = premio.quantidade - premio.quantidade_sorteada
+        if item_req.quantidade > disponiveis:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Quantidade solicitada ({item_req.quantidade}) excede o estoque disponível ({disponiveis}) para '{premio.nome}'."
+            )
+
+        eixo_nome = None
+        if premio.eixo_id:
+            eixo = await session.get(Eixo, premio.eixo_id)
+            if eixo:
+                eixo_nome = eixo.nome
+
+        categoria_str = premio.categoria.value if hasattr(premio.categoria, "value") else str(premio.categoria)
+
+        for _ in range(item_req.quantidade):
+            premios_rodada.append({
+                "item_id": f"item_{premio.id}_{item_counter}_{secrets.token_hex(3)}",
+                "premio_id": premio.id,
+                "premio_nome": premio.nome,
+                "premio_descricao": premio.descricao or "",
+                "premio_foto": premio.foto_url,
+                "categoria": categoria_str,
+                "eixo_id": premio.eixo_id,
+                "eixo_nome": eixo_nome or "Todos os Presentes",
+                "ganhador": None
+            })
+            item_counter += 1
+
+    if not premios_rodada:
+        raise HTTPException(status_code=400, detail="Nenhum item válido para preparar.")
+
+    stmt_estado = select(EstadoSorteio).where(EstadoSorteio.id == 1)
+    res_estado = await session.execute(stmt_estado)
+    estado = res_estado.scalars().first()
+    if not estado:
+        estado = EstadoSorteio(id=1)
+        session.add(estado)
+
+    estado.status = "preparando"
+    estado.sorteando = False
+    estado.timestamp_inicio = 0
+    estado.dados_rodada = json.dumps(premios_rodada)
+    session.add(estado)
+    await session.commit()
+
+    return JSONResponse(content={
+        "sucesso": True,
+        "status": "preparando",
+        "premios_rodada": premios_rodada
+    })
+
+
+@router.post("/api/sorteios/mesa/iniciar")
+async def iniciar_sorteio_mesa(
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_admin)
+):
+    """Dá o aval para iniciar o sorteio de todos os prêmios preparados na mesa"""
+    stmt_estado = select(EstadoSorteio).where(EstadoSorteio.id == 1)
+    res_estado = await session.execute(stmt_estado)
+    estado = res_estado.scalars().first()
+    if not estado or estado.status not in ["preparando", "finalizado"]:
+        raise HTTPException(status_code=400, detail="A mesa não está em estado de preparação. Adicione prêmios antes de iniciar.")
+
+    try:
+        premios_rodada = json.loads(estado.dados_rodada or "[]")
+    except Exception:
+        premios_rodada = []
+
+    if not premios_rodada:
+        raise HTTPException(status_code=400, detail="Nenhum prêmio preparado na mesa para sortear.")
+
+    # 1. Busca IDs de servidores que estão atualmente DENTRO do evento (último log = entrada)
+    subq_ultimo_log = (
+        select(func.max(LogAcesso.id).label("max_id"))
+        .group_by(LogAcesso.usuario_id)
+        .subquery()
+    )
+    stmt_checkin = (
+        select(LogAcesso.usuario_id)
+        .join(subq_ultimo_log, LogAcesso.id == subq_ultimo_log.c.max_id)
+        .where(LogAcesso.tipo == MovimentoTipo.entrada, Usuario.deleted_at.is_(None), Usuario.ativo == True)
+    )
+    res_checkin = await session.execute(stmt_checkin)
+    presentes_ids = set(res_checkin.scalars().all())
+
+    if not presentes_ids:
+        raise HTTPException(status_code=400, detail="Nenhum servidor com check-in ativo registrado na portaria.")
+
+    # 2. Rastreia quem já ganhou nesta rodada para evitar duplicações
+    ganhadores_nesta_rodada_ids = set()
+    agora = datetime.now()
+
+    for item in premios_rodada:
+        premio = await session.get(Premio, item["premio_id"])
+        if not premio or not premio.ativo:
+            continue
+
+        categoria_alvo = item["categoria"]
+
+        # Busca quem já ganhou nesta categoria
+        stmt_ja_ganhou = (
+            select(Ganhador.usuario_id)
+            .where(
+                Ganhador.categoria == categoria_alvo,
+                Ganhador.anulado == False
+            )
+        )
+        res_ja_ganhou = await session.execute(stmt_ja_ganhou)
+        ja_ganharam_cat = set(res_ja_ganhou.scalars().all())
+
+        candidatos_ids = presentes_ids - ja_ganharam_cat - ganhadores_nesta_rodada_ids
+
+        if not candidatos_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Não há servidores elegíveis suficientes para o prêmio '{premio.nome}' nesta categoria."
+            )
+
+        if categoria_alvo == "categoria_2" or categoria_alvo == PremioCategoria.categoria_2:
+            if not item.get("eixo_id"):
+                raise HTTPException(status_code=400, detail=f"Prêmio '{premio.nome}' de Categoria 2 sem eixo vinculado.")
+            stmt_sec_eixo = select(Secretaria.id).where(Secretaria.eixo_id == item["eixo_id"])
+            res_sec_eixo = await session.execute(stmt_sec_eixo)
+            sec_ids_eixo = set(res_sec_eixo.scalars().all())
+
+            stmt_elegiveis = (
+                select(Usuario)
+                .where(
+                    Usuario.id.in_(candidatos_ids),
+                    Usuario.secretaria_id.in_(sec_ids_eixo),
+                    Usuario.deleted_at.is_(None),
+                    Usuario.ativo == True
+                )
+                .options(selectinload(Usuario.secretaria))
+            )
+        else:
+            stmt_elegiveis = (
+                select(Usuario)
+                .where(
+                    Usuario.id.in_(candidatos_ids),
+                    Usuario.deleted_at.is_(None),
+                    Usuario.ativo == True
+                )
+                .options(selectinload(Usuario.secretaria))
+            )
+
+        res_elegiveis = await session.execute(stmt_elegiveis)
+        elegiveis = res_elegiveis.scalars().all()
+
+        if not elegiveis:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Nenhum servidor elegível presente encontrado para o prêmio '{premio.nome}'."
+            )
+
+        # Sorteia 1 vencedor
+        sorteado = secrets.choice(elegiveis)
+        ganhadores_nesta_rodada_ids.add(sorteado.id)
+
+        # Registra Ganhador no banco
+        novo_ganhador = Ganhador(
+            premio_id=premio.id,
+            usuario_id=sorteado.id,
+            categoria=categoria_alvo,
+            eixo_id=item.get("eixo_id"),
+            data_sorteio=agora
+        )
+        session.add(novo_ganhador)
+        premio.quantidade_sorteada += 1
+        session.add(premio)
+        await session.flush()
+
+        # Formata CPF exatamente como 000.***.***-00
+        cpf_raw = sorteado.cpf or ""
+        cpf_mascarado = f"{cpf_raw[:3]}.***.***-{cpf_raw[-2:]}" if len(cpf_raw) == 11 else cpf_raw
+
+        item["ganhador"] = {
+            "ganhador_id": novo_ganhador.id,
+            "id": sorteado.id,
+            "nome": sorteado.nome,
+            "cpf": cpf_mascarado,
+            "secretaria": sorteado.secretaria.nome if sorteado.secretaria else "Geral",
+            "setor": sorteado.setor or "",
+            "vinculo": sorteado.vinculo or "",
+            "foto_url": sorteado.foto_rosto_url or sorteado.foto_url
+        }
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+    estado.status = "sorteando"
+    estado.sorteando = True
+    estado.timestamp_inicio = now_ms
+    estado.dados_rodada = json.dumps(premios_rodada)
+    session.add(estado)
+    await session.commit()
+
+    return JSONResponse(content={
+        "sucesso": True,
+        "status": "sorteando",
+        "timestamp_inicio": now_ms,
+        "duracao_ms": 10000,
+        "premios_rodada": premios_rodada
+    })
+
+
+@router.post("/api/sorteios/mesa/limpar")
+async def limpar_mesa(
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_admin)
+):
+    """Limpa a mesa para permitir preparar a próxima rodada"""
+    stmt_estado = select(EstadoSorteio).where(EstadoSorteio.id == 1)
+    res_estado = await session.execute(stmt_estado)
+    estado = res_estado.scalars().first()
+    if not estado:
+        estado = EstadoSorteio(id=1)
+
+    estado.status = "idle"
+    estado.sorteando = False
+    estado.timestamp_inicio = 0
+    estado.dados_rodada = "[]"
+    session.add(estado)
+    await session.commit()
+
+    return JSONResponse(content={"sucesso": True, "status": "idle"})
 
 
 @router.post("/api/sorteios/executar/{premio_id}")
@@ -307,6 +569,25 @@ async def anular_sorteio(
     if premio and premio.quantidade_sorteada > 0:
         premio.quantidade_sorteada -= 1
         session.add(premio)
+
+    # Se estiver nos dados da rodada do telão, marca como anulado
+    stmt_est = select(EstadoSorteio).where(EstadoSorteio.id == 1)
+    res_est = await session.execute(stmt_est)
+    estado = res_est.scalars().first()
+    if estado and estado.dados_rodada:
+        try:
+            itens_rodada = json.loads(estado.dados_rodada)
+            alterou = False
+            for it in itens_rodada:
+                if it.get("ganhador") and it["ganhador"].get("ganhador_id") == ganhador_id:
+                    it["ganhador"]["anulado"] = True
+                    it["ganhador"]["motivo_anulacao"] = motivo
+                    alterou = True
+            if alterou:
+                estado.dados_rodada = json.dumps(itens_rodada)
+                session.add(estado)
+        except Exception:
+            pass
 
     await session.commit()
 

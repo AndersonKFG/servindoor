@@ -55,7 +55,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - ./app/static/fotos:/app/app/static/fotos
+      - ./app/static/uploads:/app/app/static/uploads
     networks:
       - festa_net
 
