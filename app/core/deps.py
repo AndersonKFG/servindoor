@@ -65,7 +65,7 @@ async def get_current_user(
     # Validação de Sessão Única por Conta (Single Device Enforcement)
     # Se o usuário possui um session_id ativo no banco e o token deste request tem um sid diferente,
     # significa que a conta foi conectada em outro dispositivo e esta sessão foi revogada!
-    if user.session_id and token_sid and user.session_id != token_sid:
+    if user.session_id and token_sid and not user.is_session_valid(token_sid):
         if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -76,11 +76,13 @@ async def get_current_user(
             headers={"Location": "/login?motivo=sessao_substituida"}
         )
 
-    # Atualiza o timestamp de último acesso
+    # Atualiza o timestamp de último acesso com throttle (apenas se > 300 segundos desde o último registro)
     from datetime import datetime
-    user.ultimo_acesso = datetime.now()
-    session.add(user)
-    await session.commit()
+    agora = datetime.now()
+    if not user.ultimo_acesso or (agora - user.ultimo_acesso).total_seconds() > 300:
+        user.ultimo_acesso = agora
+        session.add(user)
+        await session.commit()
 
     return user
 
@@ -148,3 +150,17 @@ async def get_current_staff(
             detail="Acesso restrito a membros da equipe."
         )
     return current_user
+
+
+async def get_current_validador(
+    current_user: Usuario = Depends(get_current_user)
+) -> Usuario:
+    """Permite Validador de Secretaria, Administrador ou Administrador Geral"""
+    if not current_user.has_role("validador", "admin", "admin_geral"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Acesso negado. Requer privilégios de Validador de Secretaria ou Administrador."
+        )
+    return current_user
+
+

@@ -1,8 +1,8 @@
 :root {
-  /* FAMÍLIAS TIPOGRÁFICAS OFICIAIS */
-  --font-main: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-  --font-display: 'Outfit', sans-serif;
-  --font-serif: 'Quattrocento', Georgia, serif;
+  /* Uma única variável controla a família tipográfica de toda a interface. */
+  --font-main: 'Outfit', system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-main);
+  --font-serif: var(--font-main);
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   /* ESCALA TIPOGRÁFICA MODULAR */
@@ -29,6 +29,8 @@
 }
 
 .font-quattrocento,
+.page-title.font-quattrocento,
+.section-title.font-quattrocento,
 .quattrocento-regular {
   font-family: var(--font-serif);
   font-weight: 400;
@@ -73,13 +75,6 @@
   line-height: 1.2;
 }
 
-[data-theme="light"] .page-title,
-[data-theme="light"] .admin-title,
-.theme-light .page-title,
-.theme-light .admin-title {
-  color: var(--text-main);
-}
-
 .page-subtitle,
 .admin-subtitle {
   font-size: 0.92rem;
@@ -89,19 +84,31 @@
   font-weight: 400;
 }
 
+.admin-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--primary-accent) 12%, transparent);
+  color: var(--primary-accent);
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+
 .section-title {
   font-family: var(--font-display);
   font-size: 1.35rem;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--text-main);
   display: flex;
   align-items: center;
   margin-bottom: 12px;
-}
-
-[data-theme="light"] .section-title,
-.theme-light .section-title {
-  color: var(--text-main);
 }
 
 /* CABEÇALHO PADRÃO DE PÁGINAS ADMINISTRATIVAS */

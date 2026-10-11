@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 gunicorn
 sqlmodel
+greenlet
 asyncpg
 python-dotenv
 jinja2

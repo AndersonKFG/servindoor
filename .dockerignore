@@ -7,6 +7,11 @@ env/
 venv/
 .venv/
 ENV/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.env*
+!.env.example
 .git
 .gitignore
 .dockerignore
@@ -16,3 +21,8 @@ ENV/
 .coverage
 htmlcov/
 .pytest_cache/
+app/static/dist/
+app/static/uploads/fotos/*
+!app/static/uploads/fotos/.gitkeep
+app/static/uploads/entregas/*
+!app/static/uploads/entregas/.gitkeep

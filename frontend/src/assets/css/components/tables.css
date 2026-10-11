@@ -20,11 +20,6 @@
   overflow: hidden;
 }
 
-[data-theme="light"] .table-card + .table-card,
-.theme-light .table-card + .table-card {
-  margin-top: 32px;
-}
-
 /* BARRA SUPERIOR DA TABELA */
 .table-header-box {
   padding: 16px 20px;
@@ -79,6 +74,10 @@
 .table-responsive::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 999px;
+}
+
+.table-responsive::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
 }
 
 /* ESTRUTURA BASE DA TABELA */

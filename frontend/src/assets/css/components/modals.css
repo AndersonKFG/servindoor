@@ -35,11 +35,6 @@ body.modal-open {
   z-index: 1050;
 }
 
-[data-theme="light"] .modal-backdrop-custom,
-.theme-light .modal-backdrop-custom {
-  background: rgba(15, 23, 42, 0.55);
-}
-
 /* CAIXA DE DIÁLOGO */
 .modal-content-custom {
   background: var(--modal-bg, rgba(11, 15, 25, 0.98));
@@ -502,7 +497,14 @@ body.modal-open {
 .exclusao-modal-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
+  padding: 4px 2px 8px;
+}
+
+.form-exclusao {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .alert-danger-custom {
@@ -698,9 +700,28 @@ body.modal-open {
   background: rgba(6, 182, 212, 0.08);
   border: 1px solid rgba(6, 182, 212, 0.2);
   border-radius: var(--radius-sm, 8px);
-  padding: 10px 14px;
+  padding: 14px 16px;
   display: flex;
   align-items: center;
+  gap: 4px;
+}
+
+.exclusao-modal-body .modal-footer-box {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.exclusao-modal-body .modal-footer-box > button {
+  padding: 12px 18px;
+}
+
+@media (max-width: 520px) {
+  .exclusao-modal-body .modal-footer-box > button {
+    flex: 1 1 100%;
+  }
 }
 
 .file-upload-box {

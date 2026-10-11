@@ -85,6 +85,19 @@
   font-weight: 700;
 }
 
+.badge-subtle-magenta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(217, 70, 239, 0.14) !important;
+  color: #e879f9 !important;
+  border: 1px solid rgba(217, 70, 239, 0.25) !important;
+  border-radius: var(--radius-pill, 9999px);
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 /* ==========================================================================
    ROLES, SESSÕES E CREDENCIAIS DE ACESSO
    ========================================================================== */

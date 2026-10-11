@@ -384,7 +384,7 @@ onUnmounted(() => {
     <!-- CABEÇALHO DA PÁGINA -->
     <div class="admin-header-row mb-4">
       <div>
-        <span class="badge-cyber mb-2 d-inline-flex align-items-center">
+        <span class="admin-eyebrow">
           <i class="bi bi-shield-lock-fill me-1 text-cyan"></i> PAINEL ADMINISTRATIVO
         </span>
         <h1 class="page-title font-quattrocento">Gestão da Equipe & Permissões</h1>
@@ -446,7 +446,7 @@ onUnmounted(() => {
 
     <!-- BARRA DE FERRAMENTAS E FILTROS -->
     <div class="filter-card mb-4">
-      <div class="filter-grid" style="grid-template-columns: 2fr 1fr 1fr;">
+      <div class="filter-grid filter-grid--search-three">
         <div class="search-box">
           <i class="bi bi-search search-icon"></i>
           <input

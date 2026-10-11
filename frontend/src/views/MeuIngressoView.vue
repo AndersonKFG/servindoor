@@ -1,6 +1,6 @@
 <script setup>
 import { useToast } from '../composables/useToast'
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import QRCode from 'qrcode'
 import WebcamCapture from '../components/WebcamCapture.vue'
@@ -15,6 +15,38 @@ const etapaAtual = ref('consulta')
 // Campos da Consulta
 const cpf = ref('')
 const dataNascimento = ref('')
+const nascimentoDia = ref('')
+const nascimentoMes = ref('')
+const nascimentoAno = ref('')
+const anoAtual = new Date().getFullYear()
+const anosNascimento = computed(() => Array.from(
+  { length: anoAtual - 1930 + 1 },
+  (_, index) => String(anoAtual - index)
+))
+const mesesNascimento = [
+  { valor: '01', nome: 'Janeiro' }, { valor: '02', nome: 'Fevereiro' },
+  { valor: '03', nome: 'Março' }, { valor: '04', nome: 'Abril' },
+  { valor: '05', nome: 'Maio' }, { valor: '06', nome: 'Junho' },
+  { valor: '07', nome: 'Julho' }, { valor: '08', nome: 'Agosto' },
+  { valor: '09', nome: 'Setembro' }, { valor: '10', nome: 'Outubro' },
+  { valor: '11', nome: 'Novembro' }, { valor: '12', nome: 'Dezembro' }
+]
+const diasNascimento = computed(() => {
+  const mes = Number(nascimentoMes.value)
+  const ano = Number(nascimentoAno.value)
+  const totalDias = mes && ano ? new Date(ano, mes, 0).getDate() : 31
+  return Array.from({ length: totalDias }, (_, index) => String(index + 1).padStart(2, '0'))
+})
+
+function atualizarDataNascimento() {
+  if (nascimentoDia.value && nascimentoMes.value && nascimentoAno.value) {
+    const ultimoDia = diasNascimento.value[diasNascimento.value.length - 1]
+    if (Number(nascimentoDia.value) > Number(ultimoDia)) nascimentoDia.value = ultimoDia
+    dataNascimento.value = `${nascimentoAno.value}-${nascimentoMes.value}-${nascimentoDia.value}`
+    return
+  }
+  dataNascimento.value = ''
+}
 const loadingConsulta = ref(false)
 const erroConsulta = ref('')
 
@@ -191,8 +223,14 @@ async function handleIniciarCancelamento() {
     }
 
     emailMascarado.value = data.email_mascarado || 'seu e-mail cadastrado'
+    if (data.status === 'pendente_foto') {
+      etapaAtual.value = 'cancel_selfie'
+      return
+    }
+    codigoConfirmacao.value = ''
+    erroCodigo.value = ''
     etapaAtual.value = 'cancel_2fa'
-    iniciarCooldown(60)
+    iniciarCooldown(data.reenviar_em_segundos ?? 60)
   } catch (err) {
     toast.error('Erro de conexão ao solicitar cancelamento.')
   } finally {
@@ -250,6 +288,8 @@ async function handleReenviarCodigo() {
     const data = await res.json()
     if (!res.ok) {
       erroCodigo.value = data.detail || 'Não foi possível reenviar o código.'
+      const espera = Number(res.headers.get('Retry-After') || 0)
+      if (espera > 0) iniciarCooldown(espera)
       return
     }
     iniciarCooldown(60)
@@ -339,13 +379,26 @@ async function handleConcluirCancelamento() {
 
           <div class="form-group">
             <label class="form-label" for="input-nascimento">Data de Nascimento:</label>
-            <input
-              id="input-nascimento"
-              v-model="dataNascimento"
-              type="date"
-              class="form-control-custom"
-              required
-            />
+            <div class="date-select-grid">
+              <div class="select-col col-dia">
+                <select id="input-nascimento-dia" v-model="nascimentoDia" class="form-select date-select" required aria-label="Dia de nascimento" @change="atualizarDataNascimento">
+                  <option value="" disabled>Dia</option>
+                  <option v-for="dia in diasNascimento" :key="dia" :value="dia">{{ dia }}</option>
+                </select>
+              </div>
+              <div class="select-col col-mes">
+                <select id="input-nascimento-mes" v-model="nascimentoMes" class="form-select date-select" required aria-label="Mês de nascimento" @change="atualizarDataNascimento">
+                  <option value="" disabled>Mês</option>
+                  <option v-for="mes in mesesNascimento" :key="mes.valor" :value="mes.valor">{{ mes.nome }}</option>
+                </select>
+              </div>
+              <div class="select-col col-ano">
+                <select id="input-nascimento-ano" v-model="nascimentoAno" class="form-select date-select" required aria-label="Ano de nascimento" @change="atualizarDataNascimento">
+                  <option value="" disabled>Ano</option>
+                  <option v-for="ano in anosNascimento" :key="ano" :value="ano">{{ ano }}</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <button
@@ -502,7 +555,7 @@ async function handleConcluirCancelamento() {
       <!-- ============================================================== -->
       <!-- CASO: SOLICITAÇÃO DE VALIDAÇÃO PENDENTE                        -->
       <!-- ============================================================== -->
-      <div v-else-if="etapaAtual === 'validacao_pendente'" class="card-glass-main text-center">
+      <div v-else-if="etapaAtual === 'validacao_pendente'" class="card-glass-main text-center pending-analysis-card">
         <div class="status-icon-box bg-warning-subtle text-warning">
           <i class="bi bi-hourglass-split"></i>
         </div>
@@ -583,13 +636,16 @@ async function handleConcluirCancelamento() {
       <!-- ============================================================== -->
       <!-- FLUXO CANCELAMENTO: ETAPA 2FA CÓDIGO EMAIL                     -->
       <!-- ============================================================== -->
-      <div v-else-if="etapaAtual === 'cancel_2fa'" class="card-glass-main">
-        <div class="step-header">
+      <div v-else-if="etapaAtual === 'cancel_2fa'" class="card-glass-main cancel-2fa-card">
+        <div class="step-header cancel-2fa-header">
           <div class="badge-step-tag font-outfit">SEGURANÇA 2FA</div>
           <h2 class="step-title font-outfit">Confirmar Código de Segurança</h2>
           <p class="step-desc">
             Enviamos um código de 6 dígitos para o e-mail:
             <strong class="text-white">{{ emailMascarado }}</strong>
+          </p>
+          <p class="step-desc cancel-code-validity">
+            O código vale por 15 minutos. Se sair desta tela para consultar o e-mail, volte ao ingresso e solicite o cancelamento novamente para retomar esta etapa sem gerar outro envio.
           </p>
         </div>
 
@@ -646,8 +702,8 @@ async function handleConcluirCancelamento() {
       <!-- ============================================================== -->
       <!-- FLUXO CANCELAMENTO: ETAPA SELFIE AO VIVO                       -->
       <!-- ============================================================== -->
-      <div v-else-if="etapaAtual === 'cancel_selfie'" class="card-glass-main">
-        <div class="step-header">
+      <div v-else-if="etapaAtual === 'cancel_selfie'" class="card-glass-main cancel-selfie-card">
+        <div class="step-header cancel-selfie-header">
           <div class="badge-step-tag font-outfit">CONFERÊNCIA BIOMÉTRICA</div>
           <h2 class="step-title font-outfit">Confirmação Facial ao Vivo</h2>
           <p class="step-desc">
@@ -666,7 +722,7 @@ async function handleConcluirCancelamento() {
 
         <button
           type="button"
-          class="btn-action-primary btn-cancel-confirm font-outfit mt-4"
+          class="btn-action-primary btn-cancel-confirm font-outfit mt-4 cancel-selfie-submit"
           :disabled="!fotoAoVivo || loadingEnviarFoto"
           @click="handleConcluirCancelamento"
         >
@@ -747,7 +803,7 @@ async function handleConcluirCancelamento() {
 .page-title-center {
   font-size: clamp(1.6rem, 3.5vw, 2.1rem);
   font-weight: 700;
-  color: #ffffff;
+  color: var(--text-main);
   margin: 4px 0 10px;
   letter-spacing: -0.01em;
 }
@@ -759,4 +815,55 @@ async function handleConcluirCancelamento() {
   margin: 0 auto;
   line-height: 1.5;
 }
+
+.cancel-2fa-header,
+.cancel-selfie-header {
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.cancel-2fa-header .step-title,
+.cancel-selfie-header .step-title {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.3;
+}
+
+.cancel-2fa-header .step-desc,
+.cancel-selfie-header .step-desc {
+  max-width: 58ch;
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 520px) {
+  .cancel-2fa-card {
+    padding: 28px 20px;
+  }
+
+  .cancel-2fa-card .input-code-digits {
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .cancel-selfie-card {
+    padding: 28px 20px;
+  }
+
+  .cancel-selfie-card .camera-wrapper {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .cancel-selfie-submit {
+    width: 100%;
+    white-space: normal;
+    text-align: center;
+  }
+}
+
 </style>

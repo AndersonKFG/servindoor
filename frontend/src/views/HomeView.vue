@@ -50,11 +50,15 @@ const isState1min = ref(false)
 const loteJaAbriuNaSessao = ref(false)
 const aberturaNotificada = ref(false)
 
-watch(() => statusInfo.value.status_slug, (slug) => {
+watch(() => statusInfo.value.status_slug, (slug, previousSlug) => {
   if (slug === 'aberto') {
     loteJaAbriuNaSessao.value = true
+    if (previousSlug !== 'aberto') {
+      soltarConfetes()
+    }
   } else {
     loteJaAbriuNaSessao.value = false
+    confetesDisparados.value = false
   }
 })
 const isState10s = ref(false)
@@ -507,7 +511,9 @@ function tickMotorRelogio() {
   const distancia = targetDate - agora
 
   if (distancia <= 0) {
-    if (isCountdownToLote) {
+    // O relógio pode promover somente um lote agendado. Não pode reabrir
+    // lotes pausados, encerrados ou esgotados após a resposta do servidor.
+    if (isCountdownToLote && statusInfo.value.status_slug === 'agendado') {
       loteJaAbriuNaSessao.value = true
       statusInfo.value.status_slug = 'aberto'
       statusInfo.value.status_label = 'RESGATE LIBERADO'
@@ -822,25 +828,25 @@ const cardClass = computed(() => {
               }"
             >
               <!-- Caixa Dias -->
-              <div class="digit-box" :class="{ 'box-sucked-into-sec': isState1min }">
+              <div v-if="!isState1min && dias !== '00'" class="digit-box">
                 <span class="digit-number">{{ dias }}</span>
                 <span class="digit-label">Dias</span>
               </div>
-              <span class="digit-sep" :class="{ 'sep-sucked': isState1min }">:</span>
+              <span v-if="!isState1min && dias !== '00'" class="digit-sep">:</span>
 
               <!-- Caixa Horas -->
-              <div class="digit-box" :class="{ 'box-sucked-into-sec': isState1min }">
+              <div v-if="!isState1min && horas !== '00'" class="digit-box">
                 <span class="digit-number">{{ horas }}</span>
                 <span class="digit-label">Horas</span>
               </div>
-              <span class="digit-sep" :class="{ 'sep-sucked': isState1min }">:</span>
+              <span v-if="!isState1min && horas !== '00'" class="digit-sep">:</span>
 
               <!-- Caixa Minutos -->
-              <div class="digit-box" :class="{ 'box-sucked-into-sec': isState1min }">
+              <div v-if="!isState1min && minutos !== '00'" class="digit-box">
                 <span class="digit-number">{{ minutos }}</span>
                 <span class="digit-label">Min</span>
               </div>
-              <span class="digit-sep" :class="{ 'sep-sucked': isState1min }">:</span>
+              <span v-if="!isState1min && minutos !== '00'" class="digit-sep">:</span>
 
               <!-- Caixa Segundos (A ÚNICA EXIBIDA QUANDO <= 60s) -->
               <div

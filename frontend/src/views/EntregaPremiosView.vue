@@ -291,7 +291,7 @@ onUnmounted(async () => {
 </script>
 
 <template>
-  <div class="entrega-premios-page">
+  <div class="admin-page">
     <div class="app-container">
       
       <!-- TOAST DE SUCESSO -->
@@ -301,9 +301,9 @@ onUnmounted(async () => {
       </div>
 
       <!-- HEADER DA PÁGINA -->
-      <div class="page-header-row mb-4">
+      <div class="admin-header-row mb-4">
         <div>
-          <span class="vip-badge bg-warning mb-2">
+          <span class="admin-eyebrow">
             <i class="bi bi-shield-check me-1"></i> Posto de Entrega Oficial
           </span>
           <h1 class="page-title font-quattrocento">Registro de Entrega de Prêmios</h1>
@@ -477,7 +477,7 @@ onUnmounted(async () => {
 
       <!-- Filtros e Barra de Busca Canônicos -->
       <div class="filter-card mb-4">
-        <div class="filter-grid" style="grid-template-columns: 2fr 1fr;">
+        <div class="filter-grid filter-grid--search-two">
           <div class="search-box">
             <i class="bi bi-search search-icon"></i>
             <input
@@ -700,17 +700,3 @@ onUnmounted(async () => {
 
   </div>
 </template>
-<style scoped>
-.entrega-premios-page {
-  padding: 32px 0 60px;
-}
-
-.page-header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-</style>

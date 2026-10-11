@@ -11,6 +11,8 @@ const { toast } = useToast()
 const router = useRouter()
 const { isAdmin, isAdminGeral, checkAuth } = useAuth()
 const loading = ref(true)
+let adminEventSource = null
+let adminRefreshTimer = null
 const metricas = ref({
   total_vagas: 0,
   total_resgatados: 0,
@@ -219,24 +221,32 @@ async function handleSalvarEdicao() {
       formData.append('ativo', 'on')
     }
 
-    await fetch(`/admin/lote/${loteEditando.value.id}/editar`, {
+    const response = await fetch(`/admin/lote/${loteEditando.value.id}/editar`, {
       method: 'POST',
       body: formData
     })
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || 'Não foi possível salvar as alterações do lote.')
+    }
 
     showModalEditar.value = false
     await carregarDadosAdmin()
   } catch (e) {
-    toast.error('Erro ao salvar edição do lote.')
+    toast.error(e.message || 'Erro ao salvar edição do lote.')
   }
 }
 
 async function handleToggleLote(loteId) {
   try {
-    await fetch(`/admin/lote/${loteId}/toggle`, { method: 'POST' })
+    const response = await fetch(`/admin/lote/${loteId}/toggle`, { method: 'POST' })
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.detail || 'Não foi possível alterar o status do lote.')
+    }
     await carregarDadosAdmin()
   } catch (e) {
-    toast.error('Erro ao alternar status do lote.')
+    toast.error(e.message || 'Erro ao alternar status do lote.')
   }
 }
 
@@ -465,9 +475,33 @@ function copiarFrase() {
   excluirConfirmacaoTexto.value = FRASE_CONFIRMACAO_OBRIGATORIA
 }
 
+function conectarAtualizacoesLote() {
+  if (adminEventSource) return
+
+  adminEventSource = new EventSource('/api/lote/stream')
+  const atualizarPainel = () => {
+    if (adminRefreshTimer) clearTimeout(adminRefreshTimer)
+    adminRefreshTimer = setTimeout(() => {
+      adminRefreshTimer = null
+      carregarDadosAdmin(true)
+    }, 150)
+  }
+
+  adminEventSource.addEventListener('LOTE_ATUALIZADO', atualizarPainel)
+  adminEventSource.addEventListener('RESERVA_ATUALIZADA', atualizarPainel)
+}
+
 onMounted(() => {
-  carregarDadosAdmin()
+  carregarDadosAdmin().then(() => {
+    if (isAdmin.value) conectarAtualizacoesLote()
+  })
   carregarBackups()
+})
+
+onUnmounted(() => {
+  if (adminRefreshTimer) clearTimeout(adminRefreshTimer)
+  adminEventSource?.close()
+  adminEventSource = null
 })
 </script>
 
@@ -479,6 +513,7 @@ onMounted(() => {
       <!-- Cabeçalho do Painel -->
       <div class="admin-header-row">
         <div>
+          <span class="admin-eyebrow"><i class="bi bi-shield-lock-fill"></i> PAINEL ADMINISTRATIVO</span>
           <h1 class="page-title font-quattrocento">Painel de Gestão VIP</h1>
           <p class="admin-subtitle">Monitoramento de resgates, liberação de lotes e controle de participantes.</p>
         </div>
@@ -513,7 +548,7 @@ onMounted(() => {
         />
 
         <KpiCard
-          title="Taxa de Ocupa??o"
+          title="Taxa de Ocupação"
           :value="metricas.taxa_ocupacao + '%'"
           icon="bi bi-percent"
           variant="warning"
@@ -1166,22 +1201,3 @@ onMounted(() => {
   </div>
 </template>
 
-<style scoped>
-.admin-page {
-  padding: 32px 0 60px;
-}
-
-.admin-header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 28px;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.admin-subtitle {
-  color: var(--text-muted);
-  font-size: 0.9rem;
-}
-</style>

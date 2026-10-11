@@ -1,16 +1,17 @@
 import os
 import uuid
 from datetime import timedelta, datetime
-from typing import Optional
-from fastapi import APIRouter, Request, Depends, Form, status
+from typing import Optional, Tuple
+from fastapi import APIRouter, Request, Depends, Form, status, HTTPException
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 from jose import jwt, JWTError
 
-from app.db.session import get_session
-from app.models.all_models import Usuario, UserRole
+from app.db.session import get_session, async_session
+from app.models.all_models import Usuario, UserRole, LoginRateLimit
 from app.core import security
 from app.core.config import settings
 
@@ -85,13 +86,13 @@ async def get_me(request: Request, session: AsyncSession = Depends(get_session))
         return JSONResponse(content={'autenticado': False, 'usuario': None})
 
     # Validação de Sessão Única: se outro dispositivo assumiu a conta
-    if user.session_id and token_sid and user.session_id != token_sid:
+    if user.session_id and token_sid and not user.is_session_valid(token_sid):
         response = JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={
                 'autenticado': False,
                 'sessao_substituida': True,
-                'mensagem': 'Sua sessão foi encerrada porque sua conta foi conectada em outro dispositivo.'
+                'mensagem': 'Sua sessão foi encerrada porque o limite de 3 dispositivos conectados foi atingido ou sua sessão foi revogada.'
             }
         )
         response.delete_cookie('access_token', path='/')
@@ -113,6 +114,7 @@ async def get_me(request: Request, session: AsyncSession = Depends(get_session))
             'roles': roles_list,
             'is_admin_geral': 'admin_geral' in roles_list,
             'email': user.email,
+            'deve_trocar_senha': bool(getattr(user, 'deve_trocar_senha', False)),
             'setor': user.setor
         }
     })
@@ -157,7 +159,141 @@ async def login_page(request: Request, session: AsyncSession = Depends(get_sessi
     return templates.TemplateResponse(request=request, name='login.html')
 
 
+
+PROGRESSIVE_LOGIN_TIERS = [
+    {"tentativas": 4, "bloqueio_segundos": 60, "label": "1 minuto"},
+    {"tentativas": 3, "bloqueio_segundos": 600, "label": "10 minutos"},
+    {"tentativas": 2, "bloqueio_segundos": 1800, "label": "30 minutos"},
+]
+
+_fallback_login_ratelimit = {}
+
+
+async def verificar_rate_limit_login(ip: str) -> Tuple[bool, Optional[str], int]:
+    """
+    Verifica se o IP está sob bloqueio temporário devido a excesso de tentativas falhas.
+    Retorna (permitido, mensagem_bloqueio, segundos_restantes).
+    """
+    agora = datetime.utcnow()
+
+    try:
+        async with async_session() as db:
+            stmt = select(LoginRateLimit).where(LoginRateLimit.ip == ip)
+            res = await db.execute(stmt)
+            registro = res.scalars().first()
+            if registro and registro.bloqueado_ate:
+                if registro.bloqueado_ate > agora:
+                    segundos_restantes = max(1, int((registro.bloqueado_ate - agora).total_seconds()))
+                    minutos = (segundos_restantes + 59) // 60
+                    tempo_str = f"{minutos} minuto{'s' if minutos > 1 else ''}" if segundos_restantes > 60 else f"{segundos_restantes} segundo{'s' if segundos_restantes > 1 else ''}"
+                    return False, f"Limite de tentativas excedido. Aguarde {tempo_str} antes de tentar novamente.", segundos_restantes
+                registro.bloqueado_ate = None
+                db.add(registro)
+                await db.commit()
+    except Exception:
+        mem = _fallback_login_ratelimit.get(ip)
+        if mem and mem.get("bloqueado_ate") and mem["bloqueado_ate"] > agora:
+            segundos_restantes = max(1, int((mem["bloqueado_ate"] - agora).total_seconds()))
+            return False, f"Limite de tentativas excedido. Aguarde {segundos_restantes} segundo(s) antes de tentar novamente.", segundos_restantes
+
+    return True, None, 0
+
+
+async def registrar_falha_login(ip: str) -> Tuple[bool, str, int]:
+    """
+    Registra tentativa inválida e aplica bloqueio progressivo caso atinja o limite do estágio.
+    Retorna (bloqueado_agora, mensagem, segundos_bloqueio).
+    """
+    agora = datetime.utcnow()
+
+    try:
+        async with async_session() as db:
+            stmt = select(LoginRateLimit).where(LoginRateLimit.ip == ip)
+            res = await db.execute(stmt)
+            registro = res.scalars().first()
+
+            if not registro:
+                registro = LoginRateLimit(
+                    ip=ip,
+                    tentativas_atuais=0,
+                    estagio_bloqueio=0,
+                    ultima_tentativa=agora
+                )
+                db.add(registro)
+
+            # Inatividade por mais de 1 hora sem bloqueio reseta o ciclo para o estágio inicial
+            if not registro.bloqueado_ate and (agora - registro.ultima_tentativa) > timedelta(hours=1):
+                registro.tentativas_atuais = 0
+                registro.estagio_bloqueio = 0
+
+            registro.tentativas_atuais += 1
+            registro.ultima_tentativa = agora
+
+            estagio = min(registro.estagio_bloqueio, len(PROGRESSIVE_LOGIN_TIERS) - 1)
+            tier = PROGRESSIVE_LOGIN_TIERS[estagio]
+
+            if registro.tentativas_atuais >= tier["tentativas"]:
+                segundos = tier["bloqueio_segundos"]
+                registro.bloqueado_ate = agora + timedelta(seconds=segundos)
+                registro.estagio_bloqueio = min(registro.estagio_bloqueio + 1, len(PROGRESSIVE_LOGIN_TIERS) - 1)
+                registro.tentativas_atuais = 0
+                db.add(registro)
+                await db.commit()
+
+                _fallback_login_ratelimit[ip] = {
+                    "bloqueado_ate": registro.bloqueado_ate,
+                    "estagio": registro.estagio_bloqueio,
+                    "tentativas": 0
+                }
+
+                msg = f"Limite de tentativas excedido. Aguarde {tier['label']} antes de tentar novamente."
+                return True, msg, segundos
+
+            db.add(registro)
+            await db.commit()
+
+            _fallback_login_ratelimit[ip] = {
+                "bloqueado_ate": None,
+                "estagio": registro.estagio_bloqueio,
+                "tentativas": registro.tentativas_atuais
+            }
+
+            return False, "CPF ou senha inválidos.", 0
+
+    except Exception:
+        mem = _fallback_login_ratelimit.setdefault(ip, {"bloqueado_ate": None, "estagio": 0, "tentativas": 0})
+        mem["tentativas"] += 1
+        estagio = min(mem["estagio"], len(PROGRESSIVE_LOGIN_TIERS) - 1)
+        tier = PROGRESSIVE_LOGIN_TIERS[estagio]
+        if mem["tentativas"] >= tier["tentativas"]:
+            segundos = tier["bloqueio_segundos"]
+            mem["bloqueado_ate"] = agora + timedelta(seconds=segundos)
+            mem["estagio"] = min(mem["estagio"] + 1, len(PROGRESSIVE_LOGIN_TIERS) - 1)
+            mem["tentativas"] = 0
+            return True, f"Limite de tentativas excedido. Aguarde {tier['label']} antes de tentar novamente.", segundos
+        return False, "CPF ou senha inválidos.", 0
+
+
+async def limpar_rate_limit_login(ip: str) -> None:
+    """Limpa tentativas e bloqueios para o IP após login bem-sucedido."""
+    _fallback_login_ratelimit.pop(ip, None)
+    try:
+        async with async_session() as db:
+            stmt = select(LoginRateLimit).where(LoginRateLimit.ip == ip)
+            res = await db.execute(stmt)
+            registro = res.scalars().first()
+            if registro:
+                registro.tentativas_atuais = 0
+                registro.estagio_bloqueio = 0
+                registro.bloqueado_ate = None
+                db.add(registro)
+                await db.commit()
+    except Exception:
+        pass
+
+
 @router.post('/login')
+
 async def login_action(
     request: Request,
     username: str = Form(...),
@@ -165,6 +301,27 @@ async def login_action(
     forcar_login: bool = Form(False),
     session: AsyncSession = Depends(get_session)
 ):
+    ip_cliente = security.extrair_ip_cliente(request)
+
+    # 1. Verificação prévia de bloqueio por tentativas excessivas
+    permitido, msg_bloqueio, seg_restantes = await verificar_rate_limit_login(ip_cliente)
+    if not permitido:
+        if request.url.path.startswith('/api/') or 'application/json' in request.headers.get('accept', ''):
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    'erro': msg_bloqueio,
+                    'bloqueado': True,
+                    'segundos_restantes': seg_restantes
+                }
+            )
+        return templates.TemplateResponse(
+            request=request,
+            name='login.html',
+            context={'erro': msg_bloqueio},
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS
+        )
+
     cpf_limpo = ''.join([c for c in username if c.isdigit()]).zfill(11)
 
     statement = (
@@ -187,15 +344,26 @@ async def login_action(
         )
     )
     if not usuario or not senha_ok:
+        bloqueado, msg_erro, seg_restantes = await registrar_falha_login(ip_cliente)
+        status_code = status.HTTP_429_TOO_MANY_REQUESTS if bloqueado else status.HTTP_401_UNAUTHORIZED
+        content = {
+            'erro': msg_erro,
+            'bloqueado': bloqueado,
+            'segundos_restantes': seg_restantes
+        }
         if request.url.path.startswith('/api/') or 'application/json' in request.headers.get('accept', ''):
-            return JSONResponse(status_code=401, content={'erro': 'CPF ou Senha incorretos.'})
+            return JSONResponse(status_code=status_code, content=content)
         if os.path.exists(VUE_INDEX_PATH):
-            return FileResponse(VUE_INDEX_PATH, status_code=status.HTTP_401_UNAUTHORIZED)
+            return FileResponse(VUE_INDEX_PATH, status_code=status_code)
         return templates.TemplateResponse(
             request=request,
             name='login.html',
-            context={'erro': 'CPF ou Senha incorretos.'}
+            context={'erro': msg_erro},
+            status_code=status_code
         )
+
+    # Login bem-sucedido: limpa o contador de tentativas para este IP
+    await limpar_rate_limit_login(ip_cliente)
 
     # Verificação de Sessão Única por Conta (Single Device Enforcement)
     agora = datetime.now()
@@ -209,33 +377,29 @@ async def login_action(
         except Exception:
             pass
 
-    mesmo_dispositivo = bool(sid_atual and usuario.session_id and sid_atual == usuario.session_id)
+    sessions = usuario.get_active_sessions()
+    mesmo_dispositivo = bool(sid_atual and any(s.get("sid") == sid_atual for s in sessions))
 
-    sessao_ativa = False
-    if usuario.session_id and usuario.ultimo_acesso:
-        tempo_decorrido = (agora - usuario.ultimo_acesso).total_seconds()
-        if tempo_decorrido < (settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60):
-            sessao_ativa = True
-
-    # Se já estiver conectado em outro aparelho e NÃO pediu para forçar/desconectar o outro:
-    if sessao_ativa and not mesmo_dispositivo and not forcar_login:
+    # Limite estrito de 3 dispositivos conectados simultaneamente:
+    if len(sessions) >= 3 and not mesmo_dispositivo and not forcar_login:
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={
                 'sucesso': False,
                 'sessao_ativa_outro_dispositivo': True,
-                'mensagem': 'Você já possui uma sessão ativa em outro dispositivo ou navegador.',
-                'dispositivo_anterior': usuario.session_device_info or 'Outro dispositivo',
+                'mensagem': 'Você já possui o limite máximo de 3 dispositivos conectados simultaneamente à sua conta.',
+                'dispositivo_anterior': f'{len(sessions)} dispositivos conectados',
+                'dispositivos_ativos': len(sessions),
+                'limite_maximo': 3,
                 'ultimo_acesso': usuario.ultimo_acesso.strftime('%d/%m/%Y às %H:%M') if usuario.ultimo_acesso else 'Recentemente'
             }
         )
 
-    # Criação da nova sessão
+    # Criação da nova sessão (mantém no máximo 3)
     novo_session_id = str(uuid.uuid4())
     info_disp = extrair_info_dispositivo(request.headers.get('user-agent', ''))
 
-    usuario.session_id = novo_session_id
-    usuario.session_device_info = info_disp
+    usuario.add_active_session(novo_session_id, info_disp, max_sessions=3)
     usuario.ultimo_acesso = agora
     session.add(usuario)
     await session.commit()
@@ -292,6 +456,8 @@ async def login_action(
 
 
 @router.get('/logout')
+@router.post('/logout')
+@router.post('/api/auth/logout')
 async def logout(request: Request, session: AsyncSession = Depends(get_session)):
     token = request.cookies.get('access_token')
     if token:
@@ -299,18 +465,66 @@ async def logout(request: Request, session: AsyncSession = Depends(get_session))
             _, _, param = token.partition(' ')
             payload = jwt.decode(param, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
             cpf = payload.get('sub')
+            sid = payload.get('sid')
             if cpf:
                 stmt = select(Usuario).where(Usuario.cpf == cpf)
                 res = await session.execute(stmt)
                 usr = res.scalars().first()
                 if usr:
-                    usr.session_id = None
+                    usr.remove_active_session(sid)
                     usr.session_device_info = None
                     session.add(usr)
                     await session.commit()
         except Exception:
             pass
 
-    response = RedirectResponse(url='/login', status_code=status.HTTP_303_SEE_OTHER)
+    if request.url.path.startswith('/api/') or 'application/json' in request.headers.get('accept', ''):
+        response = JSONResponse(content={'sucesso': True, 'mensagem': 'Sess?o encerrada com sucesso.'})
+    else:
+        response = RedirectResponse(url='/login', status_code=status.HTTP_303_SEE_OTHER)
+
     response.delete_cookie('access_token', path='/')
     return response
+
+
+class AlterarSenhaObrigatoriaRequest(BaseModel):
+    nova_senha: str
+    confirmacao_senha: str
+
+@router.post("/api/auth/alterar-senha-obrigatoria")
+async def alterar_senha_obrigatoria(
+    req: AlterarSenhaObrigatoriaRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session)
+):
+    """Permite ao membro da equipe definir sua senha pessoal definitiva no primeiro login"""
+    cookie_token = request.cookies.get('access_token')
+    if not cookie_token:
+        raise HTTPException(status_code=401, detail="Não autenticado.")
+    try:
+        _, _, p = cookie_token.partition(' ')
+        payload = jwt.decode(p, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        cpf = payload.get('sub')
+    except Exception:
+        raise HTTPException(status_code=401, detail="Sessão inválida.")
+
+    res = await session.execute(select(Usuario).where(Usuario.cpf == cpf, Usuario.deleted_at.is_(None)))
+    usuario = res.scalars().first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+
+    if len(req.nova_senha) < 6:
+        raise HTTPException(status_code=400, detail="A nova senha deve possuir pelo menos 6 caracteres.")
+
+    if req.nova_senha != req.confirmacao_senha:
+        raise HTTPException(status_code=400, detail="A confirmação de senha não confere.")
+
+    usuario.senha_hash = security.get_password_hash(req.nova_senha)
+    usuario.deve_trocar_senha = False
+    session.add(usuario)
+    await session.commit()
+
+    return JSONResponse(content={
+        "sucesso": True,
+        "mensagem": "Nova senha cadastrada com sucesso!"
+    })

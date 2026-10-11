@@ -1,16 +1,24 @@
 import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
+try:
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+except ImportError:
+    class BaseSettings:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+    SettingsConfigDict = lambda **kw: None
 
 class Settings(BaseSettings):
     # Configurações Gerais
-    PROJECT_NAME: str = "Servindoor"
+    PROJECT_NAME: str = "Serv indoor"
     DEBUG: bool = False
+    ENVIRONMENT: str = "development"
     
     # Banco de Dados (Padrão para container Docker local)
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@db:5432/festa_db"
     DB_ECHO: bool = False
-    DB_POOL_SIZE: int = 20
-    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_SIZE: int = 15
+    DB_MAX_OVERFLOW: int = 5
     DB_POOL_RECYCLE: int = 1800
 
     # Segurança (JWT e Hashing)
@@ -34,7 +42,22 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "ingresso@servindoor.com.br"
-    SMTP_FROM_NAME: str = "Servindoor"
+    SMTP_FROM_NAME: str = "Serv indoor"
+    SMTP_FROM_SECURITY: str = "seguranca@servindoor.com.br"
+    SMTP_FROM_COMMUNICATIONS: str = "comunicados@servindoor.com.br"
+    SMTP_FROM_TEAM: str = "equipe@servindoor.com.br"
+    EMAIL_SEND_RATE_PER_SECOND: int = 12
+    EMAIL_DAILY_LIMIT: int = 50000
+
+    # Integração com API da Escola de Governo de Caruaru
+    API_KEY_EGPC: str = ""
+    ESCOLA_GOVERNO_API_URL: str = "https://escoladegoverno.caruaru.pe.gov.br/api/v1/servidor/verificar"
+
+    # Validação Externa de Servidores
+    VALIDACAO_EXTERNA_URL: str = ""
+    VALIDACAO_EXTERNA_TOKEN: str = ""
+    VALIDACAO_EXTERNA_MOCK: bool = False
+    VALIDACAO_EXTERNA_MOCK_NEGATIVOS: str = "99999999999,11111111111,12345678901"
 
     model_config = SettingsConfigDict(
         env_file=".env",

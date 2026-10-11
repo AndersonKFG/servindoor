@@ -9,6 +9,7 @@ from sqlmodel import select, func
 from jose import jwt, JWTError
 
 from app.core.config import settings
+from app.core.security import extrair_ip_cliente
 from app.db.session import get_session
 from app.models.all_models import GatekeeperTentativa
 
@@ -20,16 +21,6 @@ _fallback_tentativas = {}
 
 class GatekeeperPinRequest(BaseModel):
     pin: str
-
-
-def extrair_ip_cliente(request: Request) -> str:
-    cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
-        return cf_ip.strip()
-    x_fwd = request.headers.get("x-forwarded-for")
-    if x_fwd:
-        return x_fwd.split(",")[0].strip()
-    return request.client.host if request.client else "127.0.0.1"
 
 
 def criar_token_gatekeeper(ip: str) -> str:
@@ -143,8 +134,7 @@ async def verificar_pin(
     Verifica o código de 6 caracteres (letras, números e símbolos).
     Regra estrita e universal: todos os dispositivos têm no máximo 3 tentativas a cada 24 horas.
     """
-    if not settings.GATEKEEPER_ENABLED:
-        return {"sucesso": True, "mensagem": "Gatekeeper desativado.", "token": None}
+    # A verificação do PIN é sempre executada rigorosamente (obrigatória para o Telão e acessos protegidos)
 
     ip_cliente = extrair_ip_cliente(request)
 

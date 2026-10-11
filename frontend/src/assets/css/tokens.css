@@ -37,7 +37,11 @@
   --text-main: #f8fafc;
   --text-muted: #94a3b8;
   --text-subtle: #64748b;
+  --text-secondary: var(--text-muted);
+  --text-light: var(--text-main);
+  --white: #ffffff;
   --primary-accent: #06b6d4;
+  --primary-color: var(--primary-accent);
   --primary-hover: #0ea5e9;
   --primary-gradient: linear-gradient(135deg, #0284c7 0%, #06b6d4 100%);
   --gold-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
@@ -64,33 +68,3 @@
   --transition-bounce: 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* ==========================================================================
-   PALETA TEMA CLARO (Clean Professional Light Mode)
-   ========================================================================== */
-[data-theme="light"],
-.theme-light {
-  --bg-base: #f1f5f9;
-  --bg-surface: #ffffff;
-  --bg-surface-navbar: rgba(255, 255, 255, 0.95);
-  --bg-card: #ffffff;
-  --bg-card-hover: #f8fafc;
-  --bg-input: #ffffff;
-  --border-glass: rgba(15, 23, 42, 0.12);
-  --border-glass-hover: rgba(15, 23, 42, 0.22);
-  --border-accent: rgba(2, 132, 199, 0.45);
-  --text-main: #0f172a;
-  --text-muted: #475569;
-  --text-subtle: #64748b;
-  --primary-accent: #0284c7;
-  --primary-hover: #0369a1;
-  --primary-gradient: linear-gradient(135deg, #0284c7 0%, #0ea5e9 100%);
-  --gold-gradient: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-  --success-color: #059669;
-  --warning-color: #d97706;
-  --danger-color: #dc2626;
-  --card-shadow: 0 4px 20px rgba(15, 23, 42, 0.06), 0 0 0 1px var(--border-glass);
-  --modal-bg: #ffffff;
-  --modal-header-bg: #f8fafc;
-  --table-head-bg: #f8fafc;
-  --table-hover-bg: #f1f5f9;
-}

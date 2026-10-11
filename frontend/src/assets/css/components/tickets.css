@@ -4,6 +4,12 @@
    ========================================================================== */
 
 /* CONTAINER DO INGRESSO DIGITAL */
+.ticket-access-restricted-badge {
+  background: color-mix(in srgb, var(--danger-color) 15%, transparent);
+  color: var(--danger-color);
+  border: 1px solid color-mix(in srgb, var(--danger-color) 30%, transparent);
+}
+
 .ticket-view-wrapper {
   display: flex;
   flex-direction: column;
@@ -231,18 +237,26 @@
   border-radius: 16px;
   padding: 18px 20px;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
 }
 
 .cancellation-demand-content {
   display: flex;
   align-items: flex-start;
   gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.cancellation-demand-content > div:last-child {
   flex: 1;
-  min-width: 250px;
+  min-width: 0;
+}
+
+.cancellation-reason-input {
+  max-width: 320px;
 }
 
 .cancellation-icon-wrap {
@@ -275,6 +289,7 @@
   cursor: pointer;
   white-space: nowrap;
   transition: all var(--transition-fast);
+  align-self: flex-start;
 }
 
 .btn-cancel-demand:hover:not(:disabled) {
@@ -347,6 +362,38 @@
   line-height: 1.5;
 }
 
+.pending-analysis-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: clamp(32px, 6vw, 40px);
+}
+
+.pending-analysis-card .status-icon-box,
+.pending-analysis-card .step-title,
+.pending-analysis-card .step-desc,
+.pending-analysis-card .protocol-card,
+.pending-analysis-card .explanation-box {
+  margin: 0;
+}
+
+.pending-analysis-card .protocol-card,
+.pending-analysis-card .explanation-box {
+  width: 100%;
+}
+
+@media (max-width: 520px) {
+  .pending-analysis-card {
+    gap: 12px;
+    padding: 26px 20px;
+  }
+
+  .pending-analysis-card .step-desc {
+    line-height: 1.5;
+  }
+}
+
 .input-code-digits {
   font-family: var(--font-mono);
   font-size: 1.8rem;
@@ -362,6 +409,12 @@
   color: var(--text-subtle);
   margin-top: 6px;
   display: block;
+}
+
+.cancel-code-validity {
+  max-width: 48ch;
+  margin: 8px auto 0;
+  line-height: 1.45;
 }
 
 .btn-resend-link {
@@ -577,6 +630,172 @@
   padding: 16px 18px;
   margin-bottom: 22px;
   text-align: left;
+}
+
+.ticket-card--analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: clamp(16px, 4vw, 26px);
+}
+
+.ticket-card--analysis > * {
+  margin-bottom: 0;
+}
+
+.ticket-card--analysis .analysis-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  text-align: left;
+}
+
+.ticket-card--analysis .badge-analise {
+  max-width: 100%;
+  margin: 0;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.ticket-card--analysis .servant-name {
+  font-size: clamp(1.4rem, 5vw, 1.85rem);
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.ticket-card--analysis .servant-org {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.ticket-card--analysis .analise-status-card {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 18px;
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px 16px;
+}
+
+.ticket-card--analysis .analise-icon-glow {
+  width: 60px;
+  height: 60px;
+  margin: 0;
+  grid-row: span 1;
+  font-size: 1.8rem;
+}
+
+.ticket-card--analysis .analise-protocolo-box {
+  align-items: flex-start;
+  min-width: 0;
+  margin: 0;
+}
+
+.ticket-card--analysis .analise-protocolo-valor {
+  overflow-wrap: anywhere;
+}
+
+.ticket-card--analysis .analise-pill {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 9px 12px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.ticket-card--analysis .ticket-details-box {
+  padding: 16px;
+}
+
+.ticket-card--analysis .analysis-details-grid {
+  gap: 14px 18px;
+}
+
+.ticket-card--analysis .detail-item {
+  min-width: 0;
+}
+
+.ticket-card--analysis .detail-value {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.ticket-card--analysis .analise-explanation-alert {
+  gap: 12px;
+  padding: 16px;
+}
+
+.ticket-card--analysis .alert-content-wrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.ticket-card--analysis .alert-title {
+  margin-bottom: 10px;
+  font-size: 0.95rem;
+}
+
+.ticket-card--analysis .analysis-steps {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-subtle);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.ticket-card--analysis .analysis-steps li::marker {
+  color: var(--warning-color);
+  font-weight: 800;
+}
+
+.ticket-card--analysis .analysis-steps strong {
+  color: var(--text-main);
+}
+
+.ticket-card--analysis .ticket-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ticket-card--analysis .ticket-actions a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 10px 12px;
+  line-height: 1.35;
+}
+
+.ticket-card--analysis .ticket-notice {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-glass);
+  line-height: 1.5;
+}
+
+@media (max-width: 520px) {
+  .sucesso-page {
+    padding: 20px 0 32px;
+  }
+
+  .ticket-card--analysis {
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .ticket-card--analysis .analysis-details-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .ticket-card--analysis .ticket-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .qr-container {

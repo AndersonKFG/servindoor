@@ -279,6 +279,10 @@ export function useLoteStatus(loteIdParam = null) {
           const data = JSON.parse(event.data)
           const myFp = getDeviceFingerprint()
 
+          // O stream entrega eventos de todos os lotes. Em uma tela vinculada a
+          // um lote específico, ignora eventos de outros lotes.
+          if (loteIdParam && data.lote_id && String(data.lote_id) !== String(loteIdParam)) return
+
           if (data.state_version) {
             lastStateVersion.value = data.state_version
           }
@@ -316,6 +320,13 @@ export function useLoteStatus(loteIdParam = null) {
               badge_class: data.badge_class || statusInfo.value.badge_class,
               segundos_para_abrir: data.segundos_para_abrir || 0
             }
+          }
+
+          // Muitos produtores publicam somente o fato ocorrido (ex.: reserva
+          // concluída), sem incluir o status recalculado. Reconsulta o snapshot
+          // para atualizar esgotamento, pausa e encerramento em todas as abas.
+          if (data.lote_id || !loteIdParam) {
+            fetchLiveStatus().catch(() => {})
           }
         } catch (e) {
           console.warn('Erro ao processar stream event:', e)

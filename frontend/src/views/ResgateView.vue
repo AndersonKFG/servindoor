@@ -264,6 +264,70 @@ let statusPollInterval = null
 let debounceCpfTimer = null
 
 let resgateEventSource = null
+let modalSseStatus = false
+
+function atualizarStatusLote(data) {
+  if (!data || (data.lote_id && String(data.lote_id) !== String(loteId))) return
+
+  const status = data.status_slug
+  if (!status) return
+
+  if (status === 'aberto' || status === 'reservado') {
+    if (modalSseStatus) {
+      modalFeedback.value.show = false
+      modalSseStatus = false
+    }
+    return
+  }
+
+  const feedbackPorStatus = {
+    agendado: {
+      titulo: 'Abertura do Lote Alterada',
+      subtitulo: 'O período de resgate ainda não começou. Volte à página inicial para acompanhar a nova abertura.',
+      icone: 'bi-clock-history',
+      corIcone: 'text-warning'
+    },
+    esgotado: {
+      titulo: 'Ingressos Esgotados!',
+      subtitulo: 'Todos os ingressos deste lote já foram resgatados por outros participantes.',
+      icone: 'bi-ticket-detailed-fill',
+      corIcone: 'text-danger'
+    },
+    pausado: {
+      titulo: 'Lote Pausado',
+      subtitulo: 'Este lote foi temporariamente pausado pela administração do evento.',
+      icone: 'bi-pause-circle-fill',
+      corIcone: 'text-warning'
+    },
+    encerrado: {
+      titulo: 'Lote Encerrado',
+      subtitulo: 'O período de resgate deste lote já foi encerrado.',
+      icone: 'bi-archive-fill',
+      corIcone: 'text-secondary'
+    }
+  }
+  const feedback = feedbackPorStatus[status]
+  if (!feedback || (modalFeedback.value.show && !modalSseStatus)) return
+
+  modalFeedback.value = {
+    show: true,
+    ...feedback,
+    btnTexto: 'Voltar à Página Inicial',
+    btnIcone: 'bi-house-door'
+  }
+  modalSseStatus = true
+}
+
+async function sincronizarStatusLote(data) {
+  if (data?.lote_id && String(data.lote_id) !== String(loteId)) return
+  try {
+    const res = await fetch(`/api/lote/live-status?lote_id=${loteId}`, { cache: 'no-store' })
+    if (res.ok) atualizarStatusLote(await res.json())
+  } catch {
+    // O backend continua validando o lote no POST; mantém o formulário ativo
+    // se a sincronização em tempo real falhar.
+  }
+}
 
 function connectResgateSSE() {
   if (typeof window === 'undefined' || !window.EventSource) return
@@ -274,9 +338,24 @@ function connectResgateSSE() {
   try {
     const myFp = getDeviceFingerprint()
     resgateEventSource = new EventSource(`/api/lote/stream?device_fingerprint=${myFp}&lote_id=${loteId}`)
+    resgateEventSource.addEventListener('ESTADO_CONSOLIDADO', (event) => {
+      try {
+        atualizarStatusLote(JSON.parse(event.data))
+      } catch {}
+    })
+    resgateEventSource.addEventListener('ESTADO_INICIAL', (event) => {
+      try {
+        atualizarStatusLote(JSON.parse(event.data))
+      } catch {}
+    })
     const handleEvent = (event) => {
       try {
         const data = JSON.parse(event.data)
+        if (data.lote_id && String(data.lote_id) !== String(loteId)) return
+        // Payloads de alteração nem sempre trazem status_slug; consulta o
+        // estado consolidado para refletir mudanças administrativas e resgates.
+        atualizarStatusLote(data)
+        sincronizarStatusLote(data)
         // Se a reserva deste token específico for liberada ou concluída em outra aba/janela:
         if (
           (data.tipo === 'reserva_liberada' || data.tipo === 'resgate_concluido') &&

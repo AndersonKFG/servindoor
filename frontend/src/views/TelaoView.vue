@@ -17,6 +17,7 @@ const imgErrors = ref({})
 const avatarErrors = ref({})
 const focoIndex = ref(0)
 const sidebarOculta = ref(false)
+const painelRecentesOculto = computed(() => sidebarOculta.value || status.value === 'sorteando')
 
 const recentListRef = ref(null)
 let isHoveringSidebar = false
@@ -251,7 +252,7 @@ onUnmounted(() => {
       <i class="bi bi-arrows-fullscreen"></i>
     </button>
 
-    <div class="stage-container" :class="{ 'sidebar-collapsed': sidebarOculta }">
+    <div class="stage-container" :class="{ 'sidebar-collapsed': painelRecentesOculto }">
       <main class="main-stage">
         <header class="telao-header">
           <div class="telao-branding">
@@ -263,11 +264,14 @@ onUnmounted(() => {
             <button
               type="button"
               class="btn-toggle-sidebar me-2"
-              :title="sidebarOculta ? 'Mostrar Últimos Sorteados' : 'Ocultar e Liberar Espaço para os Prêmios'"
+              :aria-expanded="!painelRecentesOculto"
+              aria-controls="recent-drawers-panel"
+              :disabled="status === 'sorteando'"
+              :title="status === 'sorteando' ? 'Histórico recolhido durante o sorteio' : painelRecentesOculto ? 'Expandir últimos sorteados' : 'Recolher últimos sorteados'"
               @click="sidebarOculta = !sidebarOculta"
             >
-              <i :class="['bi', sidebarOculta ? 'bi-layout-sidebar-inset' : 'bi-layout-sidebar-inset-reverse']"></i>
-              <span>{{ sidebarOculta ? 'Mostrar Histórico' : 'Liberar Espaço' }}</span>
+              <i :class="['bi', painelRecentesOculto ? 'bi-layout-sidebar-inset' : 'bi-layout-sidebar-inset-reverse']"></i>
+              <span>{{ status === 'sorteando' ? 'Últimos sorteados' : painelRecentesOculto ? 'Últimos sorteados' : 'Recolher histórico' }}</span>
             </button>
             <span v-if="status === 'sorteando'" class="banner-sorteando pulse-banner">
               <i class="bi bi-stars me-2"></i> SORTEIO AO VIVO NO TELÃO • 10s
@@ -340,7 +344,9 @@ onUnmounted(() => {
 
               <div class="spotlight-center-divider">
                 <div class="spotlight-line"></div>
-                <div class="spotlight-center-icon"><i class="bi bi-stars"></i></div>
+                <div class="spotlight-center-icon">
+                  <img src="/images/logo_servindoor_sem-fundo.png" alt="Servindoor" class="spotlight-center-logo" />
+                </div>
                 <div class="spotlight-line"></div>
               </div>
 
@@ -490,7 +496,9 @@ onUnmounted(() => {
 
         <!-- MODO 3: ESPERA -->
         <div v-else class="idle-stage">
-          <div class="idle-icon-sphere"><i class="bi bi-stars"></i></div>
+          <div class="idle-icon-sphere">
+            <img src="/images/logo_servindoor_sem-fundo.png" alt="Servindoor" class="idle-center-logo" />
+          </div>
           <h2 class="idle-title font-outfit">SERVINDOOR 2026</h2>
           <p class="idle-subtitle font-outfit">O GRANDE SORTEIO DE PRÊMIOS COMEÇARÁ EM BREVE</p>
           <div class="idle-hint font-outfit">
@@ -502,7 +510,10 @@ onUnmounted(() => {
 
       <!-- BARRA LATERAL ROXA: NÃO RESGATADOS COM ROLAGEM SUAVE -->
       <aside
+        id="recent-drawers-panel"
         class="sidebar-stage"
+        :aria-hidden="painelRecentesOculto"
+        :inert="painelRecentesOculto"
         @mouseenter="isHoveringSidebar = true"
         @mouseleave="isHoveringSidebar = false"
       >

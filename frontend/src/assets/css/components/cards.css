@@ -11,15 +11,6 @@
   -webkit-backdrop-filter: blur(12px);
 }
 
-[data-theme="light"] .card-surface,
-[data-theme="light"] .card-glass,
-.theme-light .card-surface,
-.theme-light .card-glass {
-  background: #ffffff;
-  border-color: rgba(15, 23, 42, 0.08);
-  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
-}
-
 .card-vip {
   background: rgba(15, 23, 42, 0.85);
   border: 1px solid var(--border-glass);
@@ -29,17 +20,6 @@
   -webkit-backdrop-filter: blur(16px);
 }
 
-/* CARDS DE FILTRO E BARRA DE FERRAMENTAS */
-.filter-card,
-.filters-card {
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-md, 12px);
-  padding: 16px 20px;
-  margin-bottom: 24px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
 /* GRID DE KPIS CANÔNICA */
 .kpi-grid {
   display: grid;
@@ -481,6 +461,73 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.entity-card-footer .action-expandable {
+  position: relative;
+  width: 32px;
+  justify-content: center;
+  gap: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: width var(--transition-fast), padding var(--transition-fast), gap var(--transition-fast), transform var(--transition-fast), color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.entity-card-footer .action-expandable > i {
+  position: absolute;
+  left: 50%;
+  width: 1em;
+  text-align: center;
+  line-height: 1;
+  transform: translateX(-50%);
+  transition: left var(--transition-fast), transform var(--transition-fast);
+}
+
+.entity-card-footer .action-expandable .action-label {
+  display: inline-block;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-width var(--transition-fast), opacity var(--transition-fast);
+}
+
+.entity-card-footer .action-expandable--details:hover:not(:disabled),
+.entity-card-footer .action-expandable--details:focus-visible {
+  width: 112px;
+}
+
+.entity-card-footer .action-expandable--edit:hover:not(:disabled),
+.entity-card-footer .action-expandable--edit:focus-visible {
+  width: 96px;
+}
+
+.entity-card-footer .action-expandable--email:hover:not(:disabled),
+.entity-card-footer .action-expandable--email:focus-visible {
+  width: 152px;
+}
+
+.entity-card-footer .action-expandable--cancel:hover:not(:disabled),
+.entity-card-footer .action-expandable--cancel:focus-visible {
+  width: 112px;
+}
+
+.entity-card-footer .action-expandable:hover:not(:disabled),
+.entity-card-footer .action-expandable:focus-visible {
+  justify-content: flex-start;
+  gap: 8px;
+  padding-inline: 9px;
+}
+
+.entity-card-footer .action-expandable:hover:not(:disabled) > i,
+.entity-card-footer .action-expandable:focus-visible > i {
+  left: 9px;
+  transform: none;
+}
+
+.entity-card-footer .action-expandable:hover:not(:disabled) .action-label,
+.entity-card-footer .action-expandable:focus-visible .action-label {
+  max-width: 120px;
+  opacity: 1;
 }
 
 /* BOTÃO DE AÇÃO PRINCIPAL DO CARD */

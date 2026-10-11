@@ -240,12 +240,13 @@ function getStatusBadge(status) {
 </script>
 
 <template>
-  <div class="admin-page app-container">
+  <div class="admin-page">
+    <div class="app-container">
 
     <!-- Topo: Título e Ação de Atualizar -->
     <div class="admin-header-row mb-4">
       <div>
-        <span class="badge-cyber mb-2 d-inline-flex align-items-center">
+        <span class="admin-eyebrow">
           <i class="bi bi-shield-lock-fill me-1 text-cyan"></i> PAINEL ADMINISTRATIVO
         </span>
         <h1 class="page-title font-quattrocento">Central de Cancelamentos</h1>
@@ -781,6 +782,7 @@ function getStatusBadge(status) {
       </template>
     </Modal>
 
+    </div>
   </div>
 </template>
 

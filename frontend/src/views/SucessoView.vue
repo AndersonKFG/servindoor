@@ -142,14 +142,14 @@ onMounted(() => {
   <div class="sucesso-page">
     <div class="app-container">
       <div class="sucesso-wrapper">
-        <div class="vip-card ticket-card">
+        <div class="vip-card ticket-card" :class="{ 'ticket-card--analysis': isAnalise }">
           
           <!-- ============================================================= -->
           <!-- CENÁRIO 0: ACESSO NÃO AUTORIZADO (PROTEÇÃO IDOR/LGPD)          -->
           <!-- ============================================================= -->
           <template v-if="acessoNegado">
             <div class="ticket-header text-center py-4">
-              <span class="vip-badge mb-3" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3);">
+              <span class="vip-badge ticket-access-restricted-badge mb-3">
                 <i class="bi bi-shield-x me-1"></i> Acesso Restrito
               </span>
               <h2 class="servant-name font-outfit">Comprovante Protegido</h2>
@@ -168,8 +168,8 @@ onMounted(() => {
           <!-- CENÁRIO 1: SOLICITAÇÃO EM ANÁLISE MANUAL (VALIDADOR)           -->
           <!-- ============================================================= -->
           <template v-else-if="isAnalise">
-            <div class="ticket-header">
-              <span class="vip-badge badge-analise mb-3">
+            <div class="ticket-header analysis-header">
+              <span class="vip-badge badge-analise">
                 <i class="bi bi-hourglass-split me-1"></i> Cadastro em Análise &bull; Vaga Retida no Lote
               </span>
 
@@ -201,7 +201,7 @@ onMounted(() => {
 
             <!-- Detalhes da Solicitação -->
             <div class="ticket-details-box">
-              <div class="details-grid">
+              <div class="details-grid analysis-details-grid">
                 <div class="detail-item">
                   <span class="detail-label">Lote:</span>
                   <strong class="detail-value">{{ lote?.nome || 'Lote Oficial' }}</strong>
@@ -228,18 +228,12 @@ onMounted(() => {
               </div>
               <div class="alert-content-wrap">
                 <strong class="alert-title font-outfit">Próximos Passos do seu Resgate</strong>
-                <p class="alert-text">
-                  <strong>1. Resgate realizado com sucesso:</strong> Seus dados foram recebidos e sua vaga está garantida no lote.
-                </p>
-                <p class="alert-text mt-2">
-                  <strong>2. Validação:</strong> O sistema e a equipe da <strong>Servindoor</strong> estão validando seu vínculo como servidor(a) municipal.
-                </p>
-                <p class="alert-text mt-2">
-                  <strong>3. Notificação:</strong> Após a validação, você receberá um e-mail contendo seu <strong>ingresso oficial com QR Code</strong> ou informando eventuais pendências.
-                </p>
-                <p class="alert-text mt-2">
-                  <strong>4. Prazo:</strong> Todo esse processo de validação ocorrerá em <strong>até 72 horas</strong>.
-                </p>
+                <ol class="analysis-steps">
+                  <li><strong>Resgate realizado com sucesso:</strong> Seus dados foram recebidos e sua vaga está garantida no lote.</li>
+                  <li><strong>Validação:</strong> O sistema e a equipe da <strong>Servindoor</strong> estão validando seu vínculo como servidor(a) municipal.</li>
+                  <li><strong>Notificação:</strong> Após a validação, você receberá um e-mail contendo seu <strong>ingresso oficial com QR Code</strong> ou informando eventuais pendências.</li>
+                  <li><strong>Prazo:</strong> Todo esse processo de validação ocorrerá em <strong>até 72 horas</strong>.</li>
+                </ol>
               </div>
             </div>
 
@@ -365,8 +359,3 @@ onMounted(() => {
   </div>
 </template>
 
-<style scoped>
-.sucesso-page {
-  padding: 40px 0 60px;
-}
-</style>

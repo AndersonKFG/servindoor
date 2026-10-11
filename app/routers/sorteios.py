@@ -9,7 +9,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, status, Query, Body
 from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select, func, or_, desc
+from sqlmodel import select, func, or_, and_, desc
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_session
@@ -18,6 +18,7 @@ from app.models.all_models import (
     MovimentoTipo, PremioCategoria, UserRole
 )
 from app.core.deps import get_current_admin, get_current_staff, get_current_entregador
+from app.core.security import extrair_ip_cliente
 
 router = APIRouter()
 
@@ -26,12 +27,7 @@ ENTREGAS_DIR = "app/static/uploads/entregas"
 os.makedirs(PREMIOS_DIR, exist_ok=True)
 os.makedirs(ENTREGAS_DIR, exist_ok=True)
 
-# Estado em memória para animação do telão
-live_sorteio_state = {
-    "sorteando": False,
-    "timestamp_inicio": 0,
-    "premio_id": None
-}
+_rate_limit_meus_premios = {}
 
 class ItemMesaPreparar(BaseModel):
     premio_id: int
@@ -55,9 +51,9 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
 
     agora_ms = int(datetime.now().timestamp() * 1000)
 
-    # Autotransição: se está sorteando e já passaram pelo menos 13s (13000ms), transiciona para finalizado
+    # Autotransição alinhada aos 10s da roleta
     if estado_atual.status == "sorteando" and estado_atual.timestamp_inicio > 0:
-        if agora_ms - estado_atual.timestamp_inicio >= 13000:
+        if agora_ms - estado_atual.timestamp_inicio >= 10000:
             estado_atual.status = "finalizado"
             estado_atual.sorteando = False
             session.add(estado_atual)
@@ -86,9 +82,9 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
     # NÃO DÁ SPOILER: se ainda estiver sorteando, exclui os ganhadores da rodada atual da barra lateral
     if estado_atual.status == "sorteando":
         ids_atuais = [
-            it.get("ganhador", {}).get("id")
+            it.get("ganhador", {}).get("ganhador_id")
             for it in premios_rodada
-            if it.get("ganhador", {}).get("id")
+            if it.get("ganhador", {}).get("ganhador_id")
         ]
         if ids_atuais:
             stmt_ultimos = stmt_ultimos.where(Ganhador.id.not_in(ids_atuais))
@@ -110,7 +106,8 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
             "secretaria_nome": u.secretaria.nome if u and u.secretaria else "Geral",
             "premio_nome": p.nome if p else "Prêmio",
             "premio_foto": p.foto_url if p else None,
-            "data_sorteio": g.data_sorteio.strftime("%H:%M:%S")
+            "categoria": "Categoria 1 (Geral)" if str(g.categoria) == "categoria_1" else "Categoria 2 (Eixo)",
+            "data_sorteio": g.data_sorteio.strftime("%d/%m/%Y às %H:%M:%S")
         })
 
     # 4. Busca amostra ampla de servidores presentes para a roleta (sem o limite fixo de 25)
@@ -258,7 +255,16 @@ async def iniciar_sorteio_mesa(
     stmt_checkin = (
         select(LogAcesso.usuario_id)
         .join(subq_ultimo_log, LogAcesso.id == subq_ultimo_log.c.max_id)
-        .where(LogAcesso.tipo == MovimentoTipo.entrada, Usuario.deleted_at.is_(None), Usuario.ativo == True)
+        .join(Usuario, LogAcesso.usuario_id == Usuario.id)
+        .join(Ingresso, and_(Ingresso.usuario_id == Usuario.id, Ingresso.deleted_at.is_(None)))
+        .where(
+            LogAcesso.tipo == MovimentoTipo.entrada,
+            Usuario.deleted_at.is_(None),
+            Usuario.ativo == True,
+            Usuario.role == UserRole.servidor,
+            or_(Usuario.roles.is_(None), Usuario.roles == "", Usuario.roles == "servidor")
+        )
+        .distinct()
     )
     res_checkin = await session.execute(stmt_checkin)
     presentes_ids = set(res_checkin.scalars().all())
@@ -277,18 +283,17 @@ async def iniciar_sorteio_mesa(
 
         categoria_alvo = item["categoria"]
 
-        # Busca quem já ganhou nesta categoria
+        # Nova Regra de Negócio: Restrição global por participante (cada participante ganha apenas uma vez no evento)
         stmt_ja_ganhou = (
             select(Ganhador.usuario_id)
             .where(
-                Ganhador.categoria == categoria_alvo,
                 Ganhador.anulado == False
             )
         )
         res_ja_ganhou = await session.execute(stmt_ja_ganhou)
-        ja_ganharam_cat = set(res_ja_ganhou.scalars().all())
+        ja_ganharam_global = set(res_ja_ganhou.scalars().all())
 
-        candidatos_ids = presentes_ids - ja_ganharam_cat - ganhadores_nesta_rodada_ids
+        candidatos_ids = presentes_ids - ja_ganharam_global - ganhadores_nesta_rodada_ids
 
         if not candidatos_ids:
             raise HTTPException(
@@ -333,8 +338,28 @@ async def iniciar_sorteio_mesa(
                 detail=f"Nenhum servidor elegível presente encontrado para o prêmio '{premio.nome}'."
             )
 
-        # Sorteia 1 vencedor
-        sorteado = secrets.choice(elegiveis)
+        # Sorteia 1 vencedor garantindo unicidade atômica
+        sorteado = None
+        elegiveis_restantes = list(elegiveis)
+        while elegiveis_restantes and not sorteado:
+            candidato = secrets.choice(elegiveis_restantes)
+            stmt_chk = (
+                select(Ganhador)
+                .where(Ganhador.usuario_id == candidato.id, Ganhador.anulado == False)
+                .with_for_update()
+            )
+            res_chk = await session.execute(stmt_chk)
+            if not res_chk.scalars().first():
+                sorteado = candidato
+            else:
+                elegiveis_restantes.remove(candidato)
+
+        if not sorteado:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Não há servidores elegíveis disponíveis para o prêmio '{premio.nome}'."
+            )
+
         ganhadores_nesta_rodada_ids.add(sorteado.id)
 
         # Registra Ganhador no banco
@@ -419,6 +444,7 @@ async def executar_sorteio(
         raise HTTPException(status_code=400, detail="Este prêmio já atingiu a quantidade máxima de sorteios.")
 
     # 1. Busca IDs de servidores que estão atualmente DENTRO do evento (último log = entrada)
+    # Exige: Servidor comum (não equipe) e ingresso ativo emitido
     subq_ultimo_log = (
         select(func.max(LogAcesso.id).label("max_id"))
         .group_by(LogAcesso.usuario_id)
@@ -427,7 +453,16 @@ async def executar_sorteio(
     stmt_checkin = (
         select(LogAcesso.usuario_id)
         .join(subq_ultimo_log, LogAcesso.id == subq_ultimo_log.c.max_id)
-        .where(LogAcesso.tipo == MovimentoTipo.entrada, Usuario.deleted_at.is_(None), Usuario.ativo == True)
+        .join(Usuario, LogAcesso.usuario_id == Usuario.id)
+        .join(Ingresso, and_(Ingresso.usuario_id == Usuario.id, Ingresso.deleted_at.is_(None)))
+        .where(
+            LogAcesso.tipo == MovimentoTipo.entrada,
+            Usuario.deleted_at.is_(None),
+            Usuario.ativo == True,
+            Usuario.role == UserRole.servidor,
+            or_(Usuario.roles.is_(None), Usuario.roles == "", Usuario.roles == "servidor")
+        )
+        .distinct()
     )
     res_checkin = await session.execute(stmt_checkin)
     presentes_ids = set(res_checkin.scalars().all())
@@ -435,25 +470,24 @@ async def executar_sorteio(
     if not presentes_ids:
         raise HTTPException(status_code=400, detail="Nenhum servidor com check-in registrado na portaria até o momento.")
 
-    # 2. Busca IDs de servidores que JÁ ganharam nesta mesma categoria
+    # 2. Nova Regra de Negócio: Restrição global por participante (cada participante ganha apenas uma vez no evento)
     categoria_alvo = premio.categoria
-    stmt_ganhadores_cat = (
+    stmt_ja_ganhou = (
         select(Ganhador.usuario_id)
         .where(
-            Ganhador.categoria == categoria_alvo,
             Ganhador.anulado == False
         )
     )
-    res_ganhadores_cat = await session.execute(stmt_ganhadores_cat)
-    ja_ganharam_nesta_cat = set(res_ganhadores_cat.scalars().all())
+    res_ja_ganhou = await session.execute(stmt_ja_ganhou)
+    ja_ganharam_global = set(res_ja_ganhou.scalars().all())
 
-    # 3. Filtra usuários presentes que ainda não ganharam nesta categoria
-    candidatos_ids = presentes_ids - ja_ganharam_nesta_cat
+    # 3. Filtra usuários presentes que ainda não ganharam nenhum prêmio no evento
+    candidatos_ids = presentes_ids - ja_ganharam_global
 
     if not candidatos_ids:
         raise HTTPException(
             status_code=400,
-            detail="Todos os servidores presentes já foram sorteados nesta categoria."
+            detail="Todos os servidores presentes já foram sorteados."
         )
 
     # 4. Se for Categoria 2 (Eixo), filtra apenas secretarias que pertencem ao eixo do prêmio
@@ -499,8 +533,27 @@ async def executar_sorteio(
             detail="Nenhum servidor elegível presente encontrado para este sorteio."
         )
 
-    # 5. Sorteio criptograficamente seguro e aleatório
-    vencedor = secrets.choice(elegiveis)
+    # 5. Sorteio criptograficamente seguro e aleatório garantindo unicidade atômica
+    vencedor = None
+    elegiveis_restantes = list(elegiveis)
+    while elegiveis_restantes and not vencedor:
+        candidato = secrets.choice(elegiveis_restantes)
+        stmt_chk = (
+            select(Ganhador)
+            .where(Ganhador.usuario_id == candidato.id, Ganhador.anulado == False)
+            .with_for_update()
+        )
+        res_chk = await session.execute(stmt_chk)
+        if not res_chk.scalars().first():
+            vencedor = candidato
+        else:
+            elegiveis_restantes.remove(candidato)
+
+    if not vencedor:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhum servidor elegível disponível para este sorteio."
+        )
 
     # 6. Registra o Ganhador
     novo_ganhador = Ganhador(
@@ -521,18 +574,58 @@ async def executar_sorteio(
     await session.commit()
     await session.refresh(novo_ganhador)
 
-    # Atualiza estado no banco para sincronização multi-worker
+    # Atualiza estado no banco para sincronização multi-worker e Telão
+    agora_ts = int(datetime.now().timestamp() * 1000)
+    cpf_raw = vencedor.cpf or ""
+    cpf_mascarado = f"{cpf_raw[:3]}.***.***-{cpf_raw[-2:]}" if len(cpf_raw) == 11 else cpf_raw
+    categoria_str = premio.categoria.value if hasattr(premio.categoria, "value") else str(premio.categoria)
+
+    eixo_nome = None
+    if premio.eixo_id:
+        eixo_obj = await session.get(Eixo, premio.eixo_id)
+        if eixo_obj:
+            eixo_nome = eixo_obj.nome
+
+    dados_rodada_item = [{
+        "item_id": f"item_{premio.id}_single_{secrets.token_hex(3)}",
+        "premio_id": premio.id,
+        "premio_nome": premio.nome,
+        "premio_descricao": premio.descricao or "",
+        "premio_foto": premio.foto_url,
+        "categoria": categoria_str,
+        "eixo_id": premio.eixo_id,
+        "eixo_nome": eixo_nome or "Todos os Presentes",
+        "ganhador": {
+            "ganhador_id": novo_ganhador.id,
+            "id": vencedor.id,
+            "nome": vencedor.nome,
+            "cpf": cpf_mascarado,
+            "secretaria": vencedor.secretaria.nome if vencedor.secretaria else "Geral",
+            "setor": vencedor.setor or "",
+            "vinculo": vencedor.vinculo or "",
+            "foto_url": vencedor.foto_rosto_url or vencedor.foto_url
+        }
+    }]
+
     stmt_est = select(EstadoSorteio).where(EstadoSorteio.id == 1)
     res_est = await session.execute(stmt_est)
     estado_sort = res_est.scalars().first()
-    agora_ts = int(datetime.now().timestamp() * 1000)
     if not estado_sort:
-        estado_sort = EstadoSorteio(id=1, sorteando=True, timestamp_inicio=agora_ts, premio_id=premio.id)
+        estado_sort = EstadoSorteio(
+            id=1,
+            status="sorteando",
+            sorteando=True,
+            timestamp_inicio=agora_ts,
+            premio_id=premio.id,
+            dados_rodada=json.dumps(dados_rodada_item)
+        )
         session.add(estado_sort)
     else:
+        estado_sort.status = "sorteando"
         estado_sort.sorteando = True
         estado_sort.timestamp_inicio = agora_ts
         estado_sort.premio_id = premio.id
+        estado_sort.dados_rodada = json.dumps(dados_rodada_item)
         session.add(estado_sort)
     await session.commit()
 
@@ -685,6 +778,8 @@ async def criar_premio(
         try:
             _, encoded = foto_base64.split(",", 1)
             foto_bytes = base64.b64decode(encoded)
+            if len(foto_bytes) > 10 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="A foto do prêmio deve ter no máximo 10MB.")
             nome_arquivo = f"premio_{int(datetime.now().timestamp())}_{secrets.token_hex(4)}.jpg"
             caminho = os.path.join(PREMIOS_DIR, nome_arquivo)
             with open(caminho, "wb") as f:
@@ -693,22 +788,31 @@ async def criar_premio(
         except Exception as e:
             print("Erro salvando foto do premio:", e)
 
-    eixo_id_val = int(eixo_id) if eixo_id and eixo_id.strip() and eixo_id != "0" else None
-    cat_enum = PremioCategoria.categoria_2 if categoria in ["categoria_2", PremioCategoria.categoria_2] else PremioCategoria.categoria_1
+    eixo_id_val = int(eixo_id) if eixo_id and str(eixo_id).strip() and str(eixo_id).strip() != "0" else None
+    cat_str = "categoria_2" if str(categoria) in ["categoria_2", PremioCategoria.categoria_2, getattr(PremioCategoria.categoria_2, "value", "categoria_2")] else "categoria_1"
 
     novo_premio = Premio(
         nome=nome.strip(),
         descricao=descricao.strip() if descricao else None,
         foto_url=foto_url,
-        categoria=cat_enum,
+        categoria=cat_str,
         eixo_id=eixo_id_val,
         quantidade=quantidade,
         quantidade_sorteada=0,
-        ativo=True
+        ativo=True,
+        ordem=0
     )
-    session.add(novo_premio)
-    await session.commit()
-    await session.refresh(novo_premio)
+    try:
+        session.add(novo_premio)
+        await session.commit()
+        await session.refresh(novo_premio)
+    except Exception as e:
+        await session.rollback()
+        print(f"❌ [criar_premio] Erro ao gravar premio no banco: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro interno ao cadastrar prêmio no banco de dados: {str(e)}"
+        )
 
     return JSONResponse(content={"sucesso": True, "id": novo_premio.id})
 
@@ -735,6 +839,8 @@ async def editar_premio(
         try:
             _, encoded = foto_base64.split(",", 1)
             foto_bytes = base64.b64decode(encoded)
+            if len(foto_bytes) > 10 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="A foto do prêmio deve ter no máximo 10MB.")
             nome_arquivo = f"premio_{premio.id}_{int(datetime.now().timestamp())}.jpg"
             caminho = os.path.join(PREMIOS_DIR, nome_arquivo)
             with open(caminho, "wb") as f:
@@ -743,19 +849,27 @@ async def editar_premio(
         except Exception as e:
             print("Erro atualizando foto do premio:", e)
 
-    eixo_id_val = int(eixo_id) if eixo_id and eixo_id.strip() and eixo_id != "0" else None
-    cat_enum = PremioCategoria.categoria_2 if categoria in ["categoria_2", PremioCategoria.categoria_2] else PremioCategoria.categoria_1
+    eixo_id_val = int(eixo_id) if eixo_id and str(eixo_id).strip() and str(eixo_id).strip() != "0" else None
+    cat_str = "categoria_2" if str(categoria) in ["categoria_2", PremioCategoria.categoria_2, getattr(PremioCategoria.categoria_2, "value", "categoria_2")] else "categoria_1"
 
     premio.nome = nome.strip()
     premio.descricao = descricao.strip() if descricao else None
-    premio.categoria = cat_enum
+    premio.categoria = cat_str
     premio.eixo_id = eixo_id_val
     premio.quantidade = quantidade
     if ativo is not None:
         premio.ativo = ativo
 
-    session.add(premio)
-    await session.commit()
+    try:
+        session.add(premio)
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        print(f"❌ [editar_premio] Erro ao atualizar premio no banco: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro interno ao atualizar prêmio: {str(e)}"
+        )
 
     return JSONResponse(content={"sucesso": True})
 
@@ -931,13 +1045,18 @@ async def registrar_entrega(
     session: AsyncSession = Depends(get_session),
     current_user: Usuario = Depends(get_current_entregador)
 ):
-    """Registra a entrega do prêmio com foto de comprovação do ganhador segurando o prêmio"""
-    ganhador = await session.get(Ganhador, ganhador_id)
+    """Registra a entrega do prêmio com foto de comprovação do ganhador segurando o prêmio com lock atômico"""
+    stmt_g = select(Ganhador).where(Ganhador.id == ganhador_id).with_for_update()
+    res_g = await session.execute(stmt_g)
+    ganhador = res_g.scalars().first()
     if not ganhador:
         raise HTTPException(status_code=404, detail="Registro de sorteio não encontrado.")
 
     if ganhador.anulado:
         raise HTTPException(status_code=400, detail="Este sorteio foi anulado.")
+
+    if ganhador.entregue:
+        raise HTTPException(status_code=400, detail="Este prêmio já foi entregue anteriormente e não pode ser re-entregue.")
 
     if not foto_base64 or not foto_base64.startswith("data:image"):
         raise HTTPException(status_code=400, detail="A foto de comprovação segurando o prêmio é obrigatória.")
@@ -945,7 +1064,7 @@ async def registrar_entrega(
     try:
         _, encoded = foto_base64.split(",", 1)
         foto_bytes = base64.b64decode(encoded)
-        nome_arquivo = f"entrega_ganhador_{ganhador.id}_{int(datetime.now().timestamp())}.jpg"
+        nome_arquivo = f"entrega_ganhador_{uuid.uuid4().hex}.jpg"
         caminho = os.path.join(ENTREGAS_DIR, nome_arquivo)
         with open(caminho, "wb") as f:
             f.write(foto_bytes)
@@ -966,13 +1085,27 @@ async def registrar_entrega(
 
 @router.get("/api/sorteios/meus-premios")
 async def consultar_meus_premios(
+    request: Request,
     cpf: str = Query(...),
-    data_nascimento: Optional[str] = Query(None),
+    data_nascimento: str = Query(...),
     session: AsyncSession = Depends(get_session)
 ):
-    """Permite ao servidor consultar os prêmios que ganhou mediante validação de CPF e Data de Nascimento"""
+    """Permite ao servidor consultar os prêmios que ganhou mediante validação obrigatória de CPF e Data de Nascimento (SEC-15)"""
+    client_ip = extrair_ip_cliente(request)
+    agora_ts = time.time()
+    hist = _rate_limit_meus_premios.setdefault(client_ip, [])
+    _rate_limit_meus_premios[client_ip] = [t for t in hist if agora_ts - t < 60]
+    if len(_rate_limit_meus_premios[client_ip]) >= 10:
+        return JSONResponse(
+            status_code=429,
+            content={"encontrado": False, "mensagem": "Muitas tentativas de consulta. Aguarde 1 minuto.", "premios": []}
+        )
+    _rate_limit_meus_premios[client_ip].append(agora_ts)
+
     cpf_limpo = "".join([c for c in cpf if c.isdigit()]).zfill(11)
-    
+    if len(cpf_limpo) != 11:
+        return JSONResponse(content={"encontrado": False, "mensagem": "CPF inválido.", "premios": []})
+
     stmt_user = select(Usuario).where(Usuario.cpf == cpf_limpo, Usuario.deleted_at.is_(None), Usuario.ativo == True)
     res_user = await session.execute(stmt_user)
     usuario = res_user.scalars().first()
@@ -980,23 +1113,25 @@ async def consultar_meus_premios(
     if not usuario:
         return JSONResponse(content={"encontrado": False, "mensagem": "Servidor não localizado.", "premios": []})
 
-    # Validação de Data de Nascimento (se informada ou se cadastrada no banco)
-    if data_nascimento and usuario.data_nascimento:
-        d_input_clean = "".join([c for c in data_nascimento if c.isdigit()])
-        d_user_clean = "".join([c for c in usuario.data_nascimento if c.isdigit()])
-        
-        match_data = (d_input_clean == d_user_clean)
-        if not match_data and len(d_input_clean) == 8 and len(d_user_clean) == 8:
+    # Validação obrigatória e estrita de Data de Nascimento (SEC-15)
+    d_input_clean = "".join([c for c in (data_nascimento or "") if c.isdigit()])
+    d_user_clean = "".join([c for c in (usuario.data_nascimento or "") if c.isdigit()])
+
+    match_data = False
+    if d_input_clean and d_user_clean:
+        if d_input_clean == d_user_clean:
+            match_data = True
+        elif len(d_input_clean) == 8 and len(d_user_clean) == 8:
             invert_input = f"{d_input_clean[4:]}{d_input_clean[2:4]}{d_input_clean[:2]}"
             invert_user = f"{d_user_clean[4:]}{d_user_clean[2:4]}{d_user_clean[:2]}"
             match_data = (d_input_clean == invert_user or invert_input == d_user_clean)
-        
-        if not match_data:
-            return JSONResponse(content={
-                "encontrado": False,
-                "mensagem": "Data de Nascimento não confere com o CPF informado.",
-                "premios": []
-            })
+
+    if not match_data:
+        return JSONResponse(content={
+            "encontrado": False,
+            "mensagem": "Data de Nascimento não confere com o CPF informado.",
+            "premios": []
+        })
 
     stmt_ganhados = (
         select(Ganhador)

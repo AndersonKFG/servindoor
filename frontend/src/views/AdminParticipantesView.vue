@@ -24,7 +24,7 @@ const kpisGerais = ref({
 // Filtros
 const busca = ref('')
 const filtroLote = ref('')
-const filtroPresenca = ref('todos') // 'todos', 'presente', 'fora'
+const filtroPresenca = ref(['presente', 'fora']) // Status selecionados no filtro múltiplo
 const secretariasSelecionadas = ref([]) // IDs das secretarias selecionadas (Array para multi-select)
 
 // Paginação no Servidor (Rule 6 - Strict max 50)
@@ -220,6 +220,15 @@ const reenviarEmailSucesso = ref(null)
 
 let pollInterval = null
 
+function isIngressoInvalido(participante) {
+  const status = participante?.situacao_evento?.status_slug
+  return Boolean(
+    participante?.ingresso?.cancelado ||
+    status === 'cancelado' ||
+    status === 'extraviado'
+  )
+}
+
 async function carregarParticipantes(silent = false) {
   try {
     if (!silent) loading.value = true
@@ -228,7 +237,7 @@ async function carregarParticipantes(silent = false) {
     params.append('limit', String(Math.min(itensPorPagina.value, 50)))
     if (busca.value.trim()) params.append('busca', busca.value.trim())
     if (filtroLote.value) params.append('lote_id', String(filtroLote.value))
-    if (filtroPresenca.value !== 'todos') params.append('status_presenca', filtroPresenca.value)
+    if (filtroPresenca.value.length > 0) params.append('status_presenca', filtroPresenca.value.join(','))
     if (secretariasSelecionadas.value.length > 0) params.append('secretarias', secretariasSelecionadas.value.join(','))
 
     const res = await fetch(`/api/admin/participantes?${params.toString()}`)
@@ -276,13 +285,12 @@ const optionsLotes = computed(() => [
 ])
 
 const optionsPresenca = [
-  { value: 'todos', label: 'Status: Todos' },
-  { value: 'em_validacao', label: '⏳ Em validação' },
-  { value: 'validacao_recusada', label: '🚫 Validação Recusada' },
-  { value: 'presente', label: '🎫 Presente no Evento' },
-  { value: 'fora', label: '🚪 Fora do Evento' },
-  { value: 'cancelado', label: '✕ Ingresso Cancelado' },
-  { value: 'extraviado', label: '⛔ Ingresso Extraviado' }
+  { value: 'em_validacao', label: 'Em validação', icon: 'bi bi-hourglass-split' },
+  { value: 'validacao_recusada', label: 'Validação Recusada', icon: 'bi bi-slash-circle' },
+  { value: 'presente', label: 'Presente no Evento', icon: 'bi bi-ticket-perforated-fill' },
+  { value: 'fora', label: 'Fora do Evento', icon: 'bi bi-door-open' },
+  { value: 'cancelado', label: 'Ingresso Cancelado', icon: 'bi bi-x-circle' },
+  { value: 'extraviado', label: 'Ingresso Extraviado', icon: 'bi bi-exclamation-octagon-fill' }
 ]
 
 const optionsSecretarias = computed(() =>
@@ -372,11 +380,15 @@ function irParaPagina(p) {
 
 // Atalhos rápidos ao clicar nos cards de KPI
 function toggleFiltroPresenca(tipo) {
-  if (filtroPresenca.value === tipo) {
-    filtroPresenca.value = 'todos'
+  if (filtroPresenca.value.includes(tipo)) {
+    filtroPresenca.value = filtroPresenca.value.filter(status => status !== tipo)
   } else {
-    filtroPresenca.value = tipo
+    filtroPresenca.value = [...filtroPresenca.value, tipo]
   }
+}
+
+function limparFiltroPresenca() {
+  filtroPresenca.value = []
 }
 
 function obterIniciais(nome) {
@@ -557,7 +569,7 @@ onUnmounted(() => {
       <!-- CABEÇALHO DA PÁGINA COM TIPOGRAFIA QUATTROCENTO CANÔNICA -->
       <div class="admin-header-row">
         <div>
-          <span class="badge-subtle-primary mb-2">
+          <span class="admin-eyebrow">
             <i class="bi bi-ticket-perforated-fill me-1"></i> PAINEL ADMINISTRATIVO
           </span>
           <h1 class="page-title font-quattrocento">Gestão de Participantes</h1>
@@ -585,8 +597,8 @@ onUnmounted(() => {
           icon="bi bi-ticket-perforated-fill"
           variant="cyan"
           :clickable="true"
-          :active="filtroPresenca === 'todos'"
-          @click="filtroPresenca = 'todos'"
+          :active="filtroPresenca.length === 0 || filtroPresenca.length === optionsPresenca.length"
+          @click="limparFiltroPresenca"
         />
 
         <KpiCard
@@ -596,7 +608,7 @@ onUnmounted(() => {
           icon="bi bi-check-circle-fill"
           variant="emerald"
           :clickable="true"
-          :active="filtroPresenca === 'presente'"
+          :active="filtroPresenca.includes('presente')"
           @click="toggleFiltroPresenca('presente')"
         />
 
@@ -607,7 +619,7 @@ onUnmounted(() => {
           icon="bi bi-geo-alt-fill"
           variant="warning"
           :clickable="true"
-          :active="filtroPresenca === 'fora'"
+          :active="filtroPresenca.includes('fora')"
           @click="toggleFiltroPresenca('fora')"
         />
       </div>
@@ -658,6 +670,7 @@ onUnmounted(() => {
               v-model="filtroPresenca"
               :options="optionsPresenca"
               placeholder="Status: Todos"
+              :multiple="true"
               icon="bi bi-funnel"
             />
           </div>
@@ -847,33 +860,39 @@ onUnmounted(() => {
                 <button
                   v-if="p.ingresso && !isIngressoInvalido(p)"
                   type="button"
-                  class="btn-action-icon btn-action-icon--emerald"
+                  class="btn-action-icon btn-action-icon--emerald action-expandable action-expandable--details"
                   title="Ficha Completa do Participante"
+                  aria-label="Ver ficha"
                   @click="abrirModalInfo(p)"
                 >
                   <i class="bi bi-person-vcard"></i>
+                  <span class="action-label">Ver ficha</span>
                 </button>
 
                 <!-- Editar: em Amarelo (--amber), desabilitado se extraviado -->
                 <button
                   type="button"
-                  class="btn-action-icon btn-action-icon--amber"
+                  class="btn-action-icon btn-action-icon--amber action-expandable action-expandable--edit"
                   :disabled="isIngressoInvalido(p)"
                   :title="isIngressoInvalido(p) ? 'Ingresso extraviado/cancelado não permite edição de dados' : 'Editar Dados do Participante'"
+                  aria-label="Editar participante"
                   @click="!isIngressoInvalido(p) && abrirModalEditar(p)"
                 >
                   <i class="bi bi-pencil-square"></i>
+                  <span class="action-label">Editar</span>
                 </button>
 
                 <!-- Email: em Amarelo (--amber), desabilitado se extraviado -->
                 <button
                   type="button"
-                  class="btn-action-icon btn-action-icon--amber"
+                  class="btn-action-icon btn-action-icon--amber action-expandable action-expandable--email"
                   :disabled="isIngressoInvalido(p)"
                   :title="isIngressoInvalido(p) ? 'Ingresso extraviado/cancelado' : 'Enviar E-mail com Ingresso'"
+                  aria-label="Enviar e-mail com ingresso"
                   @click="!isIngressoInvalido(p) && abrirModalEmail(p)"
                 >
                   <i class="bi bi-envelope-fill"></i>
+                  <span class="action-label">Enviar e-mail</span>
                 </button>
 
                 <span v-if="p.ingresso && !p.ingresso.cancelado" class="action-divider"></span>
@@ -882,11 +901,13 @@ onUnmounted(() => {
                 <button
                   v-if="p.ingresso && !p.ingresso.cancelado"
                   type="button"
-                  class="btn-action-icon btn-action-icon--danger"
+                  class="btn-action-icon btn-action-icon--danger action-expandable action-expandable--cancel"
                   title="Cancelar Ingresso (Extravio Administrativo)"
+                  aria-label="Cancelar ingresso"
                   @click="confirmarCancelarIngresso(p)"
                 >
                   <i class="bi bi-trash3-fill"></i>
+                  <span class="action-label">Cancelar</span>
                 </button>
               </div>
             </div>

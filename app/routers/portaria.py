@@ -10,13 +10,11 @@ from sqlalchemy.orm import selectinload
 from app.core.deps import get_current_staff, get_current_portaria
 from app.db.session import get_session
 from app.models.all_models import Usuario, Ingresso, LogAcesso, MovimentoTipo, Secretaria
+from app.core.security import extrair_ip_cliente
+from app.core.cpf import limpar_cpf
 
 router = APIRouter()
 VUE_INDEX_PATH = "app/static/dist/index.html"
-
-
-def limpar_cpf(cpf_str: str) -> str:
-    return "".join(ch for ch in cpf_str if ch.isdigit()).zfill(11)
 
 
 @router.get("/portaria")
@@ -55,7 +53,15 @@ async def buscar_participante_portaria(
         )
         res_ing = await session.execute(stmt_ing)
         ingresso = res_ing.scalars().first()
-        if ingresso:
+        if ingresso and ingresso.usuario:
+            if not ingresso.usuario.ativo or ingresso.usuario.deleted_at is not None:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "sucesso": False,
+                        "mensagem": f"O cadastro do servidor {ingresso.usuario.nome} foi desativado ou cancelado pela organização."
+                    }
+                )
             usuario = ingresso.usuario
 
     # 2. Se não encontrou por QR Code ou se foi digitado CPF
@@ -65,12 +71,19 @@ async def buscar_participante_portaria(
             stmt_usr = (
                 select(Usuario)
                 .where(Usuario.cpf == cpf_limpo, Usuario.deleted_at.is_(None), Usuario.ativo == True)
-                .options(selectinload(Usuario.secretaria), selectinload(Usuario.ingressos))
+                .options(selectinload(Usuario.secretaria))
             )
             res_usr = await session.execute(stmt_usr)
             usuario = res_usr.scalars().first()
-            if usuario and usuario.ingressos:
-                ingresso = usuario.ingressos[0]
+            if usuario:
+                # SEC-05: Busca exclusivamente ingresso ATIVO (não cancelado)
+                stmt_ing_ativo = (
+                    select(Ingresso)
+                    .where(Ingresso.usuario_id == usuario.id, Ingresso.deleted_at.is_(None))
+                    .order_by(desc(Ingresso.id))
+                )
+                res_ing_ativo = await session.execute(stmt_ing_ativo)
+                ingresso = res_ing_ativo.scalars().first()
 
     if not usuario:
         return JSONResponse(
@@ -81,17 +94,35 @@ async def buscar_participante_portaria(
             }
         )
 
-    # 3. Verifica se possui ingresso emitido
+    # 3. Verifica se possui ingresso ativo emitido (SEC-05)
     if not ingresso:
         stmt_ing_check = select(Ingresso).where(Ingresso.usuario_id == usuario.id, Ingresso.deleted_at.is_(None))
         res_ing_check = await session.execute(stmt_ing_check)
         ingresso = res_ing_check.scalars().first()
 
     if not ingresso:
+        # Checa se o usuário teve seu ingresso cancelado
+        stmt_ing_cancelado = (
+            select(Ingresso)
+            .where(Ingresso.usuario_id == usuario.id, Ingresso.deleted_at.is_not(None))
+            .order_by(desc(Ingresso.id))
+        )
+        res_cancelado = await session.execute(stmt_ing_cancelado)
+        if res_cancelado.scalars().first():
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "sucesso": False,
+                    "cancelado": True,
+                    "mensagem": f"O ingresso do servidor {usuario.nome} foi CANCELADO e não permite entrada no evento."
+                }
+            )
+
         return JSONResponse(
             status_code=400,
             content={
                 "sucesso": False,
+                "cancelado": False,
                 "mensagem": f"O servidor {usuario.nome} está cadastrado, mas não possui ingresso emitido para o evento."
             }
         )
@@ -136,25 +167,65 @@ async def buscar_participante_portaria(
 
 @router.post("/api/portaria/alterar-status")
 async def alterar_status_portaria(
+    request: Request,
     usuario_id: int = Body(..., embed=True),
     novo_status: str = Body(..., embed=True),  # "entrada" ou "saida"
+    device_id: Optional[str] = Body(None, embed=True),
+    metodo_validacao: Optional[str] = Body("manual", embed=True),
     session: AsyncSession = Depends(get_session),
     current_user: Usuario = Depends(get_current_staff)
 ):
     """
-    Registra nova movimentação (entrada ou saida) para o participante.
+    Registra nova movimentação (entrada ou saida) para o participante com auditoria completa.
     """
     usuario = await session.get(Usuario, usuario_id)
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 
+    # SEC-09: Valida se o participante possui ingresso ATIVO no evento
+    stmt_ing = select(Ingresso).where(
+        Ingresso.usuario_id == usuario.id,
+        Ingresso.deleted_at.is_(None)
+    )
+    res_ing = await session.execute(stmt_ing)
+    ingresso_ativo = res_ing.scalars().first()
+    if not ingresso_ativo:
+        raise HTTPException(
+            status_code=403,
+            detail="Participante não possui ingresso ativo para entrada no evento."
+        )
+
     tipo_movimento = MovimentoTipo.entrada if novo_status == "entrada" else MovimentoTipo.saida
     agora = datetime.now()
 
+    # SEC-09: Validação de transição de estado na portaria
+    stmt_last_log = (
+        select(LogAcesso)
+        .where(LogAcesso.usuario_id == usuario.id)
+        .order_by(desc(LogAcesso.data_hora))
+        .limit(1)
+    )
+    res_last = await session.execute(stmt_last_log)
+    last_log = res_last.scalars().first()
+    if last_log and last_log.tipo == tipo_movimento:
+        status_txt = "dentro" if tipo_movimento == MovimentoTipo.entrada else "fora"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Participante já se encontra registrado como '{status_txt}' no evento."
+        )
+
+    client_ip = extrair_ip_cliente(request)
+
+    # SEC-10: Auditoria detalhada em logs_acesso
     novo_log = LogAcesso(
         usuario_id=usuario.id,
+        operador_id=current_user.id,
+        ingresso_id=ingresso_ativo.id,
         tipo=tipo_movimento,
-        data_hora=agora
+        data_hora=agora,
+        device_id=device_id or request.headers.get("x-device-fingerprint"),
+        ip_origem=client_ip,
+        metodo_validacao=metodo_validacao or "manual"
     )
     session.add(novo_log)
     await session.commit()

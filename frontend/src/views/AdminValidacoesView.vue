@@ -40,11 +40,11 @@ const filtroSecretaria = ref('')
 const secretariasDisponiveis = ref([])
 
 const optionsStatus = [
-  { value: 'todos', label: 'Status: Todos' },
-  { value: 'confirmados_api', label: '✨ Confirmados pela API (Aprovação Rápida)' },
-  { value: 'pendente_analise', label: '🟡 Pendentes de Análise' },
-  { value: 'aprovado', label: '🟢 Aprovados' },
-  { value: 'rejeitado', label: '🔴 Rejeitados' }
+  { value: 'todos', label: 'Status: Todos', icon: 'bi bi-list-check' },
+  { value: 'confirmados_api', label: 'Confirmados pela API (Aprovação Rápida)', icon: 'bi bi-stars' },
+  { value: 'pendente_analise', label: 'Pendentes de Análise', icon: 'bi bi-hourglass-split' },
+  { value: 'aprovado', label: 'Aprovados', icon: 'bi bi-check-circle-fill' },
+  { value: 'rejeitado', label: 'Rejeitados', icon: 'bi bi-x-circle-fill' }
 ]
 
 const optionsSecretarias = computed(() => [
@@ -342,12 +342,13 @@ async function confirmarRejeicao() {
 </script>
 
 <template>
-  <div class="admin-page app-container">
+  <div class="admin-page">
+    <div class="app-container">
 
     <!-- CABEÇALHO -->
     <div class="admin-header-row mb-4">
       <div>
-        <span class="badge-cyber mb-2 d-inline-flex align-items-center">
+        <span class="admin-eyebrow">
           <i class="bi bi-shield-lock-fill me-1 text-cyan"></i> PAINEL ADMINISTRATIVO
         </span>
         <h1 class="page-title font-quattrocento">Validações de Servidores</h1>
@@ -425,7 +426,10 @@ async function confirmarRejeicao() {
 
     <!-- BARRA DE FILTROS -->
     <div class="filter-card mb-4">
-      <div class="filter-grid" :style="{ gridTemplateColumns: secretariasDisponiveis.length > 1 ? '1.8fr 1.3fr 1.3fr' : '2fr 1fr' }">
+      <div
+        class="filter-grid"
+        :class="secretariasDisponiveis.length > 1 ? 'filter-grid--validation-many' : 'filter-grid--validation-one'"
+      >
         <div class="search-box">
           <i class="bi bi-search search-icon"></i>
           <input
@@ -716,7 +720,7 @@ async function confirmarRejeicao() {
             <i class="bi bi-info-circle-fill fs-5"></i>
             <div>
               <strong class="d-block">A vaga já está retida neste lote</strong>
-              <p class="mb-0 small">A homologação confirma o ingresso no sistema. Em caso de rejeição, a vaga é liberada.</p>
+              <p class="mb-0 small">A vaga permanece ocupada neste lote mesmo se a homologação for rejeitada.</p>
             </div>
           </div>
         </div>
@@ -747,6 +751,7 @@ async function confirmarRejeicao() {
             <i class="bi bi-x-octagon-fill fs-5"></i>
             <div>
               <strong class="d-block">Solicitação Indeferida</strong>
+              <p class="mb-0 small"><strong>Recusado por:</strong> {{ solicitacaoSelecionada.analisado_por_nome || 'Responsável não informado' }}</p>
               <p class="mb-0 small"><strong>Motivo:</strong> {{ solicitacaoSelecionada.motivo_rejeicao }}</p>
             </div>
           </div>
@@ -877,6 +882,7 @@ async function confirmarRejeicao() {
       </template>
     </Modal>
 
+    </div>
   </div>
 </template>
 

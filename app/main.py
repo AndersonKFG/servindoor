@@ -1,29 +1,134 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
+from urllib.parse import unquote, urlsplit
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
+from sqlmodel import select
 
 from app.core.config import settings
-from app.db.session import init_db
+from app.db.session import async_session, init_db
+from app.models.all_models import Ingresso, SolicitacaoCancelamento, SolicitacaoValidacao, Usuario
 
 # Importando as rotas separadas
-from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper
+from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq
 from app.routers.gatekeeper import validar_token_gatekeeper
+
+_MAX_RESGATE_BODY_BYTES = 6 * 1024 * 1024
+
+
+def validar_configuracao_producao() -> None:
+    if settings.ENVIRONMENT.strip().lower() != "production":
+        return
+
+    problemas = []
+    if len(settings.SECRET_KEY) < 32 or settings.SECRET_KEY == "festa-servidor-super-secret-key-ultra-fast-2026":
+        problemas.append("SECRET_KEY precisa ser exclusiva e ter pelo menos 32 caracteres")
+    if len(settings.SITE_ACCESS_PIN.strip()) < 12 or settings.SITE_ACCESS_PIN.strip() == "123456":
+        problemas.append("SITE_ACCESS_PIN precisa ser exclusivo e ter pelo menos 12 caracteres")
+
+    banco = urlsplit(settings.DATABASE_URL)
+    senha_banco = unquote(banco.password or "")
+    if len(senha_banco) < 16 or senha_banco == "postgres":
+        problemas.append("a senha do banco precisa ter pelo menos 16 caracteres e não pode ser padrão")
+
+    if problemas:
+        raise RuntimeError("Configuração de produção insegura: " + "; ".join(problemas))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"🚀 Iniciando {settings.PROJECT_NAME} com alta performance...")
+    validar_configuracao_producao()
     try:
         await init_db()
         print("✅ Banco de dados sincronizado e tabelas verificadas com sucesso!")
     except Exception as e:
-        print(f"⚠️ Aviso na inicialização do banco: {e}")
+        print(f"❌ Falha ao inicializar o banco: {e}")
+        raise
+
+    # Barramento de eventos inter-worker via PostgreSQL LISTEN / NOTIFY (Gunicorn multi-worker)
+    listen_task = None
+    if "asyncpg" in settings.DATABASE_URL:
+        try:
+            import asyncpg
+            from sqlalchemy import text
+            from app.db.session import engine
+            from app.core.events import lote_event_hub
+
+            async def _send_pg_notify(payload_str: str):
+                try:
+                    async with engine.connect() as conn:
+                        await conn.execute(
+                            text("SELECT pg_notify('lote_events', :payload)"),
+                            {"payload": payload_str}
+                        )
+                        await conn.commit()
+                except Exception as e:
+                    pass
+
+            lote_event_hub.register_pg_sender(_send_pg_notify)
+
+            async def _pg_listener_worker():
+                db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+                if "?sslmode=require" in db_url:
+                    db_url = db_url.replace("?sslmode=require", "")
+                while True:
+                    try:
+                        conn = await asyncpg.connect(db_url)
+                        def _on_notify(c, pid, channel, payload):
+                            lote_event_hub.on_bus_notification(payload)
+                        await conn.add_listener("lote_events", _on_notify)
+                        while True:
+                            await asyncio.sleep(60)
+                            await conn.execute("SELECT 1;")
+                    except asyncio.CancelledError:
+                        break
+                    except Exception:
+                        await asyncio.sleep(5)
+
+            listen_task = asyncio.create_task(_pg_listener_worker())
+        except Exception:
+            pass
+
+    email_worker_stop = asyncio.Event()
+    from app.services.email_queue import email_queue_worker
+    email_worker_task = asyncio.create_task(email_queue_worker(email_worker_stop))
+
     yield
+    email_worker_stop.set()
+    email_worker_task.cancel()
+    try:
+        await email_worker_task
+    except asyncio.CancelledError:
+        pass
+    if listen_task:
+        listen_task.cancel()
     print("🛑 Desligando sistema...")
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+
+@app.middleware("http")
+async def limitar_corpo_resgate(request: Request, call_next):
+    if request.method != "POST" or not request.url.path.startswith("/api/resgate/"):
+        return await call_next(request)
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > _MAX_RESGATE_BODY_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "A imagem excede o limite de 4 MB."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Tamanho da requisição inválido."})
+
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > _MAX_RESGATE_BODY_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "A imagem excede o limite de 4 MB."})
+    request._body = bytes(body)
+    return await call_next(request)
 
 # Middleware de Proteção Gatekeeper (Intercepta chamadas /api/* não autorizadas)
 from fastapi.responses import JSONResponse
@@ -35,9 +140,15 @@ async def gatekeeper_api_protection(request: Request, call_next):
 
     path = request.url.path
 
-    # Permite arquivos estáticos, rotas do próprio gatekeeper e assets
+    # Permite arquivos estáticos, rotas do próprio gatekeeper, rotas de consulta pública e assets
     if (
         path.startswith("/api/gatekeeper/")
+        or path.startswith("/api/meu-ingresso/")
+        or path == "/api/sorteios/meus-premios"
+        or path == "/api/time"
+        or path.startswith("/api/lote/live-status")
+        or path.startswith("/api/lote/stream")
+        or path.startswith("/api/faq")
         or path.startswith("/static/")
         or path.startswith("/assets/")
         or path.startswith("/images/")
@@ -78,6 +189,91 @@ os.makedirs("app/static/uploads/entregas", exist_ok=True)
 os.makedirs("app/static/dist/assets", exist_ok=True)
 os.makedirs("app/static/dist/images", exist_ok=True)
 
+# SEC-04: Proteção de dados biométricos sensíveis (LGPD) contra download público não autorizado
+@app.get("/static/uploads/fotos/{filename}")
+async def obter_foto_biometrica_protegida(filename: str, request: Request):
+    if not filename or os.path.basename(filename) != filename:
+        raise HTTPException(status_code=404, detail="Foto não encontrada.")
+
+    caminho = os.path.join("app/static/uploads/fotos", filename)
+    foto_url = f"/static/uploads/fotos/{filename}"
+    autorizado = False
+    usuario_foto = None
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Usuario).where(Usuario.foto_rosto_url == foto_url)
+        )
+        usuario_foto = result.scalars().first()
+
+        result_cancelamento = await session.execute(
+            select(SolicitacaoCancelamento.id).where(
+                SolicitacaoCancelamento.foto_ao_vivo_url == foto_url
+            ).limit(1)
+        )
+        foto_de_cancelamento = result_cancelamento.scalar_one_or_none() is not None
+
+    if not usuario_foto and not foto_de_cancelamento:
+        raise HTTPException(status_code=404, detail="Foto não encontrada.")
+
+    # 1. Permite acesso para membros da equipe autenticados
+    access_tok = request.cookies.get("access_token")
+    if access_tok:
+        try:
+            from jose import jwt
+            _, _, p = access_tok.partition(" ")
+            pay = jwt.decode(p, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            roles_claim = pay.get("roles", "")
+            if isinstance(roles_claim, str):
+                roles = {role.strip() for role in roles_claim.split(",") if role.strip()}
+            elif isinstance(roles_claim, list):
+                roles = {str(role).strip() for role in roles_claim if str(role).strip()}
+            else:
+                roles = set()
+
+            if pay.get("sub") and roles.intersection(
+                {"admin", "admin_geral", "portaria", "validador", "entregador"}
+            ):
+                autorizado = True
+            elif usuario_foto and pay.get("sub") == usuario_foto.cpf:
+                autorizado = True
+        except Exception:
+            pass
+
+    # 2. Permite acesso ao titular somente com token de posse vinculado ao próprio cadastro.
+    if not autorizado:
+        claim_tokens = [
+            value for name, value in request.cookies.items()
+            if name.startswith("ingresso_claim_") or name.startswith("solic_claim_")
+        ]
+        if usuario_foto and claim_tokens:
+            async with async_session() as session:
+                result_solicitacao = await session.execute(
+                    select(SolicitacaoValidacao.id).where(
+                        SolicitacaoValidacao.usuario_id == usuario_foto.id,
+                        SolicitacaoValidacao.token.in_(claim_tokens)
+                    ).limit(1)
+                )
+                result_ingresso = await session.execute(
+                    select(Ingresso.id).where(
+                        Ingresso.usuario_id == usuario_foto.id,
+                        Ingresso.qr_code_token.in_(claim_tokens)
+                    ).limit(1)
+                )
+                autorizado = (
+                    result_solicitacao.scalar_one_or_none() is not None
+                    or result_ingresso.scalar_one_or_none() is not None
+                )
+
+    # Bloqueia qualquer acesso n?o autorizado imediatamente sem revelar se o arquivo existe (previne oráculo LGPD)
+    if not autorizado:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado a dados biométricos.")
+
+    if not os.path.exists(caminho):
+        raise HTTPException(status_code=404, detail="Foto não encontrada.")
+
+    return FileResponse(caminho, media_type="image/jpeg")
+
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.mount("/assets", StaticFiles(directory="app/static/dist/assets"), name="assets")
 app.mount("/images", StaticFiles(directory="app/static/dist/images"), name="images")
@@ -90,6 +286,9 @@ app.include_router(resgate.router)
 app.include_router(admin.router)
 app.include_router(portaria.router)
 app.include_router(sorteios.router)
+app.include_router(cancelamento.router)
+app.include_router(validacoes.router)
+app.include_router(faq.router)
 
 # Fallback Catch-all para SPA Vue Router (Evita 404 em recarregamento F5)
 VUE_INDEX_PATH = 'app/static/dist/index.html'

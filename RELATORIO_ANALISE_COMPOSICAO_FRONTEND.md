@@ -2,7 +2,7 @@
 
 **Data:** 11/10/2026  
 **Escopo:** auditoria estática dos templates Vue, estilos scoped, estilos inline e folhas CSS globais em `frontend/src`.  
-**Alterações de produto:** nenhuma. Este documento registra achados e recomendações; não altera telas.
+**Status:** os achados foram registrados antes das correções. As correções descritas abaixo foram aplicadas após o checkpoint local `c561c34`; o diagnóstico original foi mantido como histórico.
 
 ## Síntese
 
@@ -11,6 +11,26 @@ Há causas concretas para diferenças de espaçamento, cabeçalhos, filtros, tex
 Também há regras canônicas duplicadas entre os módulos CSS e o legado que continua no final de `main.css`, valores de tokens usados sem definição, e estilos inline que vencem as regras responsivas. Isso torna o resultado dependente da ordem e do formato específico de cada view.
 
 ## Achados prioritários
+
+## Resultado das correções
+
+| Grupo | Resultado |
+| --- | --- |
+| Wrappers de Validações e Cancelamentos | Corrigidos: `.admin-page` e `.app-container` agora têm responsabilidades separadas. |
+| Grids de filtros | Corrigidos: larguras estruturais passaram para modificadores CSS responsivos, sem `style` inline vencendo breakpoints. |
+| Contratos duplicados | Corrigidos os conflitos de botões primários/secundários, inputs/selects, modais, cartões de filtro, títulos de seção e tabela responsiva entre `main.css` e módulos. |
+| Tokens ausentes | Corrigidos com aliases semânticos no Design System para `--text-secondary`, `--text-light`, `--white` e `--primary-color`. |
+| Tipografia | Corrigida a precedência de Quattrocento sobre `.section-title`; removidos overrides locais de cabeçalho que divergiam do contrato global. |
+| Cabeçalhos administrativos | Padronizadas as etiquetas de contexto em um único contrato `.admin-eyebrow` nas views administrativas auditadas. |
+| Ajustes adicionais solicitados | `AdminSorteiosView` também passou a usar `.admin-eyebrow`; `AdminParticipantesView` recebeu a definição do helper de status de ingresso que faltava no template. |
+| Variantes de botão legadas | `buttons.css` agora aplica a estrutura base também às classes `.btn-primary`, `.btn-secondary` e `.btn-danger` usadas sem `.btn`, alinhando essas instâncias com as telas que usam as duas classes. Margens de ícones e estados disabled também seguem o contrato global. |
+| Conteúdo e tema | Corrigidos “Taxa de Ocupação”, o hexadecimal scoped de Meu Ingresso e o badge inline de acesso restrito, agora com variante semântica global. |
+| Tema claro | Removidas paletas e sobrescritas claras, regras `data-theme="light"`/`.theme-light`, e o composable de alternância/persistência. O tema escuro é o único tema configurado. |
+| Verificação | `npm run build` concluído com sucesso. O Vite ainda emite o aviso de chunk JavaScript acima de 500 kB. |
+
+A classe `.text-white` permanece para conteúdo sobre superfícies escuras e fundos coloridos; não há mais tema claro que exija uma variante para esses usos. A inspeção visual em navegador por rota e viewport não foi executada nesta etapa.
+
+### Diagnóstico original
 
 ### P1 — Containers administrativos combinam responsabilidades no mesmo elemento
 

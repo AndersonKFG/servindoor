@@ -638,7 +638,7 @@ onMounted(() => {
     <!-- CABEÇALHO DA PÁGINA -->
     <div class="admin-header-row mb-4">
       <div>
-        <span class="badge-cyber mb-2 d-inline-flex align-items-center">
+        <span class="admin-eyebrow">
           <i class="bi bi-trophy-fill me-1 text-cyan"></i> CENTRAL DE SORTEIOS
         </span>
         <h1 class="page-title font-quattrocento">Gestão e Mesa de Sorteios</h1>
@@ -1129,7 +1129,7 @@ onMounted(() => {
 
       <!-- FILTRO DE BUSCA -->
       <div class="filter-card mb-4">
-        <div class="filter-grid" style="grid-template-columns: 2fr 1fr;">
+        <div class="filter-grid filter-grid--search-two">
           <div class="search-box">
             <i class="bi bi-search search-icon"></i>
             <input

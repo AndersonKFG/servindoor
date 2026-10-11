@@ -2,7 +2,10 @@
    BOTÕES PADRÃO DO SISTEMA SERVINDOOR 2026
    Design System Global
    ========================================================================== */
-.btn {
+.btn,
+.btn-primary,
+.btn-secondary,
+.btn-danger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -20,7 +23,24 @@
   line-height: 1.2;
 }
 
-.btn:disabled {
+.btn i.bi,
+.btn-primary i.bi,
+.btn-secondary i.bi,
+.btn-danger i.bi {
+  margin: 0 !important;
+}
+
+.btn i.bi + span,
+.btn-primary i.bi + span,
+.btn-secondary i.bi + span,
+.btn-danger i.bi + span {
+  margin-left: 0 !important;
+}
+
+.btn:disabled,
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   pointer-events: none;
