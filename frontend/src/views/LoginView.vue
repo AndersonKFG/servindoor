@@ -1,6 +1,7 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useToast } from '../composables/useToast'
 import { useAuth } from '../composables/useAuth'
 import Modal from '../components/Modal.vue'
 
@@ -14,8 +15,38 @@ const loading = ref(false)
 const errorMessage = ref('')
 const sessaoSubstituidaAlerta = ref(false)
 
+// Rate limit e bloqueio temporário por tentativas excessivas
+const segundosBloqueio = ref(0)
+let timerBloqueio = null
+
+function iniciarTimerBloqueio(segundos) {
+  if (timerBloqueio) clearInterval(timerBloqueio)
+  segundosBloqueio.value = Number(segundos) || 0
+  if (segundosBloqueio.value <= 0) return
+
+  timerBloqueio = setInterval(() => {
+    segundosBloqueio.value -= 1
+    if (segundosBloqueio.value <= 0) {
+      clearInterval(timerBloqueio)
+      timerBloqueio = null
+      errorMessage.value = ''
+    }
+  }, 1000)
+}
+
+onUnmounted(() => {
+  if (timerBloqueio) clearInterval(timerBloqueio)
+})
+
 // Estados do modal de conflito de sessão
 const showModalConflitoSessao = ref(false)
+
+const showModalTrocarSenhaObrigatoria = ref(false)
+const novaSenhaObrigatoria = ref('')
+const confirmacaoSenhaObrigatoria = ref('')
+const salvandoNovaSenha = ref(false)
+const erroNovaSenha = ref('')
+
 const conflitoInfo = ref({
   dispositivo: '',
   ultimoAcesso: '',
@@ -38,6 +69,8 @@ function redirecionarPorRoles(roles) {
     router.push('/admin')
   } else if (roles.includes('admin')) {
     router.push('/admin/participantes')
+  } else if (roles.includes('validador')) {
+    router.push('/admin/validacoes')
   } else if (roles.includes('portaria')) {
     router.push('/portaria')
   } else if (roles.includes('entregador')) {
@@ -57,6 +90,48 @@ function formatCPF(val) {
 
 function onCpfInput(e) {
   username.value = formatCPF(e.target.value)
+}
+
+
+async function handleSalvarSenhaObrigatoria() {
+  erroNovaSenha.value = ''
+  if (novaSenhaObrigatoria.value.length < 6) {
+    erroNovaSenha.value = 'A nova senha deve possuir pelo menos 6 caracteres.'
+    return
+  }
+  if (novaSenhaObrigatoria.value !== confirmacaoSenhaObrigatoria.value) {
+    erroNovaSenha.value = 'As senhas digitadas não conferem.'
+    return
+  }
+
+  try {
+    salvandoNovaSenha.value = true
+    const res = await fetch('/api/auth/alterar-senha-obrigatoria', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nova_senha: novaSenhaObrigatoria.value,
+        confirmacao_senha: confirmacaoSenhaObrigatoria.value
+      })
+    })
+    const data = await res.json()
+    if (res.ok && data.sucesso) {
+      toast.success('Senha definitiva cadastrada com sucesso!')
+      showModalTrocarSenhaObrigatoria.value = false
+      const user = await checkAuth(true)
+      if (user) {
+        redirecionarPorRoles(user.roles || [user.role])
+      } else {
+        router.push('/admin')
+      }
+    } else {
+      erroNovaSenha.value = data.detail || 'Erro ao definir nova senha.'
+    }
+  } catch {
+    erroNovaSenha.value = 'Erro de comunicação ao salvar nova senha.'
+  } finally {
+    salvandoNovaSenha.value = false
+  }
 }
 
 async function handleLogin(forcar = false) {
@@ -94,26 +169,53 @@ async function handleLogin(forcar = false) {
     }
 
     if (!res.ok) {
-      const errData = await res.json().catch(() => ({}))
-      errorMessage.value = errData.erro || errData.detail || 'CPF ou Senha incorretos.'
+      if (res.status >= 500) {
+        errorMessage.value = 'Erro interno no servidor. Tente novamente mais tarde.'
+      } else {
+        const errData = await res.json().catch(() => ({}))
+        errorMessage.value = errData.erro || errData.detail || 'CPF ou senha inválidos.'
+        if (errData.bloqueado && errData.segundos_restantes) {
+          iniciarTimerBloqueio(errData.segundos_restantes)
+        }
+      }
       loading.value = false
       return
     }
 
+    if (timerBloqueio) {
+      clearInterval(timerBloqueio)
+      timerBloqueio = null
+      segundosBloqueio.value = 0
+    }
+
     showModalConflitoSessao.value = false
+    const loginData = await res.json().catch(() => ({}))
+
+    if (loginData.deve_trocar_senha) {
+      showModalTrocarSenhaObrigatoria.value = true
+      loading.value = false
+      return
+    }
+
     const user = await checkAuth(true)
     if (user) {
+      const redirect = route.query.redirect
+      if (redirect && typeof redirect === 'string' && redirect.startsWith('/')) {
+        router.push(redirect)
+        return
+      }
       redirecionarPorRoles(user.roles || [user.role])
     } else {
       router.push('/admin')
     }
   } catch (err) {
-    console.error('Erro no login:', err)
+    // Falha no login
     errorMessage.value = 'Falha ao conectar com o servidor.'
     loading.value = false
   }
 }
 </script>
+
 
 <template>
   <div class="login-page">
@@ -138,10 +240,15 @@ async function handleLogin(forcar = false) {
             </div>
           </div>
 
-          <!-- Alerta de Erro de Credenciais -->
+          <!-- Alerta de Erro de Credenciais ou Bloqueio por Rate Limit -->
           <div v-if="errorMessage" class="alert-danger-box">
-            <i class="bi bi-exclamation-circle-fill me-2"></i>
-            <span>{{ errorMessage }}</span>
+            <i class="bi bi-shield-exclamation me-2 fs-5 flex-shrink-0"></i>
+            <div>
+              <span>{{ errorMessage }}</span>
+              <div v-if="segundosBloqueio > 0" class="small mt-1 opacity-75">
+                Tentativas bloqueadas. Aguarde <strong>{{ segundosBloqueio }}s</strong> para nova tentativa.
+              </div>
+            </div>
           </div>
 
           <form @submit.prevent="handleLogin(false)">
@@ -167,16 +274,23 @@ async function handleLogin(forcar = false) {
                 v-model="password"
                 type="password"
                 class="form-control"
-                placeholder="Digite sua senha segura"
+                placeholder="Digite sua senha"
                 required
               />
             </div>
 
             <div class="submit-btn-box">
-              <button type="submit" class="btn-primary w-100 font-outfit" :disabled="loading">
-                <span v-if="!loading">Entrar no Sistema</span>
+              <button
+                type="submit"
+                class="btn-primary w-100 font-outfit"
+                :disabled="loading || segundosBloqueio > 0"
+              >
+                <span v-if="segundosBloqueio > 0">
+                  <i class="bi bi-clock-history me-1"></i> Aguarde {{ segundosBloqueio }}s
+                </span>
+                <span v-else-if="!loading">Entrar no Sistema</span>
                 <span v-else>Autenticando...</span>
-                <i class="bi bi-box-arrow-in-right ms-1"></i>
+                <i v-if="segundosBloqueio === 0" class="bi bi-box-arrow-in-right ms-1"></i>
               </button>
             </div>
           </form>
@@ -253,163 +367,4 @@ async function handleLogin(forcar = false) {
   justify-content: center;
   padding: 40px 0;
 }
-
-.login-wrapper {
-  width: 100%;
-  max-width: 440px;
-  margin: 0 auto;
-}
-
-.login-card {
-  padding: 36px 30px;
-}
-
-.login-header {
-  text-align: center;
-  margin-bottom: 26px;
-}
-
-.login-icon-box {
-  width: 58px;
-  height: 58px;
-  background: rgba(59, 130, 246, 0.15);
-  border: 1px solid rgba(59, 130, 246, 0.35);
-  border-radius: 50%;
-  margin: 0 auto 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.6rem;
-  color: var(--primary-accent);
-}
-
-.login-title {
-  font-size: 1.65rem;
-  font-weight: 800;
-  color: #ffffff;
-  margin-bottom: 6px;
-}
-
-.login-subtitle {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-}
-
-.alert-danger-box {
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  color: #fca5a5;
-  border-radius: 10px;
-  padding: 12px 16px;
-  font-size: 0.88rem;
-  margin-bottom: 20px;
-  display: flex;
-  align-items: center;
-}
-
-.alert-warning-box {
-  background: rgba(245, 158, 11, 0.15);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  color: #fde68a;
-  border-radius: 10px;
-  padding: 12px 16px;
-  font-size: 0.88rem;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-/* Caixa de Informação do Dispositivo Anterior */
-.active-device-box {
-  background: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  border-radius: 12px;
-  padding: 14px 16px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  text-align: left;
-}
-
-.device-icon-circle {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  background: rgba(245, 158, 11, 0.15);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.3rem;
-  color: #fbbf24;
-  flex-shrink: 0;
-}
-
-.device-info-text {
-  display: flex;
-  flex-direction: column;
-}
-
-.device-name {
-  color: #ffffff;
-  font-weight: 700;
-  font-size: 0.95rem;
-}
-
-.device-time {
-  color: #94a3b8;
-  font-size: 0.8rem;
-  margin-top: 2px;
-}
-
-/* Botão de Desconectar e Entrar */
-.btn-takeover {
-  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-  color: #0f172a;
-  font-weight: 800;
-  border: none;
-  border-radius: 10px;
-  padding: 10px 16px;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.3);
-}
-
-.btn-takeover:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.45);
-  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
-}
-
-.btn-takeover:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.submit-btn-box {
-  margin-top: 24px;
-}
-
-.login-footer-link {
-  text-align: center;
-  margin-top: 24px;
-}
-
-.back-link {
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  text-decoration: none;
-  transition: color 0.2s ease;
-}
-
-.back-link:hover {
-  color: #ffffff;
-}
-
-.flex-1 { flex: 1; }
-.w-100 { width: 100%; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.ms-1 { margin-left: 4px; }
 </style>

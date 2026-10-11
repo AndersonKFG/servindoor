@@ -1,8 +1,15 @@
 <script setup>
+import { useToast } from '../composables/useToast'
+import { useConfirm } from '../composables/useConfirm'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import Modal from '../components/Modal.vue'
+import KpiCard from '../components/KpiCard.vue'
+import DropdownSelect from '../components/DropdownSelect.vue'
+
+const { toast } = useToast()
+const { confirmModal } = useConfirm()
 
 const router = useRouter()
 const { currentUser, isAdminGeral } = useAuth()
@@ -14,16 +21,34 @@ const kpis = ref({
   admin_geral_logados: 0,
   admin_total: 0,
   admin_logados: 0,
+  validador_total: 0,
+  validador_logados: 0,
   portaria_total: 0,
   portaria_logados: 0,
   entregadores_total: 0,
   entregadores_logados: 0
 })
+const secretariasDisponiveis = ref([])
+
+const optionsRoles = [
+  { value: '', label: 'Todas as Funções' },
+  { value: 'admin_geral', label: 'Administrador Geral' },
+  { value: 'admin', label: 'Administrador' },
+  { value: 'validador', label: 'Validador de Servidores' },
+  { value: 'portaria', label: 'Portaria / Scanner' },
+  { value: 'entregador', label: 'Entregador de Prêmios' }
+]
+
+const optionsStatus = [
+  { value: 'todos', label: 'Status: Todos' },
+  { value: 'logado', label: '🟢 Apenas Logados / Ativos' },
+  { value: 'offline', label: '⚪ Apenas Offline' }
+]
 
 // Filtros
 const busca = ref('')
 const filtroRole = ref('')
-const filtroStatus = ref('todos') // 'todos', 'logado', 'offline'
+const filtroStatus = ref('todos')
 
 // Modal Criar
 const showModalCriar = ref(false)
@@ -31,9 +56,10 @@ const salvandoCriar = ref(false)
 const formCriar = ref({
   nome: '',
   cpf: '',
+  email: '',
   telefone: '',
   roles: ['portaria'],
-  senha: ''
+  secretarias_validador: []
 })
 
 // Modal Editar
@@ -42,17 +68,10 @@ const salvandoEditar = ref(false)
 const formEditar = ref({
   id: null,
   nome: '',
+  email: '',
   telefone: '',
-  roles: []
-})
-
-// Modal Senha
-const showModalSenha = ref(false)
-const salvandoSenha = ref(false)
-const formSenha = ref({
-  id: null,
-  nome: '',
-  nova_senha: ''
+  roles: [],
+  secretarias_validador: []
 })
 
 // Modal Excluir
@@ -60,7 +79,6 @@ const showModalExcluir = ref(false)
 const usuarioExcluir = ref(null)
 const excluindo = ref(false)
 
-// MÁSCARAS E LIMITADORES DE 11 DÍGITOS
 function formatCPF(val) {
   const digits = (val || '').replace(/\D/g, '').slice(0, 11)
   if (digits.length <= 3) return digits
@@ -90,6 +108,13 @@ function onTelefoneInputEditar(e) {
   formEditar.value.telefone = formatTelefone(e.target.value)
 }
 
+function obterIniciais(nome) {
+  if (!nome) return '?'
+  const partes = nome.trim().split(/\s+/).filter(Boolean)
+  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase()
+  return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase()
+}
+
 let pollInterval = null
 
 async function carregarEquipe(silent = false) {
@@ -102,6 +127,16 @@ async function carregarEquipe(silent = false) {
     }
     const data = await res.json()
     usuarios.value = data.usuarios || []
+    if (data.secretarias && Array.isArray(data.secretarias)) {
+      secretariasDisponiveis.value = data.secretarias
+    } else {
+      try {
+        const secRes = await fetch('/api/secretarias')
+        if (secRes.ok) secretariasDisponiveis.value = await secRes.json()
+      } catch (e) {
+        console.warn('Erro ao carregar secretarias:', e)
+      }
+    }
     kpis.value = data.kpis || {
       admin_geral_total: 0, admin_geral_logados: 0,
       admin_total: 0, admin_logados: 0,
@@ -109,16 +144,14 @@ async function carregarEquipe(silent = false) {
       entregadores_total: 0, entregadores_logados: 0
     }
   } catch (e) {
-    if (!silent) console.error('Erro ao carregar equipe:', e)
+    if (!silent) toast.error('Erro ao carregar equipe.')
   } finally {
     if (!silent) loading.value = false
   }
 }
 
-// Filtragem
 const usuariosFiltrados = computed(() => {
   return usuarios.value.filter(u => {
-    // Busca
     if (busca.value.trim()) {
       const q = busca.value.toLowerCase().trim()
       const matchNome = (u.nome || '').toLowerCase().includes(q)
@@ -129,12 +162,10 @@ const usuariosFiltrados = computed(() => {
       }
     }
 
-    // Filtro de Role
     if (filtroRole.value) {
       if (!u.roles || !u.roles.includes(filtroRole.value)) return false
     }
 
-    // Filtro de Sessão
     if (filtroStatus.value === 'logado' && !u.is_logado) return false
     if (filtroStatus.value === 'offline' && u.is_logado) return false
 
@@ -145,11 +176,19 @@ const usuariosFiltrados = computed(() => {
 function toggleRole(arrayRef, role) {
   const index = arrayRef.indexOf(role)
   if (index > -1) {
-    if (arrayRef.length > 1) {
-      arrayRef.splice(index, 1)
-    }
+    arrayRef.splice(index, 1)
   } else {
     arrayRef.push(role)
+  }
+}
+
+function toggleSecId(arrayRef, id) {
+  const numId = Number(id)
+  const index = arrayRef.indexOf(numId)
+  if (index > -1) {
+    arrayRef.splice(index, 1)
+  } else {
+    arrayRef.push(numId)
   }
 }
 
@@ -157,20 +196,26 @@ function abrirModalCriar() {
   formCriar.value = {
     nome: '',
     cpf: '',
+    email: '',
     telefone: '',
     roles: ['portaria'],
-    senha: ''
+    secretarias_validador: []
   }
   showModalCriar.value = true
 }
 
 async function salvarCriarUsuario() {
-  if (!formCriar.value.nome.trim() || !formCriar.value.cpf.trim()) {
-    alert('Nome e CPF são obrigatórios.')
+  if (!formCriar.value.nome.trim() || !formCriar.value.cpf.trim() || !formCriar.value.email.trim()) {
+    toast.warning('Nome, CPF e E-mail são obrigatórios.')
+    return
+  }
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  if (!emailRegex.test(formCriar.value.email.trim())) {
+    toast.warning('Informe um endereço de e-mail válido.')
     return
   }
   if (!formCriar.value.roles.length) {
-    alert('Selecione pelo menos uma função para o usuário.')
+    toast.warning('Selecione pelo menos uma função para o usuário.')
     return
   }
 
@@ -184,31 +229,51 @@ async function salvarCriarUsuario() {
     const data = await res.json()
     if (res.ok && data.sucesso) {
       showModalCriar.value = false
+      toast.success(data.mensagem || 'Membro cadastrado com sucesso! Uma senha provisória foi enviada por e-mail.')
       await carregarEquipe()
     } else {
-      alert(data.detail || 'Erro ao criar usuário.')
+      toast.error(data.detail || 'Erro ao cadastrar membro da equipe.')
     }
-  } catch (err) {
-    alert('Erro de conexão ao criar usuário.')
+  } catch {
+    toast.error('Erro de conexão ao cadastrar usuário.')
   } finally {
     salvandoCriar.value = false
   }
 }
 
 function abrirModalEditar(u) {
+  const secVal = u.secretarias_validador
+    ? u.secretarias_validador.split(',').map(s => Number(s.trim())).filter(Boolean)
+    : []
   formEditar.value = {
     id: u.id,
     nome: u.nome,
+    email: u.email || '',
     telefone: formatTelefone(u.telefone || ''),
-    roles: [...(u.roles || [u.role])]
+    roles: [...(u.roles || [u.role])],
+    secretarias_validador: secVal
   }
   showModalEditar.value = true
 }
 
 async function salvarEditarUsuario() {
-  if (!formEditar.value.roles.length) {
-    alert('Selecione pelo menos uma função para o usuário.')
+  if (!formEditar.value.nome.trim()) {
+    toast.warning('O nome do usuário é obrigatório.')
     return
+  }
+  if (formEditar.value.email.trim()) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(formEditar.value.email.trim())) {
+      toast.warning('Informe um endereço de e-mail válido.')
+      return
+    }
+  }
+  if (!formEditar.value.roles.length) {
+    toast.warning('Selecione pelo menos uma função para o usuário.')
+    return
+  }
+  if (!formEditar.value.roles.includes('validador')) {
+    formEditar.value.secretarias_validador = []
   }
   try {
     salvandoEditar.value = true
@@ -220,55 +285,51 @@ async function salvarEditarUsuario() {
     const data = await res.json()
     if (res.ok && data.sucesso) {
       showModalEditar.value = false
+      toast.success('Usuário atualizado com sucesso!')
       await carregarEquipe()
     } else {
-      alert(data.detail || 'Erro ao atualizar usuário.')
+      toast.error(data.detail || 'Erro ao atualizar usuário.')
     }
   } catch (err) {
-    alert('Erro de conexão ao atualizar.')
+    toast.error('Erro de conexão ao atualizar.')
   } finally {
     salvandoEditar.value = false
-  }
-}
-
-function abrirModalSenha(u) {
-  formSenha.value = {
-    id: u.id,
-    nome: u.nome,
-    nova_senha: ''
-  }
-  showModalSenha.value = true
-}
-
-async function salvarNovaSenha() {
-  if (!formSenha.value.nova_senha.trim()) {
-    alert('Digite a nova senha.')
-    return
-  }
-  try {
-    salvandoSenha.value = true
-    const res = await fetch(`/api/admin/usuarios/${formSenha.value.id}/senha`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nova_senha: formSenha.value.nova_senha.trim() })
-    })
-    const data = await res.json()
-    if (res.ok && data.sucesso) {
-      showModalSenha.value = false
-      await carregarEquipe()
-    } else {
-      alert(data.detail || 'Erro ao alterar senha.')
-    }
-  } catch (err) {
-    alert('Erro de conexão ao redefinir senha.')
-  } finally {
-    salvandoSenha.value = false
   }
 }
 
 function confirmarExcluir(u) {
   usuarioExcluir.value = u
   showModalExcluir.value = true
+}
+
+async function confirmarRedefinirSenhaEmail(u) {
+  if (!u.email) {
+    toast.error('Este usuário não possui e-mail cadastrado. Edite o usuário e adicione um e-mail válido antes de resetar a senha.')
+    return
+  }
+
+  const confirmed = await confirmModal({
+    title: 'Resetar Senha de Acesso',
+    message: `Deseja gerar uma nova senha provisória para "${u.nome}" e enviá-la para o e-mail (${u.email})?\n\nQualquer sessão ativa será desconectada e o usuário será obrigado a cadastrar uma nova senha pessoal definitiva no próximo login.`,
+    confirmText: 'Resetar e Enviar E-mail',
+    variant: 'warning'
+  })
+  if (!confirmed) return
+
+  try {
+    const res = await fetch(`/api/admin/usuarios/${u.id}/redefinir-senha-email`, {
+      method: 'POST'
+    })
+    const data = await res.json()
+    if (res.ok && data.sucesso) {
+      toast.success(data.mensagem || 'Nova senha enviada com sucesso!')
+      await carregarEquipe(true)
+    } else {
+      toast.error(data.detail || 'Erro ao redefinir senha.')
+    }
+  } catch {
+    toast.error('Erro de conexão ao redefinir senha.')
+  }
 }
 
 async function executarExcluir() {
@@ -281,12 +342,13 @@ async function executarExcluir() {
     const data = await res.json()
     if (res.ok && data.sucesso) {
       showModalExcluir.value = false
+      toast.success('Usuário excluído com sucesso!')
       await carregarEquipe()
     } else {
-      alert(data.detail || 'Erro ao excluir usuário.')
+      toast.error(data.detail || 'Erro ao excluir usuário.')
     }
   } catch (err) {
-    alert('Erro de conexão ao excluir.')
+    toast.error('Erro de conexão ao excluir.')
   } finally {
     excluindo.value = false
   }
@@ -301,8 +363,7 @@ function podeGerenciarUsuario(u) {
 onMounted(async () => {
   await carregarEquipe(false)
   pollInterval = setInterval(() => {
-    // Não atualiza durante digitação em modais para não interferir
-    if (!document.hidden && !showModalCriar.value && !showModalEditar.value && !showModalSenha.value && !showModalExcluir.value) {
+    if (!document.hidden && !showModalCriar.value && !showModalEditar.value && !showModalExcluir.value) {
       carregarEquipe(true)
     }
   }, 3000)
@@ -320,272 +381,246 @@ onUnmounted(() => {
   <div class="admin-page">
     <div class="app-container">
 
-      <!-- CABEÇALHO DA PÁGINA -->
-      <div class="admin-header-row">
+    <!-- CABEÇALHO DA PÁGINA -->
+    <div class="admin-header-row mb-4">
+      <div>
+        <span class="badge-cyber mb-2 d-inline-flex align-items-center">
+          <i class="bi bi-shield-lock-fill me-1 text-cyan"></i> PAINEL ADMINISTRATIVO
+        </span>
+        <h1 class="page-title font-quattrocento">Gestão da Equipe & Permissões</h1>
+        <p class="page-subtitle">Controle de acessos de Administradores Gerais, Administradores, Portaria e Entregadores.</p>
+      </div>
+
+      <div class="admin-header-actions d-flex flex-wrap gap-2">
+        <button type="button" class="btn-primary" @click="abrirModalCriar">
+          <i class="bi bi-person-plus-fill me-1"></i> Novo Membro da Equipe
+        </button>
+        <button type="button" class="btn-secondary" :disabled="loading" @click="carregarEquipe()">
+          <i class="bi bi-arrow-clockwise me-1" :class="{ 'spin-anim': loading }"></i> Atualizar
+        </button>
+      </div>
+    </div>
+
+    <!-- CARDS DE KPI CANÔNICOS DA EQUIPE -->
+    <div class="kpi-grid mb-4">
+      <KpiCard
+        title="Administradores Gerais"
+        :value="kpis.admin_geral_total"
+        subtitle="Acesso total e gestão irrestrita"
+        icon="bi bi-shield-fill-check"
+        variant="danger"
+        :badge-text="kpis.admin_geral_logados + ' logado(s)'"
+        :badge-pulse="kpis.admin_geral_logados > 0"
+      />
+
+      <KpiCard
+        title="Administradores"
+        :value="kpis.admin_total"
+        subtitle="Sorteios, visualização e operação"
+        icon="bi bi-shield-shaded"
+        variant="warning"
+        :badge-text="kpis.admin_logados + ' logado(s)'"
+        :badge-pulse="kpis.admin_logados > 0"
+      />
+
+      <KpiCard
+        title="Equipe de Portaria"
+        :value="kpis.portaria_total"
+        subtitle="Validação de entrada e saída"
+        icon="bi bi-qr-code-scan"
+        variant="cyan"
+        :badge-text="kpis.portaria_logados + ' logado(s)'"
+        :badge-pulse="kpis.portaria_logados > 0"
+      />
+
+      <KpiCard
+        title="Entregadores de Prêmios"
+        :value="kpis.entregadores_total"
+        subtitle="Registro e foto de entregas"
+        icon="bi bi-gift-fill"
+        variant="emerald"
+        :badge-text="kpis.entregadores_logados + ' logado(s)'"
+        :badge-pulse="kpis.entregadores_logados > 0"
+      />
+    </div>
+
+    <!-- BARRA DE FERRAMENTAS E FILTROS -->
+    <div class="filter-card mb-4">
+      <div class="filter-grid" style="grid-template-columns: 2fr 1fr 1fr;">
+        <div class="search-box">
+          <i class="bi bi-search search-icon"></i>
+          <input
+            v-model="busca"
+            type="text"
+            class="form-control"
+            placeholder="Buscar por Nome, CPF, Telefone..."
+          />
+          <button v-if="busca" type="button" class="btn-clear-search" @click="busca = ''">
+            <i class="bi bi-x"></i>
+          </button>
+        </div>
+
         <div>
-          <span class="vip-badge bg-primary mb-2">
-            <i class="bi bi-shield-lock-fill me-1"></i> PAINEL ADMINISTRATIVO
-          </span>
-          <h1 class="admin-title font-outfit">Gestão da Equipe & Permissões</h1>
-          <p class="admin-subtitle">Controle de acessos de Administradores Gerais, Administradores, Portaria e Entregadores.</p>
+          <DropdownSelect
+            v-model="filtroRole"
+            :options="optionsRoles"
+            placeholder="Todas as Funções"
+            icon="bi bi-person-badge"
+          />
         </div>
 
-        <div class="header-actions">
-          <button type="button" class="btn-primary" @click="abrirModalCriar">
-            <i class="bi bi-person-plus-fill me-1"></i> Novo Membro da Equipe
-          </button>
-          <button type="button" class="btn-secondary" @click="carregarEquipe">
-            <i class="bi bi-arrow-clockwise me-1"></i> Atualizar
-          </button>
-        </div>
-      </div>
-
-      <!-- ============================================== -->
-      <!-- CARDS DE KPI ESPECÍFICOS DA EQUIPE             -->
-      <!-- ============================================== -->
-      <div class="metrics-grid">
-        
-        <!-- 1. Administradores Gerais -->
-        <div class="metric-card">
-          <div class="metric-icon-box bg-red">
-            <i class="bi bi-shield-fill-check"></i>
-          </div>
-          <div class="metric-info">
-            <span class="metric-label">Administradores Gerais</span>
-            <div class="metric-value font-outfit">
-              {{ kpis.admin_geral_total }}
-              <span class="metric-status-tag" :class="kpis.admin_geral_logados > 0 ? 'tag-online' : 'tag-offline'">
-                {{ kpis.admin_geral_logados }} logado(s)
-              </span>
-            </div>
-            <span class="metric-sublabel text-muted">Acesso total e gestão irrestrita</span>
-          </div>
-        </div>
-
-        <!-- 2. Administradores -->
-        <div class="metric-card">
-          <div class="metric-icon-box bg-purple">
-            <i class="bi bi-shield-shaded"></i>
-          </div>
-          <div class="metric-info">
-            <span class="metric-label">Administradores</span>
-            <div class="metric-value font-outfit">
-              {{ kpis.admin_total }}
-              <span class="metric-status-tag" :class="kpis.admin_logados > 0 ? 'tag-online' : 'tag-offline'">
-                {{ kpis.admin_logados }} logado(s)
-              </span>
-            </div>
-            <span class="metric-sublabel text-muted">Sorteios, visualização e operação</span>
-          </div>
-        </div>
-
-        <!-- 3. Portaria -->
-        <div class="metric-card">
-          <div class="metric-icon-box bg-blue">
-            <i class="bi bi-qr-code-scan"></i>
-          </div>
-          <div class="metric-info">
-            <span class="metric-label">Equipe de Portaria</span>
-            <div class="metric-value font-outfit">
-              {{ kpis.portaria_total }}
-              <span class="metric-status-tag" :class="kpis.portaria_logados > 0 ? 'tag-online' : 'tag-offline'">
-                {{ kpis.portaria_logados }} logado(s)
-              </span>
-            </div>
-            <span class="metric-sublabel text-muted">Validação de entrada e saída</span>
-          </div>
-        </div>
-
-        <!-- 4. Entregadores -->
-        <div class="metric-card">
-          <div class="metric-icon-box bg-cyan">
-            <i class="bi bi-gift-fill"></i>
-          </div>
-          <div class="metric-info">
-            <span class="metric-label">Entregadores de Prêmios</span>
-            <div class="metric-value font-outfit">
-              {{ kpis.entregadores_total }}
-              <span class="metric-status-tag" :class="kpis.entregadores_logados > 0 ? 'tag-online' : 'tag-offline'">
-                {{ kpis.entregadores_logados }} logado(s)
-              </span>
-            </div>
-            <span class="metric-sublabel text-muted">Registro e foto de entregas</span>
-          </div>
-        </div>
-
-      </div>
-
-      <!-- ============================================== -->
-      <!-- BARRA DE FERRAMENTAS E FILTROS                 -->
-      <!-- ============================================== -->
-      <div class="vip-glass-card filter-card mb-4">
-        <div class="filter-grid">
-          
-          <div class="search-box">
-            <i class="bi bi-search search-icon"></i>
-            <input
-              v-model="busca"
-              type="text"
-              class="form-control filter-input"
-              placeholder="Buscar por Nome, CPF, Telefone..."
-            />
-          </div>
-
-          <div class="select-box">
-            <select v-model="filtroRole" class="form-select filter-select">
-              <option value="">Todas as Funções</option>
-              <option value="admin_geral">Administrador Geral</option>
-              <option value="admin">Administrador</option>
-              <option value="portaria">Portaria / Scanner</option>
-              <option value="entregador">Entregador de Prêmios</option>
-            </select>
-          </div>
-
-          <div class="select-box">
-            <select v-model="filtroStatus" class="form-select filter-select">
-              <option value="todos">Status: Todos</option>
-              <option value="logado">🟢 Apenas Logados / Ativos</option>
-              <option value="offline">⚪ Apenas Offline</option>
-            </select>
-          </div>
-
+        <div>
+          <DropdownSelect
+            v-model="filtroStatus"
+            :options="optionsStatus"
+            placeholder="Status: Todos"
+            icon="bi bi-circle-fill"
+          />
         </div>
       </div>
+    </div>
 
-      <!-- ============================================== -->
-      <!-- TABELA DA EQUIPE                               -->
-      <!-- ============================================== -->
-      <div class="vip-glass-card table-card">
-        
-        <div class="table-header-box">
-          <div class="table-title font-outfit">
-            <i class="bi bi-person-gear text-primary me-2"></i>
-            <span>Membros da Equipe Cadastrados</span>
-            <span class="badge-count ms-2">{{ usuariosFiltrados.length }}</span>
-          </div>
-        </div>
-
-        <div v-if="loading" class="text-center py-5 text-muted">
-          <div class="spinner-border text-primary mb-2"></div>
-          <p>Carregando equipe...</p>
-        </div>
-
-        <div v-else-if="!usuariosFiltrados.length" class="text-center py-5 text-muted">
-          <i class="bi bi-inbox fs-1 mb-2 d-block"></i>
-          <p>Nenhum membro da equipe encontrado.</p>
-        </div>
-
-        <div v-else class="table-responsive">
-          <table class="custom-table">
-            <thead>
-              <tr>
-                <th>Membro / Telefone</th>
-                <th>CPF</th>
-                <th>Funções / Permissões Atribuídas</th>
-                <th>Status de Acesso</th>
-                <th>Senha</th>
-                <th class="text-end">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="u in usuariosFiltrados" :key="u.id">
-                
-                <!-- Membro / Telefone -->
-                <td>
-                  <strong class="text-white d-block">{{ u.nome }}</strong>
-                  <small v-if="u.telefone" class="text-muted">
-                    <i class="bi bi-telephone-fill me-1 text-primary"></i>{{ u.telefone }}
-                  </small>
-                  <small v-else class="text-muted opacity-50">
-                    <i class="bi bi-telephone me-1"></i>Sem telefone
-                  </small>
-                </td>
-
-                <!-- CPF -->
-                <td>
-                  <span class="font-monospace text-primary fw-bold">{{ u.cpf_formatado }}</span>
-                </td>
-
-                <!-- Múltiplas Funções Atribuídas -->
-                <td>
-                  <div class="roles-chips-wrapper">
-                    <span
-                      v-for="r in (u.roles || [u.role])"
-                      :key="r"
-                      class="role-badge"
-                      :class="'role-' + r"
-                    >
-                      <i v-if="r === 'admin_geral'" class="bi bi-shield-fill-check me-1"></i>
-                      <i v-else-if="r === 'admin'" class="bi bi-shield-shaded me-1"></i>
-                      <i v-else-if="r === 'portaria'" class="bi bi-qr-code-scan me-1"></i>
-                      <i v-else-if="r === 'entregador'" class="bi bi-gift-fill me-1"></i>
-                      {{ r === 'admin_geral' ? 'Admin Geral' : r === 'admin' ? 'Administrador' : r === 'portaria' ? 'Portaria' : r === 'entregador' ? 'Entregador' : r }}
-                    </span>
-                  </div>
-                </td>
-
-                <!-- Status de Acesso -->
-                <td>
-                  <span v-if="u.is_logado" class="session-badge session-online">
-                    <i class="bi bi-circle-fill me-1 dot-active"></i> Logado / Ativo
-                  </span>
-                  <span v-else class="session-badge session-offline">
-                    <i class="bi bi-clock-history me-1"></i> {{ u.ultimo_acesso }}
-                  </span>
-                </td>
-
-                <!-- Senha -->
-                <td>
-                  <span v-if="u.has_senha" class="badge-pass bg-has-pass">
-                    <i class="bi bi-lock-fill me-1"></i> Configurada
-                  </span>
-                  <span v-else class="badge-pass bg-no-pass">
-                    <i class="bi bi-unlock me-1"></i> Sem Senha
-                  </span>
-                </td>
-
-                <!-- Ações -->
-                <td class="text-end">
-                  <div class="action-buttons-group">
-                    <button
-                      type="button"
-                      class="btn-action-icon text-info"
-                      :title="podeGerenciarUsuario(u) ? 'Editar Usuário' : 'Apenas Administrador Geral pode editar este usuário'"
-                      :disabled="!podeGerenciarUsuario(u)"
-                      @click="abrirModalEditar(u)"
-                    >
-                      <i class="bi bi-pencil-fill"></i>
-                    </button>
-
-                    <button
-                      type="button"
-                      class="btn-action-icon text-warning"
-                      :title="podeGerenciarUsuario(u) ? 'Redefinir Senha' : 'Apenas Administrador Geral pode alterar a senha deste usuário'"
-                      :disabled="!podeGerenciarUsuario(u)"
-                      @click="abrirModalSenha(u)"
-                    >
-                      <i class="bi bi-key-fill"></i>
-                    </button>
-
-                    <button
-                      type="button"
-                      class="btn-action-icon text-danger"
-                      :title="podeGerenciarUsuario(u) ? 'Excluir Usuário' : 'Apenas Administrador Geral pode excluir este usuário'"
-                      :disabled="!podeGerenciarUsuario(u)"
-                      @click="confirmarExcluir(u)"
-                    >
-                      <i class="bi bi-trash-fill"></i>
-                    </button>
-                  </div>
-                </td>
-
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
+    <!-- TABELA DA EQUIPE -->
+    <div class="table-card">
+      <div class="table-header-box">
+        <h2 class="table-title font-quattrocento">
+          <i class="bi bi-person-gear text-cyan me-2"></i>
+          Membros da Equipe Cadastrados
+          <span class="table-badge-count">{{ usuariosFiltrados.length }}</span>
+        </h2>
       </div>
 
+      <div v-if="loading && !usuarios.length" class="table-loading-state">
+        <div class="spinner-border text-cyan mb-2"></div>
+        <p>Carregando equipe...</p>
+      </div>
+
+      <div v-else-if="!usuariosFiltrados.length" class="table-empty-state">
+        <i class="bi bi-inbox fs-1 mb-2 d-block opacity-50"></i>
+        <p>Nenhum membro da equipe encontrado.</p>
+      </div>
+
+            <!-- GRID DE CARDS CANÔNICO DE USUÁRIOS E EQUIPE -->
+      <div v-else class="entity-cards-grid">
+        <div
+          v-for="u in usuariosFiltrados"
+          :key="u.id"
+          :class="['entity-card', u.is_logado ? 'entity-card--presente' : 'entity-card--neutral']"
+        >
+          <!-- 1. Topo: CPF à esquerda, Status de Sessão à direita -->
+          <div class="entity-card-top-bar">
+            <span class="table-code-pill font-monospace">{{ u.cpf_formatado }}</span>
+
+            <!-- Status de Sessão Ativa -->
+            <span v-if="u.is_logado" class="status-pill status-pill--presente">
+              <i class="bi bi-circle-fill dot-active"></i> Online
+            </span>
+            <span v-else class="status-pill status-pill--neutral" :title="'Último acesso: ' + (u.ultimo_acesso || 'Nunca')">
+              <i class="bi bi-clock-history"></i> Offline
+            </span>
+          </div>
+
+          <!-- 2. Identidade: Avatar com Iniciais + Nome e Contato em Largura Total -->
+          <div class="entity-card-identity">
+            <div class="entity-card-avatar" :title="u.nome">
+              <div class="entity-card-avatar-fallback">
+                <span>{{ obterIniciais(u.nome) }}</span>
+              </div>
+            </div>
+
+            <div class="entity-card-info">
+              <h3 class="entity-card-title">{{ u.nome }}</h3>
+              <div class="entity-card-sub">
+                <small v-if="u.telefone" class="text-muted d-inline-flex align-items-center">
+                  <i class="bi bi-telephone-fill me-1 text-cyan"></i>{{ u.telefone }}
+                </small>
+                <small v-else class="text-muted opacity-50">
+                  <i class="bi bi-telephone me-1"></i>Sem telefone
+                </small>
+              </div>
+              <div v-if="u.email" class="text-muted small mt-1 text-truncate" :title="u.email">
+                <i class="bi bi-envelope me-1"></i>{{ u.email }}
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. Metadados: Funções e Situação da Conta -->
+          <div class="entity-meta-grid">
+            <!-- Funções / Permissões Atribuídas -->
+            <div class="entity-meta-item full-width">
+              <span class="meta-label">Funções Atribuídas</span>
+              <div class="d-flex flex-wrap gap-1 mt-1">
+                <span
+                  v-for="r in (u.roles || [u.role])"
+                  :key="r"
+                  class="role-badge"
+                  :class="'role-' + r"
+                >
+                  <i v-if="r === 'admin_geral'" class="bi bi-shield-fill-check me-1"></i>
+                  <i v-else-if="r === 'admin'" class="bi bi-shield-shaded me-1"></i>
+                  <i v-else-if="r === 'validador'" class="bi bi-person-check-fill me-1"></i>
+                  <i v-else-if="r === 'portaria'" class="bi bi-qr-code-scan me-1"></i>
+                  <i v-else-if="r === 'entregador'" class="bi bi-gift-fill me-1"></i>
+                  {{ r === 'admin_geral' ? 'Admin Geral' : r === 'admin' ? 'Administrador' : r === 'validador' ? 'Validador' : r === 'portaria' ? 'Portaria' : r === 'entregador' ? 'Entregador' : r }}
+                </span>
+              </div>
+            </div>
+
+            <!-- Status de Ativação / Senha -->
+            <div class="entity-meta-item full-width">
+              <span class="meta-label">Situação da Conta</span>
+              <div class="mt-1">
+                <span v-if="u.deve_trocar_senha" class="badge-pass bg-pending-pass" title="Usuário cadastrado com senha provisória, aguardando primeiro acesso para ativação">
+                  <i class="bi bi-hourglass-split me-1"></i> Aguardando Ativação
+                </span>
+                <span v-else-if="u.has_senha" class="badge-pass bg-has-pass" title="Conta ativa com senha pessoal definitiva cadastrada">
+                  <i class="bi bi-shield-check me-1"></i> Conta Ativada
+                </span>
+                <span v-else class="badge-pass bg-no-pass" title="Usuário sem credencial de acesso">
+                  <i class="bi bi-unlock me-1"></i> Sem Senha
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Rodapé: Ações de Gestão do Membro -->
+          <div class="entity-card-footer justify-end">
+            <div class="d-flex align-items-center gap-1">
+              <button
+                type="button"
+                class="btn-action-icon btn-action-icon--cyan"
+                :title="podeGerenciarUsuario(u) ? 'Editar Usuário' : 'Apenas Administrador Geral pode editar este usuário'"
+                :disabled="!podeGerenciarUsuario(u)"
+                @click="abrirModalEditar(u)"
+              >
+                <i class="bi bi-pencil-fill"></i>
+              </button>
+
+              <button
+                type="button"
+                class="btn-action-icon btn-action-icon--amber"
+                :title="podeGerenciarUsuario(u) ? 'Resetar Senha (Enviar provisória por e-mail)' : 'Apenas Administrador Geral pode alterar a senha deste usuário'"
+                :disabled="!podeGerenciarUsuario(u)"
+                @click="confirmarRedefinirSenhaEmail(u)"
+              >
+                <i class="bi bi-arrow-clockwise"></i>
+              </button>
+
+              <button
+                type="button"
+                class="btn-action-icon btn-action-icon--danger"
+                :title="podeGerenciarUsuario(u) ? 'Excluir Usuário' : 'Apenas Administrador Geral pode excluir este usuário'"
+                :disabled="!podeGerenciarUsuario(u)"
+                @click="confirmarExcluir(u)"
+              >
+                <i class="bi bi-trash-fill"></i>
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
     </div>
 
     <!-- MODAL CRIAR USUÁRIO -->
@@ -593,17 +628,17 @@ onUnmounted(() => {
       :show="showModalCriar"
       title="Cadastrar Novo Membro da Equipe"
       icon="bi-person-plus-fill"
+      :max-width="'640px'"
       @close="showModalCriar = false"
     >
       <form @submit.prevent="salvarCriarUsuario">
-        <div class="form-group">
+        <div class="form-group mb-3">
           <label class="form-label">Nome Completo: *</label>
           <input v-model="formCriar.nome" type="text" class="form-control" placeholder="Ex: Carlos Andrade" required />
         </div>
 
-        <div class="form-grid-modal">
-          <!-- CPF com Formatação Automática e Limitação de 11 Dígitos -->
-          <div class="form-group">
+        <div class="row g-3 mb-3">
+          <div class="col-md-6 form-group">
             <label class="form-label">CPF (11 dígitos): *</label>
             <input
               v-model="formCriar.cpf"
@@ -617,24 +652,45 @@ onUnmounted(() => {
             />
           </div>
 
-          <!-- Telefone com Formatação Automática e Limitação de 11 Dígitos -->
-          <div class="form-group">
-            <label class="form-label">Telefone / WhatsApp (11 dígitos):</label>
+          <div class="col-md-6 form-group">
+            <label class="form-label">E-mail: *</label>
             <input
-              v-model="formCriar.telefone"
-              type="tel"
-              inputmode="numeric"
-              maxlength="15"
+              v-model="formCriar.email"
+              type="email"
               class="form-control"
-              placeholder="(81) 90000-0000"
-              @input="onTelefoneInputCriar"
+              placeholder="exemplo@caruaru.pe.gov.br"
+              required
             />
           </div>
         </div>
 
-        <!-- MÚLTIPLAS ROLES / CHECKBOXES -->
-        <div class="form-group">
-          <label class="form-label">Funções / Permissões de Acesso (Selecione 1 ou mais): *</label>
+        <div class="form-group mb-3">
+          <label class="form-label">Telefone / WhatsApp (11 dígitos):</label>
+          <input
+            v-model="formCriar.telefone"
+            type="tel"
+            inputmode="numeric"
+            maxlength="15"
+            class="form-control"
+            placeholder="(81) 90000-0000"
+            @input="onTelefoneInputCriar"
+          />
+        </div>
+
+        <div class="modal-alert-card mb-3" style="border-left: 4px solid var(--primary-accent);">
+          <div class="d-flex align-items-start gap-2">
+            <i class="bi bi-envelope-check-fill text-cyan fs-5"></i>
+            <div>
+              <strong class="text-cyan d-block">Envio Automático de Senha Provisória</strong>
+              <p class="mb-0 small text-light">
+                Uma mensagem de apresentação com senha temporária será enviada automaticamente para o e-mail cadastrado.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group mb-4">
+          <label class="form-label">Funções / Permissões de Acesso: *</label>
           <div class="roles-selection-box">
             
             <label v-if="isAdminGeral" class="role-checkbox-item">
@@ -656,10 +712,36 @@ onUnmounted(() => {
                 @change="toggleRole(formCriar.roles, 'admin')"
               />
               <div class="role-desc-wrap">
-                <strong class="text-purple"><i class="bi bi-shield-shaded me-1"></i> Administrador</strong>
+                <strong class="text-warning"><i class="bi bi-shield-shaded me-1"></i> Administrador</strong>
                 <p>Mesa de Sorteios, visualização de participantes e gestão de portaria/entregadores.</p>
               </div>
             </label>
+
+            <label class="role-checkbox-item">
+              <input
+                type="checkbox"
+                :checked="formCriar.roles.includes('validador')"
+                @change="toggleRole(formCriar.roles, 'validador')"
+              />
+              <div class="role-desc-wrap">
+                <strong class="text-emerald"><i class="bi bi-person-check-fill me-1"></i> Validador de Servidores</strong>
+                <p>Homologação manual de servidores pendentes e controle de lotes.</p>
+              </div>
+            </label>
+
+            <div v-if="formCriar.roles.includes('validador')" class="sec-assignment-box">
+              <label class="sec-assign-label">Secretarias sob responsabilidade (Sem seleção = Nenhuma secretaria atribuída):</label>
+              <div class="sec-checks-grid">
+                <label v-for="sec in secretariasDisponiveis" :key="sec.id" class="sec-check-item">
+                  <input
+                    type="checkbox"
+                    :checked="formCriar.secretarias_validador.includes(sec.id)"
+                    @change="toggleSecId(formCriar.secretarias_validador, sec.id)"
+                  />
+                  <span>{{ sec.nome }}</span>
+                </label>
+              </div>
+            </div>
 
             <label class="role-checkbox-item">
               <input
@@ -668,7 +750,7 @@ onUnmounted(() => {
                 @change="toggleRole(formCriar.roles, 'portaria')"
               />
               <div class="role-desc-wrap">
-                <strong class="text-primary"><i class="bi bi-qr-code-scan me-1"></i> Portaria / Scanner</strong>
+                <strong class="text-cyan"><i class="bi bi-qr-code-scan me-1"></i> Portaria / Scanner</strong>
                 <p>Acesso exclusivo ao scanner e controle de entrada/saída de participantes.</p>
               </div>
             </label>
@@ -688,12 +770,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Senha de Acesso ao Painel: *</label>
-          <input v-model="formCriar.senha" type="password" class="form-control" placeholder="Digite uma senha forte" required />
-        </div>
-
-        <div class="modal-footer-box">
+        <div class="d-flex align-items-center justify-content-end gap-2">
           <button type="button" class="btn-secondary" @click="showModalCriar = false">Cancelar</button>
           <button type="submit" class="btn-primary" :disabled="salvandoCriar">
             <span v-if="!salvandoCriar">Cadastrar Usuário</span>
@@ -708,30 +785,36 @@ onUnmounted(() => {
       :show="showModalEditar"
       title="Editar Membro da Equipe"
       icon="bi-pencil-square"
+      :max-width="'640px'"
       @close="showModalEditar = false"
     >
       <form @submit.prevent="salvarEditarUsuario">
-        <div class="form-group">
-          <label class="form-label">Nome Completo:</label>
+        <div class="form-group mb-3">
+          <label class="form-label">Nome Completo: *</label>
           <input v-model="formEditar.nome" type="text" class="form-control" required />
         </div>
 
-        <!-- Telefone com Formatação Automática e Limitação de 11 Dígitos -->
-        <div class="form-group">
-          <label class="form-label">Telefone / WhatsApp (11 dígitos):</label>
-          <input
-            v-model="formEditar.telefone"
-            type="tel"
-            inputmode="numeric"
-            maxlength="15"
-            class="form-control"
-            placeholder="(81) 90000-0000"
-            @input="onTelefoneInputEditar"
-          />
+        <div class="row g-3 mb-3">
+          <div class="col-md-6 form-group">
+            <label class="form-label">E-mail: *</label>
+            <input v-model="formEditar.email" type="email" class="form-control" placeholder="exemplo@caruaru.pe.gov.br" required />
+          </div>
+
+          <div class="col-md-6 form-group">
+            <label class="form-label">Telefone / WhatsApp (11 dígitos):</label>
+            <input
+              v-model="formEditar.telefone"
+              type="tel"
+              inputmode="numeric"
+              maxlength="15"
+              class="form-control"
+              placeholder="(81) 90000-0000"
+              @input="onTelefoneInputEditar"
+            />
+          </div>
         </div>
 
-        <!-- MÚLTIPLAS ROLES / CHECKBOXES -->
-        <div class="form-group">
+        <div class="form-group mb-4">
           <label class="form-label">Funções / Permissões Atribuídas: *</label>
           <div class="roles-selection-box">
             
@@ -754,10 +837,36 @@ onUnmounted(() => {
                 @change="toggleRole(formEditar.roles, 'admin')"
               />
               <div class="role-desc-wrap">
-                <strong class="text-purple"><i class="bi bi-shield-shaded me-1"></i> Administrador</strong>
+                <strong class="text-warning"><i class="bi bi-shield-shaded me-1"></i> Administrador</strong>
                 <p>Mesa de Sorteios, visualização de participantes e gestão de portaria/entregadores.</p>
               </div>
             </label>
+
+            <label class="role-checkbox-item">
+              <input
+                type="checkbox"
+                :checked="formEditar.roles.includes('validador')"
+                @change="toggleRole(formEditar.roles, 'validador')"
+              />
+              <div class="role-desc-wrap">
+                <strong class="text-emerald"><i class="bi bi-person-check-fill me-1"></i> Validador de Servidores</strong>
+                <p>Homologação manual de servidores pendentes e controle de lotes.</p>
+              </div>
+            </label>
+
+            <div v-if="formEditar.roles.includes('validador')" class="sec-assignment-box">
+              <label class="sec-assign-label">Secretarias sob responsabilidade (Sem seleção = Nenhuma secretaria atribuída):</label>
+              <div class="sec-checks-grid">
+                <label v-for="sec in secretariasDisponiveis" :key="sec.id" class="sec-check-item">
+                  <input
+                    type="checkbox"
+                    :checked="formEditar.secretarias_validador.includes(sec.id)"
+                    @change="toggleSecId(formEditar.secretarias_validador, sec.id)"
+                  />
+                  <span>{{ sec.nome }}</span>
+                </label>
+              </div>
+            </div>
 
             <label class="role-checkbox-item">
               <input
@@ -766,7 +875,7 @@ onUnmounted(() => {
                 @change="toggleRole(formEditar.roles, 'portaria')"
               />
               <div class="role-desc-wrap">
-                <strong class="text-primary"><i class="bi bi-qr-code-scan me-1"></i> Portaria / Scanner</strong>
+                <strong class="text-cyan"><i class="bi bi-qr-code-scan me-1"></i> Portaria / Scanner</strong>
                 <p>Acesso exclusivo ao scanner e controle de entrada/saída de participantes.</p>
               </div>
             </label>
@@ -786,33 +895,10 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="modal-footer-box">
+        <div class="d-flex align-items-center justify-content-end gap-2">
           <button type="button" class="btn-secondary" @click="showModalEditar = false">Cancelar</button>
           <button type="submit" class="btn-primary" :disabled="salvandoEditar">
             <span v-if="!salvandoEditar">Salvar Alterações</span>
-            <span v-else>Salvando...</span>
-          </button>
-        </div>
-      </form>
-    </Modal>
-
-    <!-- MODAL REDEFINIR SENHA -->
-    <Modal
-      :show="showModalSenha"
-      :title="'Redefinir Senha de ' + formSenha.nome"
-      icon="bi-key-fill"
-      @close="showModalSenha = false"
-    >
-      <form @submit.prevent="salvarNovaSenha">
-        <div class="form-group">
-          <label class="form-label">Nova Senha de Acesso:</label>
-          <input v-model="formSenha.nova_senha" type="password" class="form-control" placeholder="Digite a nova senha..." required />
-        </div>
-
-        <div class="modal-footer-box">
-          <button type="button" class="btn-secondary" @click="showModalSenha = false">Cancelar</button>
-          <button type="submit" class="btn-primary" :disabled="salvandoSenha">
-            <span v-if="!salvandoSenha">Atualizar Senha</span>
             <span v-else>Salvando...</span>
           </button>
         </div>
@@ -825,21 +911,24 @@ onUnmounted(() => {
       title="Excluir Usuário da Equipe?"
       icon="bi-exclamation-triangle-fill"
       icon-color="text-danger"
+      :max-width="'480px'"
       @close="showModalExcluir = false"
     >
       <p class="text-white">
         Deseja remover <strong>{{ usuarioExcluir?.nome }}</strong> da equipe?
       </p>
-      <p class="text-danger small">
+      <p class="text-danger small mb-0">
         Esta ação revogará o acesso deste usuário a todos os painéis e ferramentas operacionais.
       </p>
 
       <template #footer>
-        <button type="button" class="btn-secondary" @click="showModalExcluir = false">Cancelar</button>
-        <button type="button" class="btn-danger" :disabled="excluindo" @click="executarExcluir">
-          <span v-if="!excluindo">Sim, Excluir Usuário</span>
-          <span v-else>Excluindo...</span>
-        </button>
+        <div class="d-flex align-items-center justify-content-end gap-2 w-100">
+          <button type="button" class="btn-secondary" @click="showModalExcluir = false">Cancelar</button>
+          <button type="button" class="btn-danger" :disabled="excluindo" @click="executarExcluir">
+            <span v-if="!excluindo">Sim, Excluir Usuário</span>
+            <span v-else>Excluindo...</span>
+          </button>
+        </div>
       </template>
     </Modal>
 
@@ -847,408 +936,16 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.admin-page {
-  padding: 24px 0 60px;
+/* ==========================================================================
+   ESTILOS ESCOPADOS ESTRITAMENTE ESPECÍFICOS DESTA TELA
+   Todo o restante (tabela, botões, modais, cabeçalhos, paginação) é 100% global
+   ========================================================================== */
+.spin-anim {
+  animation: spin 1s infinite linear;
 }
 
-.admin-header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-  gap: 16px;
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
-
-.header-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.admin-title {
-  font-size: clamp(1.6rem, 4vw, 2.1rem);
-  font-weight: 800;
-  color: #ffffff;
-  margin: 0;
-}
-
-.admin-subtitle {
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  margin-top: 4px;
-}
-
-/* CARDS DE KPI */
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.metric-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-glass);
-  border-radius: 18px;
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-}
-
-.metric-icon-box {
-  width: 52px;
-  height: 52px;
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.6rem;
-  flex-shrink: 0;
-}
-
-.bg-red { background: rgba(239, 68, 68, 0.15); color: #f87171; }
-.bg-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
-.bg-blue { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
-.bg-cyan { background: rgba(6, 182, 212, 0.15); color: #22d3ee; }
-
-.metric-label {
-  display: block;
-  font-size: 0.74rem;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.metric-value {
-  font-size: 1.8rem;
-  font-weight: 900;
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  line-height: 1.1;
-  margin: 4px 0 2px;
-}
-
-.metric-status-tag {
-  font-size: 0.7rem;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 6px;
-}
-
-.tag-online {
-  background: rgba(16, 185, 129, 0.2);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.35);
-}
-
-.tag-offline {
-  background: rgba(100, 116, 139, 0.2);
-  color: #94a3b8;
-  border: 1px solid rgba(100, 116, 139, 0.3);
-}
-
-.metric-sublabel {
-  font-size: 0.72rem;
-  display: block;
-}
-
-/* FILTROS */
-.filter-card {
-  padding: 18px;
-  border-radius: 16px;
-  margin-bottom: 28px;
-}
-
-.filter-grid {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
-  gap: 12px;
-}
-
-@media (max-width: 768px) {
-  .filter-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.search-box {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.search-icon {
-  position: absolute;
-  left: 12px;
-  color: #64748b;
-}
-
-.filter-input {
-  padding-left: 38px;
-}
-
-/* TABELA */
-.table-card {
-  border-radius: 20px;
-  overflow: hidden;
-}
-
-.table-header-box {
-  padding: 18px 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.table-title {
-  font-size: 1.15rem;
-  font-weight: 800;
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-}
-
-.badge-count {
-  font-size: 0.8rem;
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-weight: 700;
-}
-
-.custom-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-.custom-table th {
-  padding: 14px 16px;
-  font-size: 0.76rem;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  font-weight: 700;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.custom-table td {
-  padding: 14px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  font-size: 0.88rem;
-  vertical-align: middle;
-}
-
-.custom-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-/* BADGES DE ROLES */
-.roles-chips-wrapper {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.role-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 9px;
-  border-radius: 6px;
-  font-size: 0.74rem;
-  font-weight: 800;
-}
-
-.role-admin_geral {
-  background: rgba(239, 68, 68, 0.15);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.35);
-}
-
-.role-admin {
-  background: rgba(168, 85, 247, 0.15);
-  color: #c084fc;
-  border: 1px solid rgba(168, 85, 247, 0.35);
-}
-
-.role-portaria {
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.35);
-}
-
-.role-entregador {
-  background: rgba(6, 182, 212, 0.15);
-  color: #22d3ee;
-  border: 1px solid rgba(6, 182, 212, 0.35);
-}
-
-/* CHECKBOXES DE FUNÇÕES */
-.roles-selection-box {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: #090d16;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  padding: 12px;
-}
-
-.role-checkbox-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.role-checkbox-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.role-checkbox-item input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  margin-top: 3px;
-  cursor: pointer;
-}
-
-.role-desc-wrap strong {
-  display: block;
-  font-size: 0.88rem;
-  margin-bottom: 2px;
-}
-
-.role-desc-wrap p {
-  margin: 0;
-  font-size: 0.76rem;
-  color: var(--text-muted);
-}
-
-/* SESSÃO BADGE */
-.session-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.76rem;
-  font-weight: 700;
-}
-
-.session-online {
-  background: rgba(16, 185, 129, 0.15);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.35);
-}
-
-.session-offline {
-  background: rgba(100, 116, 139, 0.15);
-  color: #94a3b8;
-  border: 1px solid rgba(100, 116, 139, 0.25);
-}
-
-.dot-active {
-  font-size: 0.55rem;
-  animation: dotPulse 1.2s infinite;
-}
-
-@keyframes dotPulse {
-  0% { opacity: 0.4; }
-  50% { opacity: 1; }
-  100% { opacity: 0.4; }
-}
-
-.badge-pass {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 0.74rem;
-  font-weight: 600;
-}
-
-.bg-has-pass {
-  background: rgba(16, 185, 129, 0.12);
-  color: #34d399;
-}
-
-.bg-no-pass {
-  background: rgba(239, 68, 68, 0.12);
-  color: #f87171;
-}
-
-.action-buttons-group {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.btn-action-icon {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  font-size: 0.95rem;
-}
-
-.btn-action-icon:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-  transform: translateY(-2px);
-}
-
-.btn-action-icon:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.form-grid-modal {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-@media (max-width: 576px) {
-  .form-grid-modal {
-    grid-template-columns: 1fr;
-  }
-}
-
-.modal-footer-box {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 20px;
-}
-
-.text-end { text-align: right; }
-.text-center { text-align: center; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.ms-2 { margin-left: 8px; }
-.d-block { display: block; }
-.text-white { color: #ffffff; }
-.text-muted { color: #94a3b8; }
-.text-primary { color: #38bdf8; }
-.text-purple { color: #c084fc; }
-.text-info { color: #38bdf8; }
-.text-warning { color: #f59e0b; }
-.text-danger { color: #ef4444; }
-.opacity-50 { opacity: 0.5; }
-.font-monospace { font-family: monospace; }
 </style>

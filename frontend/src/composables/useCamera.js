@@ -8,6 +8,7 @@ export function useCamera() {
   const availableCameras = ref([])
   const selectedDeviceId = ref('')
   const isMobile = ref(false)
+  const currentFacingMode = ref('user')
 
   // Detecta se é dispositivo móvel (celular / tablet)
   function checkIfMobile() {
@@ -62,7 +63,7 @@ export function useCamera() {
         videoConstraints.deviceId = { exact: targetId }
       } else {
         // No celular, prioriza explicitamente a frontal (user)
-        videoConstraints.facingMode = 'user'
+        videoConstraints.facingMode = currentFacingMode.value
       }
 
       let mediaStream
@@ -74,7 +75,7 @@ export function useCamera() {
       } catch (e) {
         // Fallback genérico se a restrição exata falhar
         mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
+          video: { facingMode: currentFacingMode.value, width: { ideal: 640 }, height: { ideal: 640 } },
           audio: false
         })
       }
@@ -114,9 +115,11 @@ export function useCamera() {
 
       const ctx = canvas.getContext('2d')
       
-      // Se for frontal ou webcam padrão, espelha para visual natural de selfie
-      ctx.translate(width, 0)
-      ctx.scale(-1, 1)
+      // Se for frontal, espelha para visual natural de selfie. Traseira não espelha.
+      if (currentFacingMode.value === 'user') {
+        ctx.translate(width, 0)
+        ctx.scale(-1, 1)
+      }
       ctx.drawImage(videoElement, 0, 0, width, height)
 
       const base64 = canvas.toDataURL('image/jpeg', 0.88)
@@ -140,8 +143,17 @@ export function useCamera() {
     isStreaming.value = false
   }
 
+  
+  async function toggleFacingMode(videoElement) {
+    currentFacingMode.value = currentFacingMode.value === 'user' ? 'environment' : 'user'
+    selectedDeviceId.value = ''
+    return await startCamera(videoElement)
+  }
+
   return {
     stream,
+    currentFacingMode,
+    toggleFacingMode,
     isStreaming,
     cameraError,
     capturedPhoto,

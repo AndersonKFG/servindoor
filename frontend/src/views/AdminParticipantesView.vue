@@ -2,11 +2,16 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Modal from '../components/Modal.vue'
+import KpiCard from '../components/KpiCard.vue'
+import DropdownSelect from '../components/DropdownSelect.vue'
 import QRCode from 'qrcode'
 import { useAuth } from '../composables/useAuth'
+import { useToast } from '../composables/useToast'
+import { formatarCpf, formatarTelefone, formatarData, formatarDataNascimento } from '../utils/formatters'
 
 const router = useRouter()
 const { isAdminGeral } = useAuth()
+const { toast } = useToast()
 
 const loading = ref(true)
 const participantes = ref([])
@@ -21,12 +26,14 @@ const busca = ref('')
 const filtroLote = ref('')
 const filtroPresenca = ref('todos') // 'todos', 'presente', 'fora'
 const secretariasSelecionadas = ref([]) // IDs das secretarias selecionadas (Array para multi-select)
-const showDropdownSec = ref(false)
-const buscaSec = ref('')
 
-// Paginação
+// Paginação no Servidor (Rule 6 - Strict max 50)
 const itensPorPagina = ref(25)
 const paginaAtual = ref(1)
+const totalPaginasServer = ref(1)
+const totalRegistrosServer = ref(0)
+const lotesServer = ref([])
+const secretariasServer = ref([])
 
 // Modais
 const showModalFoto = ref(false)
@@ -47,13 +54,184 @@ const emailResultado = ref(null)
 const showModalCancelar = ref(false)
 const participanteCancelar = ref(null)
 const cancelando = ref(false)
+const motivoCancelamento = ref('')
+const senhaAdminCancelamento = ref('')
+
+const showModalExplicacaoStatus = ref(false)
+const showModalDetalhesStatus = ref(false)
+const participanteStatusDetalhes = ref(null)
+
+function abrirModalExplicacaoStatus() {
+  showModalExplicacaoStatus.value = true
+}
+
+function abrirModalDetalhesStatus(p) {
+  participanteStatusDetalhes.value = p
+  showModalDetalhesStatus.value = true
+}
+
+const showModalInfo = ref(false)
+const participanteInfo = ref(null)
+
+// Modal Editar Participante (Admin e Admin Geral)
+const showModalEditar = ref(false)
+const participanteEditar = ref(null)
+const salvandoEditar = ref(false)
+const formEditar = ref({
+  secretaria_id: null,
+  setor: '',
+  telefone: '',
+  data_nascimento: '',
+  email: ''
+})
+
+const maxDataNascimento = computed(() => {
+  const d = new Date()
+  return d.toISOString().split('T')[0]
+})
+
+function formatarDataParaInput(dataStr) {
+  if (!dataStr) return ''
+  const trimmed = String(dataStr).trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed
+  const match = trimmed.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/)
+  if (match) {
+    const [, dia, mes, ano] = match
+    return `${ano}-${mes.padStart(2, '0')}-${dia.padStart(2, '0')}`
+  }
+  return ''
+}
+
+function onTelefoneInput(event) {
+  const val = event.target.value
+  const digits = String(val).replace(/\D/g, '').slice(0, 11)
+  if (!digits) {
+    formEditar.value.telefone = ''
+    return
+  }
+  if (digits.length <= 2) {
+    formEditar.value.telefone = `(${digits}`
+  } else if (digits.length <= 6) {
+    formEditar.value.telefone = `(${digits.slice(0, 2)}) ${digits.slice(2)}`
+  } else if (digits.length <= 10) {
+    formEditar.value.telefone = `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`
+  } else {
+    formEditar.value.telefone = `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`
+  }
+}
+
+function abrirModalEditar(p) {
+  participanteEditar.value = p
+  formEditar.value = {
+    secretaria_id: p.secretaria ? p.secretaria.id : null,
+    setor: p.setor || '',
+    telefone: p.telefone || '',
+    data_nascimento: formatarDataParaInput(p.data_nascimento),
+    email: p.email || ''
+  }
+  showModalEditar.value = true
+}
+
+function fecharModalEditar() {
+  if (salvandoEditar.value) return
+  showModalEditar.value = false
+  participanteEditar.value = null
+}
+
+async function salvarEdicaoParticipante() {
+  if (!participanteEditar.value) return
+
+  if (formEditar.value.email && formEditar.value.email.trim()) {
+    const em = formEditar.value.email.trim()
+    if (!em.includes('@') || !em.includes('.')) {
+      toast.warning('Por favor, informe um endereço de e-mail válido.')
+      return
+    }
+  }
+
+  if (formEditar.value.telefone && formEditar.value.telefone.trim()) {
+    const digitos = formEditar.value.telefone.replace(/\D/g, '')
+    if (digitos.length !== 10 && digitos.length !== 11) {
+      toast.warning('O telefone deve conter DDD e 8 ou 9 dígitos.')
+      return
+    }
+  }
+
+  try {
+    salvandoEditar.value = true
+    const payload = {
+      secretaria_id: formEditar.value.secretaria_id,
+      setor: formEditar.value.setor ? formEditar.value.setor.trim() : null,
+      telefone: formEditar.value.telefone ? formEditar.value.telefone.trim() : null,
+      data_nascimento: formEditar.value.data_nascimento || null,
+      email: formEditar.value.email ? formEditar.value.email.trim() : null
+    }
+
+    const res = await fetch(`/api/admin/participantes/${participanteEditar.value.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+
+    const data = await res.json()
+
+    if (!res.ok) {
+      toast.error(data.detail || 'Erro ao atualizar dados do participante.')
+      return
+    }
+
+    toast.success(data.mensagem || 'Dados do participante atualizados com sucesso!')
+
+    const idx = participantes.value.findIndex(p => p.id === participanteEditar.value.id)
+    if (idx !== -1) {
+      const secAtualizada = secretariasServer.value.find(s => s.id === formEditar.value.secretaria_id)
+      participantes.value[idx] = {
+        ...participantes.value[idx],
+        secretaria: secAtualizada ? { id: secAtualizada.id, nome: secAtualizada.nome } : null,
+        setor: payload.setor,
+        telefone: data.participante?.telefone || payload.telefone,
+        data_nascimento: data.participante?.data_nascimento || payload.data_nascimento,
+        email: payload.email
+      }
+    }
+
+    if (participanteInfo.value && participanteInfo.value.id === participanteEditar.value.id) {
+      const secAtualizada = secretariasServer.value.find(s => s.id === formEditar.value.secretaria_id)
+      participanteInfo.value = {
+        ...participanteInfo.value,
+        secretaria: secAtualizada ? { id: secAtualizada.id, nome: secAtualizada.nome } : null,
+        setor: payload.setor,
+        telefone: data.participante?.telefone || payload.telefone,
+        data_nascimento: data.participante?.data_nascimento || payload.data_nascimento,
+        email: payload.email
+      }
+    }
+
+    fecharModalEditar()
+  } catch (err) {
+    toast.error('Erro de conexão ao atualizar dados do participante.')
+  } finally {
+    salvandoEditar.value = false
+  }
+}
+
+const reenviandoEmailIngresso = ref(false)
+const reenviarEmailSucesso = ref(null)
 
 let pollInterval = null
 
 async function carregarParticipantes(silent = false) {
   try {
     if (!silent) loading.value = true
-    const res = await fetch('/api/admin/participantes')
+    const params = new URLSearchParams()
+    params.append('page', String(paginaAtual.value))
+    params.append('limit', String(Math.min(itensPorPagina.value, 50)))
+    if (busca.value.trim()) params.append('busca', busca.value.trim())
+    if (filtroLote.value) params.append('lote_id', String(filtroLote.value))
+    if (filtroPresenca.value !== 'todos') params.append('status_presenca', filtroPresenca.value)
+    if (secretariasSelecionadas.value.length > 0) params.append('secretarias', secretariasSelecionadas.value.join(','))
+
+    const res = await fetch(`/api/admin/participantes?${params.toString()}`)
     if (res.status === 401 || res.status === 403) {
       router.push('/login')
       return
@@ -65,55 +243,54 @@ async function carregarParticipantes(silent = false) {
       total_presentes: 0,
       total_fora: 0
     }
+    if (data.pagination) {
+      totalPaginasServer.value = data.pagination.total_pages || 1
+      totalRegistrosServer.value = data.pagination.total || 0
+    }
+    if (data.lotes_disponiveis) lotesServer.value = data.lotes_disponiveis
+    if (data.secretarias_disponiveis) secretariasServer.value = data.secretarias_disponiveis
   } catch (e) {
-    if (!silent) console.error('Erro ao carregar participantes:', e)
+    if (!silent) toast.error('Erro de conexão ao carregar participantes.')
   } finally {
     if (!silent) loading.value = false
   }
 }
 
-// Lista única de lotes para o dropdown de filtro
+// Lista única de lotes fornecida pelo servidor
 const lotesDisponiveis = computed(() => {
-  const lotesMap = new Map()
-  participantes.value.forEach(p => {
-    if (p.ingresso?.lote_id) {
-      lotesMap.set(p.ingresso.lote_id, p.ingresso.lote_nome)
-    }
-  })
-  return Array.from(lotesMap.entries()).map(([id, nome]) => ({ id, nome }))
+  return lotesServer.value || []
 })
 
-// Lista única de secretarias com contagem para o multi-select
+// Lista única de secretarias fornecida pelo servidor
 const secretariasDisponiveis = computed(() => {
-  const secMap = new Map()
-  participantes.value.forEach(p => {
-    const id = p.secretaria?.id || 'sem_secretaria'
-    const nome = p.secretaria?.nome || 'Sem Secretaria / Geral'
-    if (!secMap.has(id)) {
-      secMap.set(id, { id, nome, count: 0 })
-    }
-    secMap.get(id).count++
-  })
-  return Array.from(secMap.values()).sort((a, b) => a.nome.localeCompare(b.nome))
+  return (secretariasServer.value || []).map(s => ({
+    id: s.id,
+    nome: s.nome,
+    count: ''
+  }))
 })
 
-// Secretarias filtradas pela busca interna do dropdown
-const secretariasFiltradas = computed(() => {
-  if (!buscaSec.value.trim()) return secretariasDisponiveis.value
-  const q = buscaSec.value.toLowerCase().trim()
-  return secretariasDisponiveis.value.filter(s => s.nome.toLowerCase().includes(q))
-})
+const optionsLotes = computed(() => [
+  { value: '', label: 'Todos os Lotes' },
+  ...lotesDisponiveis.value.map(l => ({ value: l.id, label: l.nome }))
+])
 
-// Rótulo do botão do multi-select de secretarias
-const labelSecretarias = computed(() => {
-  const total = secretariasSelecionadas.value.length
-  if (total === 0) return 'Secretarias: Todas'
-  if (total === 1) {
-    const s = secretariasDisponiveis.value.find(item => item.id === secretariasSelecionadas.value[0])
-    return s ? s.nome : '1 Secretaria'
-  }
-  return `${total} Secretarias selecionadas`
-})
+const optionsPresenca = [
+  { value: 'todos', label: 'Status: Todos' },
+  { value: 'em_validacao', label: '⏳ Em validação' },
+  { value: 'validacao_recusada', label: '🚫 Validação Recusada' },
+  { value: 'presente', label: '🎫 Presente no Evento' },
+  { value: 'fora', label: '🚪 Fora do Evento' },
+  { value: 'cancelado', label: '✕ Ingresso Cancelado' },
+  { value: 'extraviado', label: '⛔ Ingresso Extraviado' }
+]
+
+const optionsSecretarias = computed(() =>
+  secretariasDisponiveis.value.map(s => ({
+    value: s.id,
+    label: s.nome
+  }))
+)
 
 function toggleSecretaria(id) {
   const index = secretariasSelecionadas.value.indexOf(id)
@@ -124,110 +301,46 @@ function toggleSecretaria(id) {
   }
 }
 
-function selecionarTodasSecretarias() {
-  secretariasSelecionadas.value = secretariasDisponiveis.value.map(s => s.id)
-}
-
 function limparSecretarias() {
   secretariasSelecionadas.value = []
 }
 
-// Fechar dropdown ao clicar fora
-function handleClickOutside(e) {
-  const dropdown = document.getElementById('sec-multiselect-container')
-  if (dropdown && !dropdown.contains(e.target)) {
-    showDropdownSec.value = false
-  }
-}
-
-// Base de participantes filtrados por busca, lote e secretarias selecionadas
-const participantesBaseFiltrados = computed(() => {
-  return participantes.value.filter(p => {
-    // 1. Filtro de busca textual
-    if (busca.value.trim()) {
-      const q = busca.value.toLowerCase().trim()
-      const matchNome = (p.nome || '').toLowerCase().includes(q)
-      const matchCpf = (p.cpf || '').includes(q)
-      const matchEmail = (p.email || '').toLowerCase().includes(q)
-      const matchSetor = (p.setor || '').toLowerCase().includes(q)
-      const matchSec = (p.secretaria?.nome || '').toLowerCase().includes(q)
-      const matchToken = (p.ingresso?.qr_code_token || '').toLowerCase().includes(q)
-      if (!matchNome && !matchCpf && !matchEmail && !matchSetor && !matchSec && !matchToken) {
-        return false
-      }
-    }
-
-    // 2. Filtro de Lote
-    if (filtroLote.value) {
-      if (String(p.ingresso?.lote_id) !== String(filtroLote.value)) {
-        return false
-      }
-    }
-
-    // 3. Multi-Select de Secretarias
-    if (secretariasSelecionadas.value.length > 0) {
-      const secId = p.secretaria?.id || 'sem_secretaria'
-      if (!secretariasSelecionadas.value.includes(secId)) {
-        return false
-      }
-    }
-
-    return true
-  })
-})
-
-// KPIs Reativos e Dinâmicos com base nos filtros
+// KPIs Reativos sincronizados com o servidor
 const kpis = computed(() => {
-  const base = participantesBaseFiltrados.value
-  let total_presentes = 0
-  let total_fora = 0
-
-  base.forEach(p => {
-    if (p.situacao_evento?.dentro || p.situacao_evento?.status_slug === 'presente') {
-      total_presentes++
-    } else {
-      total_fora++
-    }
-  })
-
-  return {
-    total_ingressos_resgatados: base.length,
-    total_presentes,
-    total_fora
-  }
+  return kpisGerais.value
 })
 
-// Participantes filtrados finais (incluindo filtro de presença)
 const participantesFiltrados = computed(() => {
-  return participantesBaseFiltrados.value.filter(p => {
-    const estaDentro = p.situacao_evento?.dentro || p.situacao_evento?.status_slug === 'presente'
-    if (filtroPresenca.value === 'presente') {
-      return estaDentro
-    } else if (filtroPresenca.value === 'fora') {
-      return !estaDentro
-    }
-    return true
-  })
-})
-
-// Reseta para a primeira página quando qualquer filtro ou tamanho de página mudar
-watch([busca, filtroLote, filtroPresenca, secretariasSelecionadas, itensPorPagina], () => {
-  paginaAtual.value = 1
-}, { deep: true })
-
-// Paginação
-const totalPaginas = computed(() => {
-  return Math.ceil(participantesFiltrados.value.length / itensPorPagina.value) || 1
+  return participantes.value
 })
 
 const participantesPaginados = computed(() => {
-  const inicio = (paginaAtual.value - 1) * itensPorPagina.value
-  const fim = inicio + itensPorPagina.value
-  return participantesFiltrados.value.slice(inicio, fim)
+  return participantes.value
+})
+
+// Debounce para busca textual
+let debounceTimer = null
+watch(busca, () => {
+  clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    paginaAtual.value = 1
+    carregarParticipantes()
+  }, 350)
+})
+
+// Watchers de filtros que recarregam a página via servidor
+watch([filtroLote, filtroPresenca, secretariasSelecionadas, itensPorPagina], () => {
+  paginaAtual.value = 1
+  carregarParticipantes()
+}, { deep: true })
+
+// Paginação Servidor
+const totalPaginas = computed(() => {
+  return totalPaginasServer.value
 })
 
 const infoPaginacao = computed(() => {
-  const total = participantesFiltrados.value.length
+  const total = totalRegistrosServer.value
   if (total === 0) return '0 de 0'
   const inicio = (paginaAtual.value - 1) * itensPorPagina.value + 1
   const fim = Math.min(paginaAtual.value * itensPorPagina.value, total)
@@ -252,8 +365,9 @@ const paginasVisiveis = computed(() => {
 })
 
 function irParaPagina(p) {
-  if (p === '...' || p < 1 || p > totalPaginas.value) return
+  if (p === '...' || p < 1 || p > totalPaginasServer.value) return
   paginaAtual.value = p
+  carregarParticipantes()
 }
 
 // Atalhos rápidos ao clicar nos cards de KPI
@@ -265,15 +379,59 @@ function toggleFiltroPresenca(tipo) {
   }
 }
 
+function obterIniciais(nome) {
+  if (!nome) return '?'
+  const partes = nome.trim().split(/\s+/).filter(Boolean)
+  if (partes.length === 0) return '?'
+  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase()
+  return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase()
+}
+
 function abrirFotoZoom(p) {
   fotoZoomUrl.value = p.foto_url
   fotoZoomNome.value = p.nome
   showModalFoto.value = true
 }
 
+function abrirModalInfo(p) {
+  participanteInfo.value = p
+  showModalInfo.value = true
+}
+
+async function reenviarIngressoEmail() {
+  if (!participanteIngresso.value) return
+  try {
+    reenviandoEmailIngresso.value = true
+    reenviarEmailSucesso.value = null
+    const res = await fetch(`/api/admin/usuarios/${participanteIngresso.value.id}/email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tipo: 'ingresso' })
+    })
+    const data = await res.json()
+    if (res.ok) {
+      reenviarEmailSucesso.value = { tipo: 'sucesso', msg: data.mensagem || 'Ingresso reenviado com sucesso para o e-mail!' }
+    } else {
+      reenviarEmailSucesso.value = { tipo: 'erro', msg: data.detail || 'Erro ao reenviar ingresso.' }
+    }
+  } catch (err) {
+    reenviarEmailSucesso.value = { tipo: 'erro', msg: 'Falha de comunicação com o servidor.' }
+  } finally {
+    reenviandoEmailIngresso.value = false
+  }
+}
+
+function salvarPDFIngresso(p) {
+  if (!p || !p.ingresso) return
+  const token = p.ingresso.qr_code_token || ''
+  if (!token) return
+  window.open(`/api/meu-ingresso/download-pdf/${token}`, '_blank')
+}
+
 async function abrirModalIngresso(p) {
   participanteIngresso.value = p
   qrDataUrl.value = ''
+  reenviarEmailSucesso.value = null
   showModalIngresso.value = true
   if (p.ingresso?.qr_code_token) {
     try {
@@ -286,15 +444,15 @@ async function abrirModalIngresso(p) {
         }
       })
     } catch (e) {
-      console.error('Erro ao gerar QR code:', e)
+      // Falha ao gerar preview QR code
     }
   }
 }
 
 function abrirModalEmail(p) {
   participanteEmail.value = p
-  emailAssunto.value = 'Informações Importantes - Servindoor 2026'
-  emailMensagem.value = `Olá ${p.nome},\n\nSeu ingresso para o Servindoor 2026 está confirmado!\n\nLote: ${p.ingresso?.lote_nome || 'Geral'}\nToken: ${p.ingresso?.qr_code_token || 'N/A'}\n\nApresente seu QR Code na portaria do evento.\n\nAtenciosamente,\nOrganização Servindoor 2026`
+  emailAssunto.value = 'Informações Importantes - Serv indoor 2026'
+  emailMensagem.value = `Olá ${p.nome},\n\nSeu ingresso para o Serv indoor 2026 está confirmado!\n\nLote: ${p.ingresso?.lote_nome || 'Geral'}\nToken: ${p.ingresso?.qr_code_token || 'N/A'}\n\nApresente seu QR Code na portaria do evento.\n\nAtenciosamente,\nOrganização Serv indoor 2026`
   emailResultado.value = null
   showModalEmail.value = true
 }
@@ -304,17 +462,18 @@ async function enviarEmail() {
   try {
     enviandoEmail.value = true
     emailResultado.value = null
-    const res = await fetch(`/api/admin/participantes/${participanteEmail.value.id}/enviar-email`, {
+    const res = await fetch(`/api/admin/usuarios/${participanteEmail.value.id}/email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        tipo: 'comunicado',
         assunto: emailAssunto.value,
         mensagem: emailMensagem.value
       })
     })
     const data = await res.json()
     if (res.ok) {
-      emailResultado.value = { tipo: 'sucesso', msg: data.message || 'E-mail enviado com sucesso!' }
+      emailResultado.value = { tipo: 'sucesso', msg: data.mensagem || data.message || 'E-mail enviado com sucesso!' }
       setTimeout(() => {
         showModalEmail.value = false
       }, 1500)
@@ -330,25 +489,41 @@ async function enviarEmail() {
 
 function confirmarCancelarIngresso(p) {
   participanteCancelar.value = p
+  motivoCancelamento.value = ''
+  senhaAdminCancelamento.value = ''
   showModalCancelar.value = true
 }
 
 async function executarCancelamento() {
   if (!participanteCancelar.value?.ingresso?.id) return
+  if (!motivoCancelamento.value.trim()) {
+    toast.error('Informe o motivo do cancelamento.')
+    return
+  }
+  if (!senhaAdminCancelamento.value) {
+    toast.error('Informe sua senha de administrador para autorizar.')
+    return
+  }
   try {
     cancelando.value = true
     const res = await fetch(`/api/admin/ingressos/${participanteCancelar.value.ingresso.id}/cancelar`, {
-      method: 'POST'
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        motivo: motivoCancelamento.value.trim(),
+        senha_admin: senhaAdminCancelamento.value
+      })
     })
     if (res.ok) {
+      toast.success('Ingresso cancelado e extravio registrado com sucesso!')
       showModalCancelar.value = false
       await carregarParticipantes()
     } else {
       const data = await res.json()
-      alert(data.detail || 'Erro ao cancelar ingresso.')
+      toast.error(data.detail || 'Erro ao cancelar ingresso.')
     }
   } catch (err) {
-    alert('Erro de conexão.')
+    toast.error('Erro de conexão ao cancelar ingresso.')
   } finally {
     cancelando.value = false
   }
@@ -360,16 +535,14 @@ function exportarCSV() {
 
 onMounted(() => {
   carregarParticipantes()
-  window.addEventListener('click', handleClickOutside)
   pollInterval = setInterval(() => {
-    if (!document.hidden && !showModalIngresso.value && !showModalEmail.value && !showModalCancelar.value && !showModalFoto.value && !showDropdownSec.value) {
+    if (!document.hidden && !showModalIngresso.value && !showModalEmail.value && !showModalCancelar.value && !showModalFoto.value && !showModalExplicacaoStatus.value && !showModalDetalhesStatus.value && !showModalEditar.value && !showModalInfo.value) {
       carregarParticipantes(true)
     }
   }, 2500)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('click', handleClickOutside)
   if (pollInterval) {
     clearInterval(pollInterval)
     pollInterval = null
@@ -381,199 +554,117 @@ onUnmounted(() => {
   <div class="admin-page">
     <div class="app-container">
 
-      <!-- CABEÇALHO DA PÁGINA -->
+      <!-- CABEÇALHO DA PÁGINA COM TIPOGRAFIA QUATTROCENTO CANÔNICA -->
       <div class="admin-header-row">
         <div>
-          <span class="badge-role-tag mb-2">
+          <span class="badge-subtle-primary mb-2">
             <i class="bi bi-ticket-perforated-fill me-1"></i> PAINEL ADMINISTRATIVO
           </span>
-          <h1 class="admin-title font-outfit">Gestão de Participantes</h1>
-          <p class="admin-subtitle">Servidores com ingressos resgatados e controle de fluxo em tempo real.</p>
+          <h1 class="page-title font-quattrocento">Gestão de Participantes</h1>
+          <p class="page-subtitle">Servidores com ingressos resgatados e controle de fluxo em tempo real.</p>
         </div>
 
-        <div class="header-actions">
-          <button type="button" class="btn-action-outline" @click="exportarCSV">
+        <div class="admin-header-actions">
+          <button type="button" class="btn btn-secondary" @click="exportarCSV">
             <i class="bi bi-file-earmark-spreadsheet-fill text-success me-2"></i>
             <span>Exportar CSV</span>
           </button>
-          <button type="button" class="btn-action-glow" @click="carregarParticipantes(false)">
+          <button type="button" class="btn btn-primary" @click="carregarParticipantes(false)">
             <i class="bi bi-arrow-clockwise me-2" :class="{ 'spin-icon': loading }"></i>
             <span>Atualizar</span>
           </button>
         </div>
       </div>
 
-      <!-- ============================================== -->
-      <!-- CARDS DE KPI (REATIVOS AOS FILTROS)            -->
-      <!-- ============================================== -->
-      <div class="metrics-grid">
-        
-        <!-- 1. Total Ingressos Resgatados -->
-        <div
-          class="kpi-card card-blue"
-          :class="{ 'kpi-active': filtroPresenca === 'todos' }"
-          title="Clique para ver todos os participantes filtrados"
+      <!-- CARDS DE KPI (REATIVOS AOS FILTROS) -->
+      <div class="kpi-grid">
+        <KpiCard
+          title="Ingressos Filtrados"
+          :value="kpis.total_ingressos_resgatados"
+          subtitle="Total no recorte atual"
+          icon="bi bi-ticket-perforated-fill"
+          variant="cyan"
+          :clickable="true"
+          :active="filtroPresenca === 'todos'"
           @click="filtroPresenca = 'todos'"
-        >
-          <div class="kpi-icon-box bg-blue">
-            <i class="bi bi-ticket-perforated-fill"></i>
-          </div>
-          <div class="kpi-info">
-            <span class="kpi-label">Ingressos Filtrados</span>
-            <div class="kpi-value font-outfit">{{ kpis.total_ingressos_resgatados }}</div>
-            <span class="kpi-sublabel">Total no recorte atual</span>
-          </div>
-        </div>
+        />
 
-        <!-- 2. Presentes no Evento (DENTRO) -->
-        <div
-          class="kpi-card card-green"
-          :class="{ 'kpi-active': filtroPresenca === 'presente' }"
-          title="Clique para filtrar apenas os presentes"
+        <KpiCard
+          title="Presentes no Evento"
+          :value="kpis.total_presentes"
+          subtitle="Na área do evento"
+          icon="bi bi-check-circle-fill"
+          variant="emerald"
+          :clickable="true"
+          :active="filtroPresenca === 'presente'"
           @click="toggleFiltroPresenca('presente')"
-        >
-          <div class="kpi-icon-box bg-green">
-            <i class="bi bi-check-circle-fill"></i>
-          </div>
-          <div class="kpi-info">
-            <span class="kpi-label">Presentes no Evento</span>
-            <div class="kpi-value font-outfit text-success">{{ kpis.total_presentes }}</div>
-            <span class="kpi-sublabel text-success">
-              <i class="bi bi-circle-fill dot-pulse me-1"></i> Na área do evento
-            </span>
-          </div>
-        </div>
+        />
 
-        <!-- 3. Fora do Evento (FORA) -->
-        <div
-          class="kpi-card card-orange"
-          :class="{ 'kpi-active': filtroPresenca === 'fora' }"
-          title="Clique para filtrar apenas os fora do evento"
+        <KpiCard
+          title="Fora do Evento"
+          :value="kpis.total_fora"
+          subtitle="Ainda não entraram ou saíram"
+          icon="bi bi-geo-alt-fill"
+          variant="warning"
+          :clickable="true"
+          :active="filtroPresenca === 'fora'"
           @click="toggleFiltroPresenca('fora')"
-        >
-          <div class="kpi-icon-box bg-orange">
-            <i class="bi bi-geo-alt-fill"></i>
-          </div>
-          <div class="kpi-info">
-            <span class="kpi-label">Fora do Evento</span>
-            <div class="kpi-value font-outfit text-warning">{{ kpis.total_fora }}</div>
-            <span class="kpi-sublabel">Ainda não entraram ou saíram</span>
-          </div>
-        </div>
-
+        />
       </div>
 
-      <!-- ============================================== -->
-      <!-- BARRA DE FERRAMENTAS E FILTROS (INCLUINDO SEC) -->
-      <!-- ============================================== -->
+      <!-- BARRA DE FILTROS CANÔNICA -->
       <div class="filter-card">
         <div class="filter-grid">
-          
           <!-- 1. Campo de Busca Geral -->
           <div class="search-box">
             <i class="bi bi-search search-icon"></i>
             <input
               v-model="busca"
               type="text"
-              class="form-control filter-input"
+              class="form-control"
               placeholder="Buscar por Nome, CPF, Setor ou Token..."
             />
-            <button v-if="busca" type="button" class="btn-clear-search" @click="busca = ''">
+            <button v-if="busca" type="button" class="btn-clear-search" title="Limpar busca" @click="busca = ''">
               <i class="bi bi-x-circle-fill"></i>
             </button>
           </div>
 
           <!-- 2. Multi-Select de Secretarias -->
-          <div id="sec-multiselect-container" class="multiselect-box">
-            <button
-              type="button"
-              class="btn-multiselect-toggle"
-              :class="{ 'has-selection': secretariasSelecionadas.length > 0 }"
-              @click="showDropdownSec = !showDropdownSec"
-            >
-              <i class="bi bi-building me-2 text-cyan"></i>
-              <span class="multiselect-label">{{ labelSecretarias }}</span>
-              <span v-if="secretariasSelecionadas.length > 0" class="badge-selection-count">
-                {{ secretariasSelecionadas.length }}
-              </span>
-              <i class="bi bi-chevron-down ms-auto toggle-icon" :class="{ 'rotate': showDropdownSec }"></i>
-            </button>
-
-            <!-- Menu Flutuante do Multi-Select -->
-            <div v-if="showDropdownSec" class="multiselect-dropdown-menu">
-              <!-- Busca de Secretarias -->
-              <div class="dropdown-search-wrapper">
-                <i class="bi bi-search dropdown-search-icon"></i>
-                <input
-                  v-model="buscaSec"
-                  type="text"
-                  class="form-control dropdown-search-input"
-                  placeholder="Filtrar secretarias..."
-                  @click.stop
-                />
-              </div>
-
-              <!-- Ações Rápidas -->
-              <div class="dropdown-actions-row">
-                <button type="button" class="btn-quick-link" @click.stop="selecionarTodasSecretarias">
-                  Selecionar Todas
-                </button>
-                <button
-                  v-if="secretariasSelecionadas.length > 0"
-                  type="button"
-                  class="btn-quick-link text-danger"
-                  @click.stop="limparSecretarias"
-                >
-                  Limpar ({{ secretariasSelecionadas.length }})
-                </button>
-              </div>
-
-              <!-- Lista de Secretarias com Checkbox -->
-              <div class="dropdown-items-list custom-scrollbar">
-                <label
-                  v-for="s in secretariasFiltradas"
-                  :key="s.id"
-                  class="dropdown-checkbox-item"
-                  @click.stop
-                >
-                  <input
-                    type="checkbox"
-                    :checked="secretariasSelecionadas.includes(s.id)"
-                    @change="toggleSecretaria(s.id)"
-                  />
-                  <span class="sec-name">{{ s.nome }}</span>
-                  <span class="sec-count">{{ s.count }}</span>
-                </label>
-                <div v-if="!secretariasFiltradas.length" class="p-3 text-center text-muted small">
-                  Nenhuma secretaria encontrada
-                </div>
-              </div>
-            </div>
+          <div class="select-box">
+            <DropdownSelect
+              v-model="secretariasSelecionadas"
+              :options="optionsSecretarias"
+              placeholder="Secretarias: Todas"
+              :multiple="true"
+              :searchable="true"
+              searchPlaceholder="Filtrar secretarias..."
+              icon="bi bi-building"
+            />
           </div>
 
           <!-- 3. Filtro de Lote -->
           <div class="select-box">
-            <select v-model="filtroLote" class="form-select filter-select">
-              <option value="">Todos os Lotes</option>
-              <option v-for="l in lotesDisponiveis" :key="l.id" :value="l.id">
-                {{ l.nome }}
-              </option>
-            </select>
+            <DropdownSelect
+              v-model="filtroLote"
+              :options="optionsLotes"
+              placeholder="Todos os Lotes"
+              icon="bi bi-layers"
+            />
           </div>
 
-          <!-- 4. Filtro de Presença -->
+          <!-- 4. Filtro de Status no Evento -->
           <div class="select-box">
-            <select v-model="filtroPresenca" class="form-select filter-select">
-              <option value="todos">Presença: Todos</option>
-              <option value="presente">🟢 Apenas Presentes (Dentro)</option>
-              <option value="fora">⚪ Apenas Fora do Evento</option>
-            </select>
+            <DropdownSelect
+              v-model="filtroPresenca"
+              :options="optionsPresenca"
+              placeholder="Status: Todos"
+              icon="bi bi-funnel"
+            />
           </div>
-
         </div>
 
         <!-- Tags ativas de secretarias selecionadas -->
-        <div v-if="secretariasSelecionadas.length > 0" class="active-tags-row mt-3">
+        <div v-if="secretariasSelecionadas.length > 0" class="active-tags-row">
           <span class="text-muted small me-2">Filtrando por:</span>
           <span
             v-for="secId in secretariasSelecionadas"
@@ -581,7 +672,7 @@ onUnmounted(() => {
             class="active-sec-pill"
           >
             <span>{{ secretariasDisponiveis.find(s => s.id === secId)?.nome || secId }}</span>
-            <button type="button" class="btn-remove-tag" @click="toggleSecretaria(secId)">
+            <button type="button" class="btn-remove-tag" title="Remover filtro" @click="toggleSecretaria(secId)">
               <i class="bi bi-x"></i>
             </button>
           </span>
@@ -591,157 +682,225 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ============================================== -->
-      <!-- TABELA DE PARTICIPANTES (COMPACTA & ALTA ESCALA)-->
-      <!-- ============================================== -->
+      <!-- TABELA DE PARTICIPANTES CANÔNICA -->
       <div class="table-card">
-        
         <div class="table-header-box">
-          <div class="table-title font-outfit">
+          <h2 class="table-title">
             <i class="bi bi-people-fill text-cyan me-2"></i>
             <span>Participantes Cadastrados</span>
-            <span class="badge-count">{{ participantesFiltrados.length }}</span>
-          </div>
+            <span class="table-badge-count">{{ participantesFiltrados.length }}</span>
+          </h2>
 
           <div class="table-header-controls">
             <span class="text-muted small me-2">Exibir:</span>
-            <select v-model="itensPorPagina" class="select-page-size">
+            <select v-model="itensPorPagina" class="form-select form-select-sm select-page-size">
               <option :value="10">10</option>
               <option :value="25">25</option>
               <option :value="50">50</option>
-              <option :value="100">100</option>
             </select>
           </div>
         </div>
 
-        <div v-if="loading" class="text-center py-5 text-muted">
-          <div class="spinner-border text-cyan mb-3"></div>
-          <p class="font-outfit">Sincronizando participantes...</p>
+        <div v-if="loading" class="table-loading-state">
+          <div class="spinner-border text-primary mb-3"></div>
+          <p class="font-outfit text-muted">Sincronizando participantes...</p>
         </div>
 
-        <div v-else-if="!participantesFiltrados.length" class="empty-state-box py-5 text-center">
-          <i class="bi bi-inbox fs-1 mb-2 d-block text-muted"></i>
-          <p class="text-muted">Nenhum participante encontrado com os filtros aplicados.</p>
+        <div v-else-if="!participantes.length" class="table-empty-state">
+          <i class="bi bi-inbox"></i>
+          <p>Nenhum participante encontrado com os filtros aplicados.</p>
         </div>
 
-        <div v-else class="table-responsive">
-          <table class="custom-table">
-            <thead>
-              <tr>
-                <th style="width: 50px;">Foto</th>
-                <th>Nome / Vínculo</th>
-                <th style="width: 140px;">CPF</th>
-                <th>Secretaria / Setor</th>
-                <th>Lote / Ingresso</th>
-                <th>Status no Evento</th>
-                <th class="text-end" style="width: 130px;">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="p in participantesPaginados" :key="p.id">
-                
-                <!-- Foto -->
-                <td>
-                  <div class="avatar-cell" title="Clique para ampliar" @click="p.foto_url && abrirFotoZoom(p)">
-                    <img v-if="p.foto_url" :src="p.foto_url" alt="Foto" class="avatar-img" />
-                    <div v-else class="avatar-placeholder">
-                      <i class="bi bi-person-fill"></i>
-                    </div>
-                  </div>
-                </td>
+                <!-- GRID DE CARDS CANÔNICO DE PARTICIPANTES V2 -->
+        <div v-else class="entity-cards-grid">
+          <div
+            v-for="p in participantesPaginados"
+            :key="p.id"
+            :class="['entity-card', 'entity-card--' + (p.situacao_evento?.status_slug || 'neutral')]"
+          >
+            <!-- 1. Topo: Lote / Ingresso à esquerda, Status no Evento à direita -->
+            <div class="entity-card-top-bar">
+              <div>
+                <span v-if="p.ingresso" class="badge-subtle-warning">
+                  <i class="bi bi-ticket-perforated me-1"></i>{{ p.ingresso.lote_nome }}
+                </span>
+                <span v-else class="status-pill status-pill--neutral">
+                  <i class="bi bi-ticket me-1"></i>Sem Ingresso
+                </span>
+              </div>
 
-                <!-- Nome / Vínculo -->
-                <td>
-                  <div class="participant-compact-name">
-                    <strong class="participant-name text-white">{{ p.nome }}</strong>
-                    <span class="vinculo-tag-compact">{{ p.vinculo || 'Servidor' }}</span>
-                  </div>
-                </td>
+              <div class="d-flex align-items-center gap-1">
+                <span
+                  class="status-pill"
+                  :class="'status-pill--' + (p.situacao_evento?.status_slug || 'neutral')"
+                >
+                  <i :class="(p.situacao_evento?.icon_class || 'bi bi-circle')"></i>
+                  <span>{{ p.situacao_evento?.label }}</span>
+                </span>
+                <button
+                  v-if="p.situacao_evento?.detalhes"
+                  type="button"
+                  class="btn-inline-info-square"
+                  :title="'Ver detalhes: ' + p.situacao_evento?.label"
+                  @click="abrirModalDetalhesStatus(p)"
+                >
+                  <i class="bi bi-info-circle-fill"></i>
+                </button>
+              </div>
+            </div>
 
-                <!-- CPF (Sem quebra de linha) -->
-                <td>
-                  <span class="cpf-badge-compact font-monospace">{{ p.cpf_formatado }}</span>
-                </td>
+            <!-- 2. Identidade: Avatar (ou Iniciais) + Nome Completo e CPF em Largura Total -->
+            <div class="entity-card-identity">
+              <div
+                class="entity-card-avatar"
+                :title="p.foto_url ? 'Clique para ampliar foto' : 'Foto não cadastrada'"
+                @click="p.foto_url && abrirFotoZoom(p)"
+              >
+                <img
+                  v-if="p.foto_url"
+                  :src="p.foto_url"
+                  alt="Foto do participante"
+                  class="entity-card-avatar-img"
+                  @error="(e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; }"
+                />
+                <div
+                  class="entity-card-avatar-fallback"
+                  :style="{ display: p.foto_url ? 'none' : 'flex' }"
+                >
+                  <span>{{ obterIniciais(p.nome) }}</span>
+                </div>
+              </div>
 
-                <!-- Secretaria / Setor -->
-                <td>
-                  <div class="sec-compact-box">
-                    <span class="sec-tag-compact">{{ p.secretaria?.nome || 'Geral' }}</span>
-                    <span v-if="p.setor" class="setor-text-compact text-muted">{{ p.setor }}</span>
-                  </div>
-                </td>
+              <div class="entity-card-info">
+                <h3 class="entity-card-title">{{ p.nome }}</h3>
+                <div class="entity-card-sub">
+                  <span class="table-code-pill font-monospace">{{ p.cpf_formatado }}</span>
+                  <span class="table-tag">{{ p.vinculo || 'Servidor' }}</span>
+                </div>
+              </div>
+            </div>
 
-                <!-- Lote / Ingresso -->
-                <td>
-                  <div class="lote-compact-box">
-                    <template v-if="p.ingresso">
-                      <span class="badge-lote-compact">{{ p.ingresso.lote_nome }}</span>
-                      <span class="token-code-compact font-monospace">
-                        {{ p.ingresso.qr_code_token.slice(0, 8) }}...
-                      </span>
-                    </template>
-                    <span v-else class="text-muted small">Sem Ingresso</span>
-                  </div>
-                </td>
+            <!-- 3. Metadados: Hierarquia Visual Limpa (Secretaria/Setor & Lote/Horário) -->
+            <div class="entity-meta-grid">
+              <div class="entity-meta-item">
+                <span class="meta-label">Secretaria / Setor</span>
+                <span class="meta-value" :title="p.secretaria?.nome || 'Geral'">
+                  {{ p.secretaria?.nome || 'Geral' }}
+                </span>
+                <span v-if="p.setor" class="meta-sub" :title="p.setor">
+                  {{ p.setor }}
+                </span>
+              </div>
 
-                <!-- Status no Evento -->
-                <td>
-                  <span class="status-badge-compact" :class="p.situacao_evento?.badge_class">
-                    <i :class="p.situacao_evento?.dentro ? 'bi bi-check-circle-fill me-1 text-success' : 'bi bi-geo-alt me-1 text-warning'"></i>
-                    <span>{{ p.situacao_evento?.label }}</span>
+              <div class="entity-meta-item">
+                <span class="meta-label">Situação do Ingresso</span>
+                <template v-if="p.ingresso">
+                  <span v-if="isIngressoInvalido(p)" class="status-badge bg-danger">
+                    <i class="bi bi-x-circle-fill me-1"></i> Cancelado
                   </span>
-                </td>
+                  <span v-else class="status-badge bg-success">
+                    <i class="bi bi-check-circle-fill me-1"></i> Emitido
+                  </span>
+                  <span v-if="p.situacao_evento?.dentro" class="meta-sub text-success mt-1">
+                    <i class="bi bi-check-circle-fill me-1"></i>Check-in Confirmado
+                  </span>
+                  <span v-else-if="!isIngressoInvalido(p)" class="meta-sub mt-1">
+                    Aguardando entrada
+                  </span>
+                </template>
+                <template v-else>
+                  <span class="status-badge bg-warning">
+                    <i class="bi bi-hourglass-split me-1"></i> Pendente
+                  </span>
+                  <span class="meta-sub mt-1">Resgate não realizado</span>
+                </template>
+              </div>
+            </div>
 
-                <!-- Ações -->
-                <td class="text-end">
-                  <div class="action-buttons-group">
-                    <button
-                      v-if="p.ingresso"
-                      type="button"
-                      class="btn-action-icon-compact btn-icon-cyan"
-                      title="Ver Ingresso / QR Code"
-                      @click="abrirModalIngresso(p)"
-                    >
-                      <i class="bi bi-qr-code"></i>
-                    </button>
+            <!-- 4. Rodapé: Ação Principal à Esquerda, Secundárias e Destrutiva Isolada -->
+            <div class="entity-card-footer">
+              <div class="actions-left">
+                <button
+                  v-if="p.ingresso && !isIngressoInvalido(p)"
+                  type="button"
+                  class="btn-card-primary"
+                  title="Visualizar Ingresso Oficial com QR Code"
+                  @click="abrirModalIngresso(p)"
+                >
+                  <i class="bi bi-qr-code"></i>
+                  <span>Ingresso</span>
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="btn-card-secondary"
+                  title="Ver ficha cadastral completa"
+                  @click="abrirModalInfo(p)"
+                >
+                  <i class="bi bi-person-vcard"></i>
+                  <span>Ficha</span>
+                </button>
+              </div>
 
-                    <button
-                      type="button"
-                      class="btn-action-icon-compact btn-icon-amber"
-                      title="Enviar E-mail com Ingresso"
-                      @click="abrirModalEmail(p)"
-                    >
-                      <i class="bi bi-envelope-fill"></i>
-                    </button>
+              <div class="actions-right">
+                <!-- Ver Ficha: em Verde (--emerald) -->
+                <button
+                  v-if="p.ingresso && !isIngressoInvalido(p)"
+                  type="button"
+                  class="btn-action-icon btn-action-icon--emerald"
+                  title="Ficha Completa do Participante"
+                  @click="abrirModalInfo(p)"
+                >
+                  <i class="bi bi-person-vcard"></i>
+                </button>
 
-                    <button
-                      v-if="p.ingresso && isAdminGeral"
-                      type="button"
-                      class="btn-action-icon-compact btn-icon-danger"
-                      title="Cancelar Ingresso (Apenas Admin Geral)"
-                      @click="confirmarCancelarIngresso(p)"
-                    >
-                      <i class="bi bi-trash-fill"></i>
-                    </button>
-                  </div>
-                </td>
+                <!-- Editar: em Amarelo (--amber), desabilitado se extraviado -->
+                <button
+                  type="button"
+                  class="btn-action-icon btn-action-icon--amber"
+                  :disabled="isIngressoInvalido(p)"
+                  :title="isIngressoInvalido(p) ? 'Ingresso extraviado/cancelado não permite edição de dados' : 'Editar Dados do Participante'"
+                  @click="!isIngressoInvalido(p) && abrirModalEditar(p)"
+                >
+                  <i class="bi bi-pencil-square"></i>
+                </button>
 
-              </tr>
-            </tbody>
-          </table>
+                <!-- Email: em Amarelo (--amber), desabilitado se extraviado -->
+                <button
+                  type="button"
+                  class="btn-action-icon btn-action-icon--amber"
+                  :disabled="isIngressoInvalido(p)"
+                  :title="isIngressoInvalido(p) ? 'Ingresso extraviado/cancelado' : 'Enviar E-mail com Ingresso'"
+                  @click="!isIngressoInvalido(p) && abrirModalEmail(p)"
+                >
+                  <i class="bi bi-envelope-fill"></i>
+                </button>
+
+                <span v-if="p.ingresso && !p.ingresso.cancelado" class="action-divider"></span>
+
+                <!-- Lixeira: em Vermelho (--danger) -->
+                <button
+                  v-if="p.ingresso && !p.ingresso.cancelado"
+                  type="button"
+                  class="btn-action-icon btn-action-icon--danger"
+                  title="Cancelar Ingresso (Extravio Administrativo)"
+                  @click="confirmarCancelarIngresso(p)"
+                >
+                  <i class="bi bi-trash3-fill"></i>
+                </button>
+              </div>
+            </div>
+
+          </div>
         </div>
 
-        <!-- ============================================== -->
-        <!-- RODAPÉ COM PAGINAÇÃO DINÂMICA                  -->
-        <!-- ============================================== -->
+        <!-- RODAPÉ DE PAGINAÇÃO CANÔNICO -->
         <div v-if="participantesFiltrados.length > 0" class="pagination-footer">
-          
           <div class="pagination-info">
-            <span class="text-muted">Mostrando <strong>{{ infoPaginacao }}</strong></span>
+            Mostrando <strong>{{ infoPaginacao }}</strong>
           </div>
 
           <div class="pagination-buttons">
-            <!-- Primeira Página -->
             <button
               type="button"
               class="btn-page-nav"
@@ -752,7 +911,6 @@ onUnmounted(() => {
               <i class="bi bi-chevron-double-left"></i>
             </button>
 
-            <!-- Página Anterior -->
             <button
               type="button"
               class="btn-page-nav"
@@ -763,20 +921,18 @@ onUnmounted(() => {
               <i class="bi bi-chevron-left"></i>
             </button>
 
-            <!-- Números das Páginas -->
             <button
               v-for="(p, idx) in paginasVisiveis"
               :key="idx"
               type="button"
               class="btn-page-number"
-              :class="{ 'active': p === paginaAtual, 'dots': p === '...' }"
+              :class="{ 'is-active': p === paginaAtual, 'is-dots': p === '...' }"
               :disabled="p === '...'"
               @click="irParaPagina(p)"
             >
               {{ p }}
             </button>
 
-            <!-- Próxima Página -->
             <button
               type="button"
               class="btn-page-nav"
@@ -787,7 +943,6 @@ onUnmounted(() => {
               <i class="bi bi-chevron-right"></i>
             </button>
 
-            <!-- Última Página -->
             <button
               type="button"
               class="btn-page-nav"
@@ -798,26 +953,12 @@ onUnmounted(() => {
               <i class="bi bi-chevron-double-right"></i>
             </button>
           </div>
-
         </div>
-
       </div>
 
     </div>
 
-    <!-- MODAL FOTO ZOOM -->
-    <Modal :show="showModalFoto" :title="fotoZoomNome" icon="bi-image" @close="showModalFoto = false">
-      <div class="text-center p-3">
-        <img :src="fotoZoomUrl" alt="Foto do Participante" class="zoom-photo-img" />
-      </div>
-      <template #footer>
-        <button type="button" class="btn-action-outline w-100" @click="showModalFoto = false">
-          Fechar
-        </button>
-      </template>
-    </Modal>
-
-    <!-- MODAL VER INGRESSO / QR CODE -->
+    <!-- MODAL 1: VER INGRESSO / QR CODE -->
     <Modal
       :show="showModalIngresso"
       title="Ingresso do Participante"
@@ -828,37 +969,80 @@ onUnmounted(() => {
         <h4 class="font-outfit text-white mb-2">{{ participanteIngresso.nome }}</h4>
         <p class="text-muted small mb-4">CPF: {{ participanteIngresso.cpf_formatado }}</p>
 
-        <div class="qr-box-preview">
-          <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR Code" class="qr-preview-img" />
+        <div class="modal-qr-preview">
+          <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR Code Oficial" class="modal-qr-img" />
           <div v-else class="spinner-border text-primary my-4"></div>
         </div>
 
         <div class="mt-4">
-          <span class="badge-lote-compact mb-2">{{ participanteIngresso.ingresso?.lote_nome }}</span>
-          <p class="font-monospace text-muted small mt-3">
-            Token: <strong>{{ participanteIngresso.ingresso?.qr_code_token }}</strong>
-          </p>
+          <span class="badge-subtle-warning mb-2">{{ participanteIngresso.ingresso?.lote_nome }}</span>
+          <div class="ticket-token-display mt-3">
+            <span class="token-title">Token Oficial:</span>
+            <span class="token-value font-monospace">{{ participanteIngresso.ingresso?.qr_code_token }}</span>
+          </div>
+        </div>
+
+        <div v-if="reenviarEmailSucesso" class="modal-alert-card mt-3" :class="reenviarEmailSucesso.tipo === 'sucesso' ? 'modal-alert-card--success' : 'modal-alert-card--danger'">
+          <i :class="reenviarEmailSucesso.tipo === 'sucesso' ? 'bi bi-check-circle-fill me-2' : 'bi bi-exclamation-triangle-fill me-2'"></i>
+          {{ reenviarEmailSucesso.msg }}
         </div>
       </div>
 
       <template #footer>
-        <button type="button" class="btn-action-outline w-100" @click="showModalIngresso = false">
-          Fechar
-        </button>
+        <div class="modal-footer-grid">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="reenviandoEmailIngresso"
+            title="Enviar novamente o ingresso para o e-mail cadastrado"
+            @click="reenviarIngressoEmail"
+          >
+            <i class="bi bi-envelope-arrow-up me-1" :class="{ 'spin-icon': reenviandoEmailIngresso }"></i>
+            <span>{{ reenviandoEmailIngresso ? 'Enviando...' : 'Reenviar E-mail' }}</span>
+          </button>
+
+          <button
+            type="button"
+            class="btn btn-primary"
+            title="Baixar como PDF no formato oficial do ingresso"
+            @click="salvarPDFIngresso(participanteIngresso)"
+          >
+            <i class="bi bi-file-earmark-pdf-fill me-1"></i>
+            <span>Baixar como PDF</span>
+          </button>
+
+          <a
+            v-if="participanteIngresso?.ingresso?.qr_code_token"
+            :href="'/api/meu-ingresso/download-imagem/' + participanteIngresso.ingresso.qr_code_token"
+            target="_blank"
+            download
+            class="btn btn-secondary text-decoration-none"
+            title="Baixar imagem PNG do ingresso"
+          >
+            <i class="bi bi-download me-1"></i>
+            <span>Baixar PNG</span>
+          </a>
+
+          <button type="button" class="btn btn-secondary" @click="showModalIngresso = false">
+            Fechar
+          </button>
+        </div>
       </template>
     </Modal>
 
-    <!-- MODAL ENVIAR E-MAIL -->
+    <!-- MODAL 2: ENVIAR E-MAIL -->
     <Modal
       :show="showModalEmail"
       title="Enviar E-mail ao Participante"
-      icon="bi-envelope"
+      icon="bi-envelope-at-fill"
+      maxWidth="620px"
       @close="showModalEmail = false"
     >
-      <div v-if="participanteEmail" class="email-modal-body p-2">
+      <div v-if="participanteEmail" class="p-2">
         <div class="form-group mb-3">
           <label class="form-label text-muted small">Destinatário:</label>
           <div class="recipient-badge">
+            <i class="bi bi-person-fill text-cyan me-2"></i>
             <strong class="text-white">{{ participanteEmail.nome }}</strong>
             <span class="text-muted ms-2">&lt;{{ participanteEmail.email }}&gt;</span>
           </div>
@@ -866,25 +1050,26 @@ onUnmounted(() => {
 
         <div class="form-group mb-3">
           <label class="form-label text-muted small">Assunto:</label>
-          <input v-model="emailAssunto" type="text" class="form-control filter-input" />
+          <input v-model="emailAssunto" type="text" class="form-control" />
         </div>
 
         <div class="form-group mb-3">
           <label class="form-label text-muted small">Mensagem:</label>
-          <textarea v-model="emailMensagem" rows="6" class="form-control filter-input font-monospace"></textarea>
+          <textarea v-model="emailMensagem" rows="8" class="form-control email-textarea" placeholder="Escreva a mensagem aqui..."></textarea>
         </div>
 
-        <div v-if="emailResultado" class="alert mt-3" :class="emailResultado.tipo === 'sucesso' ? 'alert-success' : 'alert-danger'">
+        <div v-if="emailResultado" class="modal-alert-card mt-3" :class="emailResultado.tipo === 'sucesso' ? 'modal-alert-card--success' : 'modal-alert-card--danger'">
+          <i :class="emailResultado.tipo === 'sucesso' ? 'bi bi-check-circle-fill me-2' : 'bi bi-exclamation-triangle-fill me-2'"></i>
           {{ emailResultado.msg }}
         </div>
       </div>
 
       <template #footer>
         <div class="d-flex gap-3 w-100">
-          <button type="button" class="btn-action-outline flex-1" @click="showModalEmail = false">
+          <button type="button" class="btn btn-secondary flex-1" @click="showModalEmail = false">
             Cancelar
           </button>
-          <button type="button" class="btn-action-glow flex-1" :disabled="enviandoEmail" @click="enviarEmail">
+          <button type="button" class="btn btn-primary flex-1" :disabled="enviandoEmail" @click="enviarEmail">
             <span v-if="enviandoEmail" class="spinner-border spinner-border-sm me-2"></span>
             <span>{{ enviandoEmail ? 'Enviando...' : 'Enviar E-mail' }}</span>
           </button>
@@ -892,34 +1077,569 @@ onUnmounted(() => {
       </template>
     </Modal>
 
-    <!-- MODAL CANCELAR INGRESSO -->
+    <!-- MODAL 3: CANCELAR INGRESSO -->
     <Modal
       :show="showModalCancelar"
-      title="Cancelar Ingresso"
+      title="Cancelar Ingresso (Extravio Administrativo)"
       icon="bi-exclamation-triangle"
+      maxWidth="560px"
       @close="showModalCancelar = false"
     >
-      <div v-if="participanteCancelar" class="p-3 text-center">
-        <i class="bi bi-trash3-fill text-danger fs-1 mb-3 d-block"></i>
-        <h4 class="font-outfit text-white mb-2">Confirmar Cancelamento</h4>
-        <p class="text-muted">
-          Deseja realmente cancelar o ingresso de <strong>{{ participanteCancelar.nome }}</strong>?
-        </p>
-        <p class="text-danger small mt-3">
-          A vaga será liberada imediatamente de volta para o lote.
-        </p>
+      <div v-if="participanteCancelar" class="p-3 text-start">
+        <div class="text-center mb-3">
+          <i class="bi bi-slash-circle-fill text-danger fs-1 mb-2 d-block"></i>
+          <h4 class="font-outfit text-white mb-1">Confirmar Cancelamento</h4>
+          <p class="text-muted small">
+            Participante: <strong class="text-white">{{ participanteCancelar.nome }}</strong> (CPF: {{ participanteCancelar.cpf_formatado }})
+          </p>
+        </div>
+
+        <div class="modal-alert-card modal-alert-card--danger mb-3">
+          <i class="bi bi-shield-lock-fill text-danger fs-4 flex-shrink-0"></i>
+          <div class="small">
+            <strong class="text-danger d-block">Ação Irreversível com Bloqueio de CPF</strong>
+            O ingresso será cancelado administrativamente como <strong>Ingresso Extraviado</strong>, a vaga será devolvida ao lote e o CPF será <strong>permanentemente bloqueado</strong> para resgate em outros lotes.
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label text-white small fw-bold mb-1">
+            <i class="bi bi-chat-left-text text-danger me-1"></i> Motivo do Cancelamento <span class="text-danger">*</span>
+          </label>
+          <textarea
+            v-model="motivoCancelamento"
+            class="form-control"
+            rows="3"
+            placeholder="Informe detalhadamente a justificativa para o cancelamento deste ingresso..."
+            required
+          ></textarea>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label text-white small fw-bold mb-1">
+            <i class="bi bi-key-fill text-warning me-1"></i> Sua Senha de Administrador <span class="text-danger">*</span>
+          </label>
+          <input
+            v-model="senhaAdminCancelamento"
+            type="password"
+            class="form-control"
+            placeholder="Digite sua senha de login para confirmar"
+            required
+            autocomplete="current-password"
+            @keyup.enter="executarCancelamento"
+          />
+        </div>
       </div>
 
       <template #footer>
-        <div class="d-flex gap-3 w-100">
-          <button type="button" class="btn-action-outline flex-1" @click="showModalCancelar = false">
-            Manter Ingresso
+        <div class="d-flex gap-2 w-100">
+          <button type="button" class="btn btn-secondary flex-1" :disabled="cancelando" @click="showModalCancelar = false">
+            Voltar / Cancelar
           </button>
-          <button type="button" class="btn-danger flex-1" :disabled="cancelando" @click="executarCancelamento">
+          <button type="button" class="btn btn-danger flex-1" :disabled="cancelando" @click="executarCancelamento">
             <span v-if="cancelando" class="spinner-border spinner-border-sm me-2"></span>
-            <span>{{ cancelando ? 'Cancelando...' : 'Sim, Cancelar' }}</span>
+            <i v-else class="bi bi-shield-x me-1"></i>
+            <span>{{ cancelando ? 'Processando...' : 'Confirmar Cancelamento' }}</span>
           </button>
         </div>
+      </template>
+    </Modal>
+
+    <!-- MODAL 4: GUIA DE STATUS DO EVENTO -->
+    <Modal
+      :show="showModalExplicacaoStatus"
+      title="Guia de Status do Evento"
+      icon="bi-info-circle"
+      maxWidth="620px"
+      @close="showModalExplicacaoStatus = false"
+    >
+      <div class="p-1">
+        <p class="text-muted small mb-3">
+          Compreenda o significado de cada status exibido na tabela de participantes e o ciclo de vida do participante no evento:
+        </p>
+
+        <div class="d-flex flex-column gap-3">
+          <div class="status-guide-card">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <span class="badge-status-compact bg-info">
+                <i class="bi bi-hourglass-split me-1"></i> Em Validação
+              </span>
+              <span class="badge-subtle-primary small">Servidor em Análise</span>
+            </div>
+            <p class="status-guide-text mb-0">
+              O participante realizou o cadastro de validação de servidor público, mas seus documentos ainda estão sob análise. Ele <strong>não possui QR Code ativo</strong> até a validação ser aprovada.
+            </p>
+          </div>
+
+          <div class="status-guide-card">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <span class="badge-status-compact bg-danger">
+                <i class="bi bi-x-octagon-fill me-1"></i> Validação Recusada
+              </span>
+              <span class="badge-subtle-danger small">Identificado como Não-Servidor</span>
+            </div>
+            <p class="status-guide-text mb-0">
+              A equipe de validação analisou os comprovantes e <strong>recusou a solicitação</strong> por inconsistência ou por não comprovação de vínculo público. O CPF foi bloqueado para novos resgates.
+            </p>
+          </div>
+
+          <div class="status-guide-card">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <span class="badge-status-compact bg-success">
+                <i class="bi bi-check-circle-fill me-1"></i> Presente no Evento
+              </span>
+              <span class="badge-subtle-success small">Dentro do Espaço</span>
+            </div>
+            <p class="status-guide-text mb-0">
+              O participante compareceu à portaria, teve seu QR Code lido e validado com sucesso e <strong>encontra-se atualmente dentro do evento</strong>.
+            </p>
+          </div>
+
+          <div class="status-guide-card">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <span class="badge-status-compact bg-warning">
+                <i class="bi bi-geo-alt-fill me-1"></i> Fora do Evento
+              </span>
+              <span class="badge-subtle-warning small">Não Ingressou ou Saiu</span>
+            </div>
+            <p class="status-guide-text mb-0">
+              O participante possui ingresso ativo e emitido, mas ainda não deu entrada na portaria, ou registrou saída temporária/definitiva do espaço.
+            </p>
+          </div>
+
+          <div class="status-guide-card">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <span class="badge-status-compact bg-secondary">
+                <i class="bi bi-slash-circle me-1"></i> Ingresso Cancelado
+              </span>
+              <span class="badge-subtle-secondary small">Desistência Voluntária</span>
+            </div>
+            <p class="status-guide-text mb-0">
+              O participante solicitou o cancelamento voluntário do seu ingresso por meio do autoatendimento. A vaga foi liberada e o QR Code invalidado.
+            </p>
+          </div>
+
+          <div class="status-guide-card">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <span class="badge-status-compact bg-danger">
+                <i class="bi bi-slash-circle-fill me-1"></i> Ingresso Extraviado
+              </span>
+              <span class="badge-subtle-danger small">Cancelamento Administrativo</span>
+            </div>
+            <p class="status-guide-text mb-0">
+              O ingresso foi cancelado diretamente por um administrador por motivo de extravio ou irregularidade. O CPF foi permanentemente bloqueado.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="d-flex justify-content-end w-100">
+          <button type="button" class="btn btn-primary px-4" @click="showModalExplicacaoStatus = false">
+            <i class="bi bi-check2 me-1"></i> Entendido
+          </button>
+        </div>
+      </template>
+    </Modal>
+
+    <!-- MODAL 5: DETALHES DE OCORRÊNCIA -->
+    <Modal
+      :show="showModalDetalhesStatus"
+      :title="participanteStatusDetalhes?.situacao_evento?.label || 'Detalhes da Ocorrência'"
+      icon="bi-shield-exclamation"
+      maxWidth="580px"
+      @close="showModalDetalhesStatus = false"
+    >
+      <div v-if="participanteStatusDetalhes" class="p-1">
+        <div class="modal-hero-card mb-3">
+          <div class="modal-hero-info">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+              <h3 class="modal-hero-name font-outfit">{{ participanteStatusDetalhes.nome }}</h3>
+              <span class="badge-status-compact" :class="participanteStatusDetalhes.situacao_evento?.badge_class">
+                <i :class="(participanteStatusDetalhes.situacao_evento?.icon_class || 'bi bi-circle') + ' me-1'"></i>
+                {{ participanteStatusDetalhes.situacao_evento?.label }}
+              </span>
+            </div>
+            <div class="d-flex align-items-center gap-3 flex-wrap small">
+              <div>
+                <span class="text-muted fw-bold me-1">CPF:</span>
+                <span class="font-monospace text-light">{{ participanteStatusDetalhes.cpf_formatado }}</span>
+              </div>
+              <div v-if="participanteStatusDetalhes.secretaria?.nome">
+                <span class="text-muted fw-bold me-1">Secretaria:</span>
+                <span class="text-light">{{ participanteStatusDetalhes.secretaria.nome }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ocorrência 2: Recusada -->
+        <div v-if="participanteStatusDetalhes.situacao_evento?.detalhes?.tipo === 'validacao_recusada'">
+          <div class="modal-info-grid mb-3">
+            <div class="modal-field-card">
+              <span class="modal-field-label text-danger">Data e Hora da Recusa</span>
+              <strong class="modal-field-value font-monospace">{{ participanteStatusDetalhes.situacao_evento.detalhes.quando }}</strong>
+            </div>
+            <div class="modal-field-card">
+              <span class="modal-field-label text-cyan">Validador Responsável</span>
+              <strong class="modal-field-value">{{ participanteStatusDetalhes.situacao_evento.detalhes.por_quem }}</strong>
+            </div>
+          </div>
+          <div class="modal-alert-card modal-alert-card--danger mb-3">
+            <div>
+              <strong class="d-block mb-1">Motivo Apontado:</strong>
+              {{ participanteStatusDetalhes.situacao_evento.detalhes.motivo }}
+            </div>
+          </div>
+        </div>
+
+        <!-- Ocorrência 5: Cancelado Voluntário -->
+        <div v-else-if="participanteStatusDetalhes.situacao_evento?.detalhes?.tipo === 'cancelado'">
+          <div class="modal-info-grid mb-3">
+            <div class="modal-field-card">
+              <span class="modal-field-label text-warning">Data do Cancelamento</span>
+              <strong class="modal-field-value font-monospace">{{ participanteStatusDetalhes.situacao_evento.detalhes.quando }}</strong>
+            </div>
+            <div class="modal-field-card">
+              <span class="modal-field-label text-muted">Cancelado Por</span>
+              <strong class="modal-field-value">{{ participanteStatusDetalhes.situacao_evento.detalhes.por_quem }}</strong>
+            </div>
+          </div>
+          <div class="modal-alert-card modal-alert-card--warning mb-3">
+            <div>
+              <strong class="d-block mb-1">Motivo Declarado:</strong>
+              {{ participanteStatusDetalhes.situacao_evento.detalhes.motivo }}
+            </div>
+          </div>
+        </div>
+
+        <!-- Ocorrência 6: Extraviado Administrativo -->
+        <div v-else-if="participanteStatusDetalhes.situacao_evento?.detalhes?.tipo === 'extraviado'">
+          <div class="modal-info-grid mb-3">
+            <div class="modal-field-card">
+              <span class="modal-field-label text-danger">Data do Extravio</span>
+              <strong class="modal-field-value font-monospace">{{ participanteStatusDetalhes.situacao_evento.detalhes.quando }}</strong>
+            </div>
+            <div class="modal-field-card">
+              <span class="modal-field-label text-danger">Administrador Responsável</span>
+              <strong class="modal-field-value">{{ participanteStatusDetalhes.situacao_evento.detalhes.por_quem }}</strong>
+            </div>
+          </div>
+          <div class="modal-alert-card modal-alert-card--danger mb-3">
+            <div>
+              <strong class="d-block mb-1">Justificativa Administrativa:</strong>
+              {{ participanteStatusDetalhes.situacao_evento.detalhes.motivo }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="d-flex justify-content-end w-100">
+          <button type="button" class="btn btn-secondary px-4" @click="showModalDetalhesStatus = false">
+            <i class="bi bi-x-lg me-1"></i> Fechar
+          </button>
+        </div>
+      </template>
+    </Modal>
+
+    <!-- MODAL 6: INFORMAÇÕES COMPLETAS DO PARTICIPANTE -->
+    <Modal
+      :show="showModalInfo"
+      title="Informações do Participante"
+      icon="bi-person-vcard"
+      maxWidth="650px"
+      @close="showModalInfo = false"
+    >
+      <div v-if="participanteInfo">
+        <!-- Hero Card com Avatar Canônico -->
+        <div class="modal-hero-card">
+          <div
+            class="modal-hero-avatar"
+            :title="participanteInfo.foto_url ? 'Clique para ampliar foto' : 'Sem foto'"
+            @click="participanteInfo.foto_url && abrirFotoZoom(participanteInfo)"
+          >
+            <img
+              v-if="participanteInfo.foto_url"
+              :src="participanteInfo.foto_url"
+              alt="Foto do Participante"
+            />
+            <div v-else class="modal-hero-avatar-fallback">
+              <i class="bi bi-person-fill"></i>
+            </div>
+          </div>
+
+          <div class="modal-hero-info">
+            <h3 class="modal-hero-name font-outfit">{{ participanteInfo.nome }}</h3>
+            <div class="d-flex align-items-center flex-wrap gap-2">
+              <span class="badge-subtle-primary">
+                <i class="bi bi-briefcase-fill me-1"></i> {{ participanteInfo.vinculo || 'Servidor' }}
+              </span>
+              <span v-if="participanteInfo.role && participanteInfo.role !== 'participante'" class="badge-subtle-magenta">
+                <i class="bi bi-shield-check me-1"></i> {{ participanteInfo.role }}
+              </span>
+              <span v-if="participanteInfo.liberado" class="badge-subtle-success">
+                <i class="bi bi-check-circle-fill me-1"></i> Liberado
+              </span>
+              <span v-if="participanteInfo.bloqueado" class="badge-subtle-danger">
+                <i class="bi bi-slash-circle-fill me-1"></i> Bloqueado
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dados Cadastrais -->
+        <div class="modal-section">
+          <h4 class="modal-section-heading font-outfit">
+            <i class="bi bi-person-lines-fill text-cyan me-2"></i> Dados Cadastrais
+          </h4>
+          <div class="modal-info-grid">
+            <div class="modal-field-card">
+              <span class="modal-field-label">CPF</span>
+              <span class="modal-field-value font-monospace">{{ participanteInfo.cpf_formatado || participanteInfo.cpf }}</span>
+            </div>
+            <div class="modal-field-card">
+              <span class="modal-field-label">Data de Nascimento</span>
+              <span class="modal-field-value">{{ formatarDataNascimento(participanteInfo.data_nascimento) || 'Não informada' }}</span>
+            </div>
+            <div class="modal-field-card">
+              <span class="modal-field-label">Telefone / WhatsApp</span>
+              <span class="modal-field-value font-monospace">{{ formatarTelefone(participanteInfo.telefone) || 'Não informado' }}</span>
+            </div>
+            <div class="modal-field-card">
+              <span class="modal-field-label">E-mail</span>
+              <span class="modal-field-value">{{ participanteInfo.email || 'Não informado' }}</span>
+            </div>
+            <div class="modal-field-card">
+              <span class="modal-field-label">Secretaria / Órgão</span>
+              <span class="modal-field-value">{{ participanteInfo.secretaria?.nome || 'Geral' }}</span>
+            </div>
+            <div class="modal-field-card">
+              <span class="modal-field-label">Setor / Lotação</span>
+              <span class="modal-field-value">{{ participanteInfo.setor || 'Não informado' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ingresso e Lote -->
+        <div class="modal-section">
+          <h4 class="modal-section-heading font-outfit">
+            <i class="bi bi-ticket-detailed-fill text-warning me-2"></i> Ingresso do Evento
+          </h4>
+
+          <div v-if="participanteInfo.ingresso">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+              <span class="badge-subtle-warning">{{ participanteInfo.ingresso.lote_nome }}</span>
+              <span class="text-muted small">
+                Resgatado em: {{ formatarData(participanteInfo.ingresso.data_resgate) }}
+              </span>
+            </div>
+            <div class="ticket-token-display">
+              <span class="token-title">Token Oficial:</span>
+              <span class="token-value font-monospace">{{ participanteInfo.ingresso.qr_code_token }}</span>
+            </div>
+          </div>
+          <div v-else class="text-muted small py-2">
+            <i class="bi bi-exclamation-circle me-1"></i> Este participante ainda não possui um ingresso ativo vinculado.
+          </div>
+        </div>
+
+        <!-- Presença no Evento e Portaria -->
+        <div class="modal-section mb-0">
+          <h4 class="modal-section-heading font-outfit">
+            <i class="bi bi-shield-check text-success me-2"></i> Presença no Evento
+          </h4>
+          <div class="mb-3">
+            <span class="status-badge" :class="participanteInfo.situacao_evento?.dentro ? 'bg-success' : 'bg-warning'">
+              <i :class="participanteInfo.situacao_evento?.dentro ? 'bi bi-check-circle-fill me-1 text-success' : 'bi bi-geo-alt me-1 text-warning'"></i>
+              <span>{{ participanteInfo.situacao_evento?.label }}</span>
+            </span>
+          </div>
+
+          <div v-if="participanteInfo.logs_acesso && participanteInfo.logs_acesso.length > 0">
+            <span class="text-muted small fw-bold d-block mb-2">Histórico de Portaria:</span>
+            <div class="modal-timeline">
+              <div
+                v-for="log in participanteInfo.logs_acesso"
+                :key="log.id"
+                class="modal-timeline-item"
+              >
+                <span class="modal-timeline-badge" :class="log.tipo === 'entrada' ? 'modal-timeline-badge--in' : 'modal-timeline-badge--out'">
+                  <i :class="log.tipo === 'entrada' ? 'bi bi-box-arrow-in-right me-1' : 'bi bi-box-arrow-right me-1'"></i>
+                  {{ log.tipo.toUpperCase() }}
+                </span>
+                <span class="modal-timeline-badge modal-timeline-badge--operator ms-2" title="Operador responsável pelo registro">
+                  <i class="bi bi-person-fill me-1"></i>
+                  {{ log.operador_nome || 'Operador' }}
+                </span>
+                <span class="modal-timeline-time ms-auto">{{ log.data_hora }}</span>
+              </div>
+            </div>
+          </div>
+          <div v-else class="text-muted small py-1">
+            <i class="bi bi-info-circle me-1"></i> Nenhuma movimentação de portaria registrada.
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="d-flex justify-content-between align-items-center w-100 gap-2">
+          <button
+            v-if="participanteInfo?.ingresso"
+            type="button"
+            class="btn btn-secondary flex-1"
+            @click="abrirModalIngresso(participanteInfo); showModalInfo = false"
+          >
+            <i class="bi bi-qr-code me-1"></i> Ver Ingresso
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary flex-1"
+            @click="abrirModalEditar(participanteInfo); showModalInfo = false"
+          >
+            <i class="bi bi-pencil-square me-1"></i> Editar Dados
+          </button>
+          <button type="button" class="btn btn-secondary flex-1" @click="showModalInfo = false">
+            Fechar
+          </button>
+        </div>
+      </template>
+    </Modal>
+
+    <!-- MODAL 7: EDITAR PARTICIPANTE -->
+    <Modal
+      :show="showModalEditar"
+      title="Editar Dados do Participante"
+      icon="bi-pencil-square"
+      maxWidth="620px"
+      @close="fecharModalEditar"
+    >
+      <div v-if="participanteEditar">
+        <div class="modal-hero-card mb-3">
+          <div class="modal-hero-avatar" style="width: 52px; height: 52px; border-radius: 10px;">
+            <img v-if="participanteEditar.foto_url" :src="participanteEditar.foto_url" alt="Foto do participante" />
+            <div v-else class="modal-hero-avatar-fallback" style="font-size: 1.5rem;">
+              <i class="bi bi-person-fill"></i>
+            </div>
+          </div>
+          <div class="modal-hero-info">
+            <h4 class="modal-hero-name font-outfit" style="font-size: 1.05rem;">{{ participanteEditar.nome }}</h4>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+              <span class="table-code-pill">{{ participanteEditar.cpf_formatado || participanteEditar.cpf }}</span>
+              <span class="badge-subtle-primary">
+                <i class="bi bi-briefcase-fill me-1"></i> {{ participanteEditar.vinculo || 'Servidor' }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <form @submit.prevent="salvarEdicaoParticipante">
+          <div class="form-group mb-3">
+            <label class="form-label text-muted small mb-1">
+              <i class="bi bi-building me-1 text-warning"></i> Secretaria / Órgão
+            </label>
+            <select v-model="formEditar.secretaria_id" class="form-select">
+              <option :value="null">-- Sem Secretaria Vinculada / Geral --</option>
+              <option v-for="sec in secretariasServer" :key="sec.id" :value="sec.id">
+                {{ sec.nome }}
+              </option>
+            </select>
+          </div>
+
+          <div class="form-group mb-3">
+            <label class="form-label text-muted small mb-1">
+              <i class="bi bi-geo-alt me-1 text-danger"></i> Setor / Lotação
+            </label>
+            <input
+              v-model="formEditar.setor"
+              type="text"
+              class="form-control"
+              placeholder="Ex: Recursos Humanos, Almoxarifado, Escola Municipal..."
+              maxlength="150"
+            />
+          </div>
+
+          <div class="row g-3 mb-3">
+            <div class="col-12 col-md-6">
+              <div class="form-group">
+                <label class="form-label text-muted small mb-1">
+                  <i class="bi bi-telephone me-1 text-success"></i> Telefone / Celular
+                </label>
+                <input
+                  v-model="formEditar.telefone"
+                  type="tel"
+                  class="form-control font-monospace"
+                  placeholder="(00) 00000-0000"
+                  maxlength="15"
+                  @input="onTelefoneInput"
+                />
+              </div>
+            </div>
+
+            <div class="col-12 col-md-6">
+              <div class="form-group">
+                <label class="form-label text-muted small mb-1">
+                  <i class="bi bi-calendar-event me-1 text-warning"></i> Data de Nascimento
+                </label>
+                <input
+                  v-model="formEditar.data_nascimento"
+                  type="date"
+                  class="form-control"
+                  min="1900-01-01"
+                  :max="maxDataNascimento"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group mb-3">
+            <label class="form-label text-muted small mb-1">
+              <i class="bi bi-envelope-at me-1 text-cyan"></i> Endereço de E-mail
+            </label>
+            <input
+              v-model="formEditar.email"
+              type="email"
+              class="form-control"
+              placeholder="servidor@exemplo.com"
+              maxlength="120"
+            />
+          </div>
+        </form>
+      </div>
+
+      <template #footer>
+        <div class="d-flex justify-content-end align-items-center w-100 gap-2">
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="salvandoEditar"
+            @click="fecharModalEditar"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary"
+            :disabled="salvandoEditar"
+            @click="salvarEdicaoParticipante"
+          >
+            <span v-if="salvandoEditar" class="spinner-border spinner-border-sm me-2" role="status"></span>
+            <i v-else class="bi bi-check-circle-fill me-2"></i>
+            {{ salvandoEditar ? 'Salvando...' : 'Salvar Alterações' }}
+          </button>
+        </div>
+      </template>
+    </Modal>
+
+    <!-- MODAL 8: FOTO ZOOM -->
+    <Modal :show="showModalFoto" :title="fotoZoomNome" icon="bi-image" @close="showModalFoto = false">
+      <div class="text-center p-3">
+        <img :src="fotoZoomUrl" alt="Foto do Participante" class="modal-photo-zoom" />
+      </div>
+      <template #footer>
+        <button type="button" class="btn btn-secondary w-100" @click="showModalFoto = false">
+          Fechar
+        </button>
       </template>
     </Modal>
 
@@ -927,99 +1647,10 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.admin-page {
-  padding: 32px 0 80px;
-}
-
-.admin-header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-  gap: 18px;
-}
-
-.header-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.badge-role-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.5px;
-  background: rgba(56, 189, 248, 0.12);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.3);
-}
-
-.admin-title {
-  font-size: clamp(1.6rem, 4vw, 2.1rem);
-  font-weight: 800;
-  color: #ffffff;
-  margin: 0;
-  letter-spacing: -0.5px;
-}
-
-.admin-subtitle {
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  margin-top: 4px;
-}
-
-/* BOTÕES DO CABEÇALHO */
-.btn-action-outline {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 9px 18px;
-  border-radius: 12px;
-  font-size: 0.88rem;
-  font-weight: 700;
-  color: #e2e8f0;
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(12px);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-action-outline:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.25);
-  color: #ffffff;
-  transform: translateY(-1px);
-}
-
-.btn-action-glow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 9px 20px;
-  border-radius: 12px;
-  font-size: 0.88rem;
-  font-weight: 700;
-  color: #ffffff;
-  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-action-glow:hover {
-  background: linear-gradient(135deg, #0369a1 0%, #075985 100%);
-  box-shadow: 0 6px 20px rgba(2, 132, 199, 0.5);
-  transform: translateY(-1px);
-}
-
+/* ==========================================================================
+   ESTILOS ESCOPADOS ESTRITAMENTE ESPECÍFICOS DESTA TELA
+   Todo o restante (tabela, botões, modais, cabeçalhos, paginação) é 100% global
+   ========================================================================== */
 .spin-icon {
   animation: spin 1s infinite linear;
 }
@@ -1029,779 +1660,40 @@ onUnmounted(() => {
   to { transform: rotate(360deg); }
 }
 
-/* ========================================================================== */
-/* CARDS DE KPI (REATIVOS E CLICÁVEIS COMO ATALHO)                           */
-/* ========================================================================== */
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
-  margin-bottom: 22px;
+.status-guide-card {
+  padding: 14px 16px;
+  border-radius: var(--radius-md, 12px);
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-glass);
 }
 
-.kpi-card {
-  background: rgba(15, 23, 42, 0.65);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  padding: 18px 20px;
+.status-guide-text {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin-top: 6px;
+}
+
+.ticket-token-display {
   display: flex;
   align-items: center;
-  gap: 16px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.2s ease;
-}
-
-.kpi-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(255, 255, 255, 0.25);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
-}
-
-.kpi-card.kpi-active {
-  border-color: rgba(56, 189, 248, 0.6);
-  background: rgba(56, 189, 248, 0.08);
-  box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
-}
-
-.card-blue { border-left: 4px solid #38bdf8; }
-.card-green { border-left: 4px solid #10b981; }
-.card-orange { border-left: 4px solid #f59e0b; }
-
-.kpi-icon-box {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.5rem;
-  flex-shrink: 0;
-}
-
-.bg-blue { background: rgba(56, 189, 248, 0.12); color: #38bdf8; }
-.bg-green { background: rgba(16, 185, 129, 0.12); color: #34d399; }
-.bg-orange { background: rgba(245, 158, 11, 0.12); color: #fbbf24; }
-
-.kpi-info {
-  display: flex;
-  flex-direction: column;
-}
-
-.kpi-label {
-  font-size: 0.74rem;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.kpi-value {
-  font-size: 1.85rem;
-  font-weight: 900;
-  color: #ffffff;
-  line-height: 1.1;
-  margin: 1px 0;
-}
-
-.kpi-sublabel {
-  font-size: 0.74rem;
-  color: var(--text-muted);
-}
-
-/* ========================================================================== */
-/* FILTROS & MULTI-SELECT DE SECRETARIAS                                     */
-/* ========================================================================== */
-.filter-card {
-  background: rgba(15, 23, 42, 0.65);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 16px 20px;
-  border-radius: 16px;
-  margin-bottom: 22px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-}
-
-.filter-grid {
-  display: grid;
-  grid-template-columns: 1.8fr 1.6fr 1.1fr 1.1fr;
-  gap: 12px;
-}
-
-@media (max-width: 992px) {
-  .filter-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-@media (max-width: 576px) {
-  .filter-grid {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-}
-
-.search-box {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.search-icon {
-  position: absolute;
-  left: 14px;
-  color: #64748b;
-  font-size: 0.95rem;
-}
-
-.filter-input {
-  background: rgba(0, 0, 0, 0.45) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  color: #ffffff !important;
-  padding: 10px 14px 10px 42px !important;
-  border-radius: 10px !important;
-  font-size: 0.88rem !important;
-  height: 44px;
-}
-
-.filter-input:focus {
-  border-color: rgba(56, 189, 248, 0.5) !important;
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15) !important;
-}
-
-.btn-clear-search {
-  position: absolute;
-  right: 12px;
-  background: none;
-  border: none;
-  color: #94a3b8;
-  cursor: pointer;
-  font-size: 1rem;
-}
-
-.filter-select {
-  background: rgba(0, 0, 0, 0.45) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  color: #ffffff !important;
-  padding: 10px 14px !important;
-  border-radius: 10px !important;
-  font-size: 0.88rem !important;
-  height: 44px;
-  cursor: pointer;
-}
-
-.filter-select:focus {
-  border-color: rgba(56, 189, 248, 0.5) !important;
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15) !important;
-}
-
-.filter-select option {
-  background: #0f172a;
-  color: #ffffff;
-}
-
-/* MULTI-SELECT DROPDOWN STYLING */
-.multiselect-box {
-  position: relative;
-}
-
-.btn-multiselect-toggle {
-  width: 100%;
-  height: 44px;
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  justify-content: space-between;
+  background: var(--bg-surface-elevated, rgba(6, 9, 19, 0.9));
+  border: 1px dashed rgba(6, 182, 212, 0.4);
+  border-radius: var(--radius-sm, 6px);
   padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 0.88rem;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  text-align: left;
 }
 
-.btn-multiselect-toggle:hover {
-  border-color: rgba(56, 189, 248, 0.4);
-}
-
-.btn-multiselect-toggle.has-selection {
-  border-color: rgba(56, 189, 248, 0.5);
-  background: rgba(56, 189, 248, 0.08);
-}
-
-.multiselect-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 170px;
-}
-
-.badge-selection-count {
-  background: #0284c7;
-  color: #ffffff;
-  font-size: 0.72rem;
-  font-weight: 800;
-  padding: 2px 7px;
-  border-radius: 999px;
-  margin-left: 8px;
-}
-
-.toggle-icon {
+.token-title {
   font-size: 0.75rem;
-  color: #94a3b8;
-  transition: transform 0.2s ease;
-}
-
-.toggle-icon.rotate {
-  transform: rotate(180deg);
-}
-
-.multiselect-dropdown-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  width: 320px;
-  max-width: 90vw;
-  background: #0f172a;
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  border-radius: 14px;
-  box-shadow: 0 14px 35px rgba(0, 0, 0, 0.6);
-  z-index: 100;
-  overflow: hidden;
-  backdrop-filter: blur(20px);
-  animation: dropdownFade 0.15s ease-out;
-}
-
-@keyframes dropdownFade {
-  from { opacity: 0; transform: translateY(-6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.dropdown-search-wrapper {
-  position: relative;
-  padding: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.dropdown-search-icon {
-  position: absolute;
-  left: 20px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #64748b;
-  font-size: 0.85rem;
-}
-
-.dropdown-search-input {
-  background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  color: #ffffff !important;
-  padding: 6px 10px 6px 34px !important;
-  border-radius: 8px !important;
-  font-size: 0.82rem !important;
-  height: 34px;
-}
-
-.dropdown-actions-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 6px 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.btn-quick-link {
-  background: none;
-  border: none;
-  color: #38bdf8;
-  font-size: 0.76rem;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 2px 4px;
-}
-
-.btn-quick-link:hover {
-  text-decoration: underline;
-}
-
-.dropdown-items-list {
-  max-height: 240px;
-  overflow-y: auto;
-  padding: 6px 0;
-}
-
-.dropdown-checkbox-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 0.82rem;
-  color: #e2e8f0;
-  transition: background 0.15s ease;
-  margin: 0;
-}
-
-.dropdown-checkbox-item:hover {
-  background: rgba(56, 189, 248, 0.1);
-  color: #ffffff;
-}
-
-.dropdown-checkbox-item input[type="checkbox"] {
-  accent-color: #0284c7;
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-}
-
-.sec-name {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sec-count {
-  font-size: 0.72rem;
-  color: #94a3b8;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 1px 6px;
-  border-radius: 4px;
-}
-
-/* ACTIVE PILLS ROW */
-.active-tags-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.active-sec-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(56, 189, 248, 0.12);
-  color: #93c5fd;
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 0.76rem;
-  font-weight: 600;
-}
-
-.btn-remove-tag {
-  background: none;
-  border: none;
-  color: #93c5fd;
-  cursor: pointer;
-  padding: 0;
-  font-size: 0.95rem;
-  display: flex;
-  align-items: center;
-}
-
-.btn-remove-tag:hover {
-  color: #ffffff;
-}
-
-.btn-clear-all-tags {
-  background: none;
-  border: none;
-  color: #f87171;
-  font-size: 0.76rem;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 2px 6px;
-}
-
-.btn-clear-all-tags:hover {
-  text-decoration: underline;
-}
-
-/* ========================================================================== */
-/* TABELA COMPACTA E OTIMIZADA PARA ALTA ESCALA                              */
-/* ========================================================================== */
-.table-card {
-  background: rgba(15, 23, 42, 0.65);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  overflow: hidden;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-}
-
-.table-header-box {
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.table-title {
-  font-size: 1.1rem;
-  font-weight: 800;
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-}
-
-.badge-count {
-  font-size: 0.78rem;
-  background: rgba(56, 189, 248, 0.15);
-  color: #38bdf8;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-weight: 800;
-  margin-left: 10px;
-  border: 1px solid rgba(56, 189, 248, 0.25);
-}
-
-.table-header-controls {
-  display: flex;
-  align-items: center;
-}
-
-.select-page-size {
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #ffffff;
-  padding: 4px 10px;
-  border-radius: 8px;
-  font-size: 0.82rem;
-  cursor: pointer;
-}
-
-.custom-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-.custom-table th {
-  padding: 11px 16px;
-  font-size: 0.72rem;
   text-transform: uppercase;
-  color: var(--text-muted);
   font-weight: 700;
-  letter-spacing: 0.5px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.custom-table td {
-  padding: 10px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  font-size: 0.85rem;
-  vertical-align: middle;
-}
-
-.custom-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.avatar-cell {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: #000;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  cursor: pointer;
-  transition: transform 0.15s ease, border-color 0.15s ease;
-}
-
-.avatar-cell:hover {
-  transform: scale(1.1);
-  border-color: #38bdf8;
-}
-
-.avatar-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.avatar-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.2rem;
-  color: #64748b;
-}
-
-.participant-compact-name {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.participant-name {
-  font-weight: 700;
-  font-size: 0.88rem;
-  line-height: 1.2;
-}
-
-.vinculo-tag-compact {
-  display: inline-block;
-  font-size: 0.68rem;
-  color: #94a3b8;
-  background: rgba(255, 255, 255, 0.05);
-  padding: 1px 6px;
-  border-radius: 4px;
-  width: fit-content;
-}
-
-.cpf-badge-compact {
-  display: inline-block;
-  color: #38bdf8;
-  font-weight: 700;
-  font-size: 0.86rem;
-  white-space: nowrap !important;
-  letter-spacing: 0.4px;
-}
-
-.sec-compact-box {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sec-tag-compact {
-  display: inline-block;
-  background: rgba(56, 189, 248, 0.1);
-  color: #93c5fd;
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 0.74rem;
-  font-weight: 600;
-  width: fit-content;
-}
-
-.setor-text-compact {
-  font-size: 0.72rem;
   color: var(--text-muted);
 }
 
-.lote-compact-box {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.token-value {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--primary-accent);
 }
-
-.badge-lote-compact {
-  display: inline-block;
-  background: rgba(245, 158, 11, 0.12);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.2);
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 0.74rem;
-  font-weight: 700;
-  width: fit-content;
-}
-
-.token-code-compact {
-  display: block;
-  font-size: 0.68rem;
-  color: var(--text-muted);
-}
-
-.status-badge-compact {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.74rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.status-badge-compact.bg-success {
-  background: rgba(16, 185, 129, 0.12);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-.status-badge-compact.bg-warning {
-  background: rgba(245, 158, 11, 0.12);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.3);
-}
-
-.action-buttons-group {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.btn-action-icon-compact {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  font-size: 0.88rem;
-  border: 1px solid transparent;
-}
-
-.btn-icon-cyan {
-  background: rgba(56, 189, 248, 0.1);
-  color: #38bdf8;
-  border-color: rgba(56, 189, 248, 0.25);
-}
-
-.btn-icon-cyan:hover {
-  background: rgba(56, 189, 248, 0.25);
-  color: #ffffff;
-  transform: translateY(-1px);
-}
-
-.btn-icon-amber {
-  background: rgba(245, 158, 11, 0.1);
-  color: #fbbf24;
-  border-color: rgba(245, 158, 11, 0.25);
-}
-
-.btn-icon-amber:hover {
-  background: rgba(245, 158, 11, 0.25);
-  color: #ffffff;
-  transform: translateY(-1px);
-}
-
-.btn-icon-danger {
-  background: rgba(239, 68, 68, 0.1);
-  color: #f87171;
-  border-color: rgba(239, 68, 68, 0.25);
-}
-
-.btn-icon-danger:hover {
-  background: rgba(239, 68, 68, 0.25);
-  color: #ffffff;
-  transform: translateY(-1px);
-}
-
-/* ========================================================================== */
-/* RODAPÉ COM PAGINAÇÃO                                                       */
-/* ========================================================================== */
-.pagination-footer {
-  padding: 14px 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
-  background: rgba(0, 0, 0, 0.2);
-}
-
-.pagination-info {
-  font-size: 0.84rem;
-}
-
-.pagination-buttons {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.btn-page-nav,
-.btn-page-number {
-  min-width: 34px;
-  height: 34px;
-  padding: 0 8px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
-  font-size: 0.84rem;
-  font-weight: 700;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
-
-.btn-page-nav:hover:not(:disabled),
-.btn-page-number:hover:not(:disabled):not(.dots) {
-  background: rgba(56, 189, 248, 0.2);
-  border-color: rgba(56, 189, 248, 0.4);
-  color: #ffffff;
-}
-
-.btn-page-number.active {
-  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
-  border-color: #38bdf8;
-  color: #ffffff;
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
-}
-
-.btn-page-number.dots {
-  background: none;
-  border: none;
-  cursor: default;
-  color: #64748b;
-}
-
-.btn-page-nav:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.zoom-photo-img {
-  max-width: 100%;
-  max-height: 420px;
-  border-radius: 16px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-}
-
-.qr-box-preview {
-  background: #ffffff;
-  padding: 20px;
-  border-radius: 18px;
-  display: inline-block;
-  margin: 14px auto;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-}
-
-.qr-preview-img {
-  width: 210px;
-  height: 210px;
-}
-
-.recipient-badge {
-  background: rgba(0, 0, 0, 0.35);
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.text-cyan { color: #38bdf8 !important; }
-.text-end { text-align: right; }
-.text-center { text-align: center; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.ms-2 { margin-left: 8px; }
-.text-white { color: #ffffff; }
-.text-muted { color: #94a3b8; }
-.text-success { color: #10b981; }
-.text-warning { color: #f59e0b; }
-.text-danger { color: #ef4444; }
-.flex-1 { flex: 1; }
 </style>

@@ -1,8 +1,11 @@
 ﻿<script setup>
+import { useToast } from '../composables/useToast'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Html5Qrcode } from 'html5-qrcode'
 import Modal from '../components/Modal.vue'
 import WebcamCapture from '../components/WebcamCapture.vue'
+
+const { toast } = useToast()
 
 // ============================================================================
 // ESTADOS GERAIS
@@ -14,6 +17,7 @@ const busca = ref('')
 
 // Modo de Identificação do Posto: 'qrcode' | 'cpf'
 const modoIdentificacao = ref('qrcode')
+const currentQrFacingMode = ref('environment')
 const cpfBusca = ref('')
 const validando = ref(false)
 const scannerActive = ref(false)
@@ -71,7 +75,7 @@ async function startQRScanner() {
     }
 
     await qrScanner.start(
-      { facingMode: 'environment' },
+      { facingMode: currentQrFacingMode.value },
       {
         fps: 20,
         aspectRatio: 1.0,
@@ -89,7 +93,7 @@ async function startQRScanner() {
     )
     scannerActive.value = true
   } catch (err) {
-    console.warn('Erro ao ligar câmera do scanner QR:', err)
+    // Falha ao ligar câmera do scanner QR
     cameraError.value = 'Permissão de câmera negada ou dispositivo indisponível.'
   }
 }
@@ -100,7 +104,7 @@ async function stopQRScanner() {
     await qrScanner.stop()
     scannerActive.value = false
   } catch (err) {
-    console.error('Erro parando scanner:', err)
+    // Falha ao parar scanner
   }
 }
 
@@ -156,7 +160,7 @@ async function executarValidacao(identificador) {
       await stopQRScanner()
     }
   } catch (e) {
-    console.error('Erro na validação do participante:', e)
+    toast.error('Erro na validação do participante.')
     statusValidacao.value = 'nao_encontrado'
     feedbackValidacao.value = { mensagem: 'Falha de comunicação com o servidor.' }
   } finally {
@@ -199,7 +203,7 @@ function abrirModalEntregaDireto(item) {
 
 async function confirmarEntrega() {
   if (!fotoComprovacaoBase64.value) {
-    alert('A foto ao vivo do ganhador segurando o prêmio é obrigatória.')
+    toast.warning('A foto ao vivo do ganhador segurando o prêmio é obrigatória.')
     return
   }
 
@@ -223,10 +227,10 @@ async function confirmarEntrega() {
       await carregarEntregas()
     } else {
       const d = await res.json()
-      alert(d.detail || 'Erro ao registrar entrega.')
+      toast.error(d.detail || 'Erro ao registrar entrega.')
     }
   } catch (err) {
-    console.error('Erro registrando entrega:', err)
+    // Erro registrando entrega
   } finally {
     enviando.value = false
   }
@@ -246,7 +250,7 @@ async function carregarEntregas(silent = false) {
       entregas.value = data.entregas || []
     }
   } catch (e) {
-    if (!silent) console.error('Erro ao carregar entregas:', e)
+    if (!silent) toast.error('Erro ao carregar entregas.')
   } finally {
     if (!silent) loading.value = false
   }
@@ -285,6 +289,7 @@ onUnmounted(async () => {
   await stopQRScanner()
 })
 </script>
+
 <template>
   <div class="entrega-premios-page">
     <div class="app-container">
@@ -301,7 +306,7 @@ onUnmounted(async () => {
           <span class="vip-badge bg-warning mb-2">
             <i class="bi bi-shield-check me-1"></i> Posto de Entrega Oficial
           </span>
-          <h1 class="page-title font-outfit">Registro de Entrega de Prêmios</h1>
+          <h1 class="page-title font-quattrocento">Registro de Entrega de Prêmios</h1>
           <p class="page-subtitle">Validação biométrica e fotográfica dos contemplados no evento.</p>
         </div>
       </div>
@@ -341,10 +346,23 @@ onUnmounted(async () => {
           <!-- MODO 1: SCANNER QR CODE -->
           <div v-show="modoIdentificacao === 'qrcode'" class="scanner-wrapper">
             <div id="qr-reader-entrega" class="scanner-viewfinder"></div>
+
+            <div v-if="scannerActive" class="text-center my-2">
+              <button
+                type="button"
+                class="btn btn-secondary-sm"
+                title="Alternar entre câmera traseira e frontal"
+                @click="toggleQrCamera"
+              >
+                <i class="bi bi-camera-reverse me-1 text-cyan"></i>
+                {{ currentQrFacingMode === 'environment' ? 'Usar Câmera Frontal' : 'Usar Câmera Traseira' }}
+              </button>
+            </div>
             
             <div v-if="cameraError" class="alert-camera-err font-outfit">
-              <i class="bi bi-exclamation-triangle-fill me-1"></i> {{ cameraError }}
-              <button type="button" class="btn-retry-cam" @click="startQRScanner">Tentar Novamente</button>
+              <i class="bi bi-camera-video-off me-1 fs-5"></i>
+              <span>{{ cameraError }}</span>
+              <button type="button" class="btn-retry-cam ms-auto" @click="startQRScanner">Solicitar Permissão</button>
             </div>
 
             <p class="scanner-guide-text font-outfit">
@@ -448,51 +466,54 @@ onUnmounted(async () => {
       </div>
 
       <!-- PAINEL INFERIOR: HISTÓRICO DE ENTREGAS -->
-      <div class="section-sub-header mb-3">
-        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-          <h3 class="font-outfit text-white fw-bold mb-0">
+      <div class="admin-header-row mt-5 mb-3">
+        <div>
+          <h2 class="section-title font-quattrocento mb-1">
             <i class="bi bi-gift-fill text-warning me-2"></i> Relação Geral de Premiações
-          </h3>
+          </h2>
+          <p class="admin-subtitle mb-0">Relação completa de servidores contemplados e registro de entregas.</p>
+        </div>
+      </div>
 
-          <div class="btn-group-filters font-outfit">
+      <!-- Filtros e Barra de Busca Canônicos -->
+      <div class="filter-card mb-4">
+        <div class="filter-grid" style="grid-template-columns: 2fr 1fr;">
+          <div class="search-box">
+            <i class="bi bi-search search-icon"></i>
+            <input
+              v-model="busca"
+              type="text"
+              class="form-control"
+              placeholder="Filtrar por Nome do Servidor, CPF, Secretaria ou Prêmio..."
+            />
+          </div>
+
+          <div class="d-flex align-items-center justify-content-end gap-1">
             <button
               type="button"
-              :class="['btn-filter', { active: filtroStatus === 'pendentes' }]"
+              class="btn btn-sm"
+              :class="filtroStatus === 'pendentes' ? 'btn-primary' : 'btn-secondary'"
               @click="filtroStatus = 'pendentes'"
             >
               Pendentes
             </button>
             <button
               type="button"
-              :class="['btn-filter', { active: filtroStatus === 'entregues' }]"
+              class="btn btn-sm"
+              :class="filtroStatus === 'entregues' ? 'btn-primary' : 'btn-secondary'"
               @click="filtroStatus = 'entregues'"
             >
               Entregues
             </button>
             <button
               type="button"
-              :class="['btn-filter', { active: filtroStatus === 'todos' }]"
+              class="btn btn-sm"
+              :class="filtroStatus === 'todos' ? 'btn-primary' : 'btn-secondary'"
               @click="filtroStatus = 'todos'"
             >
               Todos
             </button>
           </div>
-        </div>
-      </div>
-
-      <!-- Barra de Busca -->
-      <div class="search-bar-row mb-4">
-        <div class="search-input-box">
-          <i class="bi bi-search search-icon"></i>
-          <input
-            v-model="busca"
-            type="text"
-            class="search-input font-outfit"
-            placeholder="Filtrar por Nome do Servidor, CPF, Secretaria ou Prêmio..."
-          />
-          <button v-if="busca" type="button" class="btn-clear" @click="busca = ''">
-            <i class="bi bi-x"></i>
-          </button>
         </div>
       </div>
 
@@ -680,395 +701,16 @@ onUnmounted(async () => {
   </div>
 </template>
 <style scoped>
-.entrega-premios-page { padding: 32px 0 60px; }
-.page-header-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
-.page-title { font-size: 2.2rem; font-weight: 800; color: #ffffff; margin-bottom: 4px; }
-.page-subtitle { color: var(--text-muted); font-size: 0.95rem; }
-
-/* TOAST FLUTUANTE */
-.toast-floating-success {
-  position: fixed;
-  top: 24px;
-  right: 24px;
-  background: rgba(16, 185, 129, 0.95);
-  backdrop-filter: blur(10px);
-  color: #ffffff;
-  padding: 16px 24px;
-  border-radius: 14px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 20px rgba(16, 185, 129, 0.4);
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  font-weight: 700;
-  animation: slideInToast 0.3s ease;
-}
-@keyframes slideInToast {
-  from { transform: translateY(-30px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+.entrega-premios-page {
+  padding: 32px 0 60px;
 }
 
-/* TERMINAL DE VALIDAÇÃO POSTO DE ENTREGA */
-.validation-terminal-card {
-  background: rgba(15, 23, 42, 0.85);
-  backdrop-filter: blur(20px);
-  border: 2px solid rgba(56, 189, 248, 0.3);
-  border-radius: 24px;
-  padding: 28px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 30px rgba(56, 189, 248, 0.1);
-}
-.terminal-header {
+.page-header-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
   gap: 16px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 24px;
 }
-.terminal-title { font-size: 1.4rem; font-weight: 800; color: #ffffff; }
-.terminal-desc { color: var(--text-muted); font-size: 0.85rem; }
-
-.mode-pills-nav {
-  display: flex;
-  background: rgba(11, 15, 25, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  padding: 4px;
-  gap: 6px;
-}
-.btn-mode-pill {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-weight: 700;
-  font-size: 0.88rem;
-  padding: 8px 18px;
-  border-radius: 9px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-.btn-mode-pill.active {
-  background: #0284c7;
-  color: #ffffff;
-  box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);
-}
-
-/* SCANNER QR CODE */
-.scanner-wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 20px 0 10px;
-}
-.scanner-viewfinder {
-  width: 100%;
-  max-width: 380px;
-  border-radius: 20px;
-  overflow: hidden;
-  border: 2px solid rgba(56, 189, 248, 0.4);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
-  background: #000;
-}
-.scanner-guide-text {
-  margin-top: 14px;
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  text-align: center;
-}
-.alert-camera-err {
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #f87171;
-  padding: 10px 16px;
-  border-radius: 10px;
-  margin-top: 12px;
-  font-size: 0.85rem;
-}
-.btn-retry-cam {
-  background: transparent;
-  border: 1px solid #f87171;
-  color: #f87171;
-  padding: 2px 8px;
-  border-radius: 6px;
-  margin-left: 8px;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
-
-/* CPF WRAPPER */
-.cpf-wrapper {
-  padding: 24px 0 10px;
-  max-width: 600px;
-  margin: 0 auto;
-}
-.cpf-input-group {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-.cpf-input-box {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  background: rgba(11, 15, 25, 0.9);
-  border: 2px solid rgba(255, 255, 255, 0.15);
-  border-radius: 14px;
-  transition: all 0.2s ease;
-}
-.cpf-input-box:focus-within {
-  border-color: #38bdf8;
-  box-shadow: 0 0 18px rgba(56, 189, 248, 0.25);
-}
-.input-cpf-terminal {
-  width: 100%;
-  background: transparent;
-  border: none;
-  color: #ffffff;
-  font-size: 1.35rem;
-  font-weight: 800;
-  padding: 14px 16px;
-  outline: none;
-  letter-spacing: 1.5px;
-}
-.btn-validar-cpf {
-  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  color: #ffffff;
-  font-weight: 800;
-  padding: 16px 24px;
-  border-radius: 14px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.2s ease;
-}
-.btn-validar-cpf:hover:not(:disabled) {
-  transform: translateY(-2px);
-  filter: brightness(1.1);
-  box-shadow: 0 6px 20px rgba(2, 132, 199, 0.5);
-}
-.btn-validar-cpf:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.cpf-hint {
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  margin-top: 10px;
-}
-
-/* FEEDBACK CARDS */
-.validation-alert-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 20px;
-  padding: 20px;
-  border-radius: 18px;
-  margin-top: 20px;
-  animation: fadeIn 0.25s ease;
-}
-.alert-not-winner {
-  background: rgba(239, 68, 68, 0.08);
-  border: 2px solid rgba(239, 68, 68, 0.4);
-}
-.alert-already-delivered {
-  background: rgba(245, 158, 11, 0.08);
-  border: 2px solid rgba(245, 158, 11, 0.4);
-}
-.alert-not-found {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-}
-.alert-icon-box { flex-shrink: 0; padding-top: 4px; }
-.alert-content { flex: 1; min-width: 0; }
-.badge-status-tag {
-  display: inline-block;
-  font-size: 0.7rem;
-  font-weight: 800;
-  padding: 3px 10px;
-  border-radius: 999px;
-  margin-bottom: 6px;
-}
-.tag-danger { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
-.tag-warning { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
-.tag-neutral { background: rgba(255, 255, 255, 0.1); color: #cbd5e1; }
-.alert-title { font-size: 1.25rem; }
-.alert-msg-box {
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 0.9rem;
-}
-.bg-danger-soft { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
-.entregas-anteriores-list { display: flex; flex-direction: column; gap: 8px; }
-.entrega-ant-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: rgba(0, 0, 0, 0.4);
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-.thumb-foto-ant {
-  width: 48px;
-  height: 48px;
-  border-radius: 8px;
-  object-fit: cover;
-  border: 1px solid #fbbf24;
-  cursor: pointer;
-}
-.btn-clear-alert {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #ffffff;
-  padding: 10px 18px;
-  border-radius: 10px;
-  font-weight: 700;
-  font-size: 0.85rem;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-/* MODAL VERIFICAÇÃO */
-.winner-verification-card {
-  background: rgba(11, 15, 25, 0.9);
-  border: 2px solid #38bdf8;
-  border-radius: 18px;
-  padding: 16px 20px;
-  box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
-}
-.official-selfie-box {
-  position: relative;
-  width: 84px;
-  height: 84px;
-  border-radius: 16px;
-  overflow: hidden;
-  border: 2px solid #38bdf8;
-  background: #000;
-  flex-shrink: 0;
-}
-.official-selfie-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.selfie-badge-tag {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: rgba(2, 132, 199, 0.9);
-  color: #fff;
-  font-size: 0.6rem;
-  font-weight: 800;
-  text-align: center;
-  padding: 2px 0;
-}
-.winner-pill-tag {
-  display: inline-block;
-  font-size: 0.72rem;
-  font-weight: 800;
-  color: #34d399;
-  letter-spacing: 0.5px;
-}
-.winner-name-title { font-size: 1.3rem; margin: 0; }
-.winner-sub-info { font-size: 0.85rem; }
-
-.prize-badge-card {
-  background: rgba(245, 158, 11, 0.1);
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  border-radius: 14px;
-  padding: 14px 18px;
-}
-.prize-photo-box {
-  width: 58px;
-  height: 58px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: #050811;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  flex-shrink: 0;
-}
-.prize-img { width: 100%; height: 100%; object-fit: cover; }
-.prize-cat-pill {
-  font-size: 0.68rem;
-  font-weight: 800;
-  color: #f59e0b;
-  display: block;
-}
-.prize-title-name { font-size: 1.15rem; }
-
-.camera-step-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.live-only-tag {
-  font-size: 0.72rem;
-  font-weight: 800;
-  color: #fbbf24;
-  background: rgba(245, 158, 11, 0.15);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  padding: 3px 10px;
-  border-radius: 999px;
-}
-
-/* CARDS LISTAGEM */
-.btn-group-filters { display: flex; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 4px; gap: 4px; }
-.btn-filter { background: transparent; border: none; color: var(--text-muted); font-weight: 700; font-size: 0.85rem; padding: 6px 14px; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; }
-.btn-filter.active { background: var(--primary-accent); color: #ffffff; }
-.search-bar-row { width: 100%; }
-.search-input-box { position: relative; width: 100%; }
-.search-icon { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--text-subtle); font-size: 1.1rem; }
-.search-input { width: 100%; background: var(--bg-card); border: 1px solid var(--border-glass); border-radius: 14px; padding: 12px 16px 12px 46px; color: #ffffff; font-size: 0.95rem; outline: none; }
-.search-input:focus { border-color: var(--primary-accent); }
-.btn-clear { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; }
-.entregas-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 20px; }
-.entrega-card { padding: 22px; display: flex; flex-direction: column; justify-content: space-between; border-radius: 20px; transition: all 0.2s ease; }
-.entrega-card.card-entregue { border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.03); }
-.entrega-card-header { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; position: relative; }
-.servidor-avatar-box { width: 52px; height: 52px; border-radius: 14px; overflow: hidden; background: #000; border: 1px solid rgba(255, 255, 255, 0.2); flex-shrink: 0; }
-.servidor-avatar { width: 100%; height: 100%; object-fit: cover; }
-.avatar-ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 1.5rem; }
-.servidor-meta { flex: 1; min-width: 0; }
-.servidor-nome { font-size: 1.1rem; font-weight: 800; color: #ffffff; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.servidor-cpf { font-size: 0.75rem; color: var(--text-subtle); display: block; }
-.servidor-sec { font-size: 0.75rem; color: #94a3b8; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.status-chip { font-size: 0.72rem; font-weight: 800; padding: 4px 10px; border-radius: 999px; }
-.chip-pendente { background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; }
-.chip-entregue { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; }
-.premio-highlight-box { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 12px; display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.premio-thumb { width: 44px; height: 44px; border-radius: 8px; overflow: hidden; background: #000; flex-shrink: 0; border: 1px solid rgba(255, 255, 255, 0.15); }
-.thumb-img { width: 100%; height: 100%; object-fit: cover; }
-.thumb-ph { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #fbbf24; }
-.premio-tag { display: block; font-size: 0.68rem; color: #fbbf24; font-weight: 800; letter-spacing: 0.5px; }
-.premio-nome { font-size: 1rem; color: #ffffff; display: block; }
-.sorteio-data { font-size: 0.72rem; color: var(--text-subtle); display: block; }
-.comprovacao-box { display: flex; justify-content: space-between; align-items: center; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 12px; padding: 10px 12px; }
-.comprovacao-info { font-size: 0.75rem; }
-.comp-label { display: block; font-weight: 800; color: #34d399; margin-bottom: 2px; }
-.comp-date, .comp-resp { display: block; color: var(--text-muted); }
-.comprovacao-thumb { width: 48px; height: 48px; border-radius: 8px; overflow: hidden; position: relative; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); }
-.zoom-hint { position: absolute; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 0.9rem; opacity: 0; transition: opacity 0.2s ease; }
-.comprovacao-thumb:hover .zoom-hint { opacity: 1; }
-.btn-registrar-entrega { width: 100%; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); border: none; color: #000000; font-weight: 800; padding: 10px; border-radius: 10px; cursor: pointer; transition: transform 0.15s ease; display: inline-flex; align-items: center; justify-content: center; }
-.btn-registrar-entrega:hover { transform: translateY(-1px); filter: brightness(1.1); }
-.zoom-img { max-width: 100%; max-height: 70vh; border-radius: 12px; }
-.empty-box { text-align: center; padding: 60px 20px; background: rgba(255, 255, 255, 0.02); border: 1px dashed rgba(255, 255, 255, 0.1); border-radius: 20px; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.mb-0 { margin-bottom: 0; }
-.mb-1 { margin-bottom: 4px; }
-.mb-2 { margin-bottom: 8px; }
-.mb-3 { margin-bottom: 16px; }
-.mb-4 { margin-bottom: 24px; }
-.mb-5 { margin-bottom: 36px; }
-.mt-2 { margin-top: 8px; }
-.mt-3 { margin-top: 16px; }
-.text-cyan { color: #38bdf8 !important; }
-.text-warning { color: var(--warning-color); }
-.text-white { color: #ffffff; }
-.flex-1 { flex: 1; }
 </style>

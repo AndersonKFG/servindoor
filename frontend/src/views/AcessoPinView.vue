@@ -4,11 +4,11 @@
     <div class="ambient-glow glow-2"></div>
 
     <div class="gate-card" :class="{ 'shake-anim': shaking }">
-      <!-- Marca Servindoor -->
+      <!-- Marca Serv indoor -->
       <div class="brand-header">
         <img
           src="/images/logo_servindoor_sem-fundo.png"
-          alt="Servindoor Logo"
+          alt="Serv indoor Logo"
           class="brand-logo"
           @error="onImageError"
         />
@@ -19,9 +19,14 @@
       </div>
 
       <!-- Título e Instruções -->
-      <h1 class="title">Autorização de Dispositivo</h1>
+      <h1 class="title font-outfit">{{ route.query.redirect === '/telao' ? 'Acesso ao Telão Oficial' : 'Autorização de Dispositivo' }}</h1>
       <p class="subtitle">
-        Insira o <strong>código de 6 dígitos</strong> (letras, números ou símbolos) para liberar o acesso neste aparelho.
+        <span v-if="route.query.redirect === '/telao'">
+          O acesso a esta tela requer um código de acesso.
+        </span>
+        <span v-else>
+          Insira o <strong>código de 6 dígitos</strong> (letras, números ou símbolos) para liberar o acesso neste aparelho.
+        </span>
       </p>
 
       <!-- Badge de Tentativas Restantes -->
@@ -101,7 +106,7 @@
       <!-- Rodapé com Segurança -->
       <div class="footer-note">
         <span class="shield-icon">🛡️</span>
-        <span>Proteção com Rate Limit (3x/dia). Acesso válido por 7 dias.</span>
+        <span>Proteção com 3 tentativas diárias. Limite de sessão de 7 dias.</span>
       </div>
     </div>
   </div>
@@ -244,6 +249,9 @@ async function validarPin() {
         localStorage.setItem('servindoor_gate_token', 'liberado')
       }
 
+      sessionStorage.setItem('servindoor_telao_pin_autorizado', 'true')
+      localStorage.setItem('servindoor_telao_pin_autorizado', 'true')
+
       const destino = route.query.redirect || '/'
       router.push(destino)
     } else {
@@ -268,6 +276,7 @@ async function validarPin() {
 }
 </script>
 
+
 <style scoped>
 .gate-container {
   min-height: 100vh;
@@ -275,322 +284,5 @@ async function validarPin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: var(--bg-base, #07090e);
-  padding: 1.5rem;
-  position: relative;
-  overflow: hidden;
-  font-family: inherit;
-}
-
-.ambient-glow {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(120px);
-  pointer-events: none;
-  opacity: 0.25;
-}
-.glow-1 {
-  width: 400px;
-  height: 400px;
-  background: var(--serv-magenta, #d946ef);
-  top: -80px;
-  left: -80px;
-}
-.glow-2 {
-  width: 450px;
-  height: 450px;
-  background: var(--serv-cyan, #06b6d4);
-  bottom: -100px;
-  right: -100px;
-}
-
-.gate-card {
-  position: relative;
-  z-index: 10;
-  width: 100%;
-  max-width: 470px;
-  background: rgba(15, 23, 42, 0.82);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border-glass, rgba(255, 255, 255, 0.1));
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(6, 182, 212, 0.12);
-  border-radius: 1.5rem;
-  padding: 2.75rem 2.25rem;
-  text-align: center;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.brand-header {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin-bottom: 1.5rem;
-}
-
-.brand-logo {
-  max-height: 48px;
-  object-fit: contain;
-  margin-bottom: 1rem;
-  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
-}
-
-.badge-lock {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.85rem;
-  border-radius: 9999px;
-  background: rgba(217, 70, 239, 0.12);
-  border: 1px solid rgba(217, 70, 239, 0.3);
-  color: var(--serv-magenta, #f0abfc);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.lock-icon {
-  font-size: 0.85rem;
-}
-
-.title {
-  color: var(--text-main, #f8fafc);
-  font-size: 1.65rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  margin-bottom: 0.5rem;
-}
-
-.subtitle {
-  color: var(--text-muted, #94a3b8);
-  font-size: 0.92rem;
-  line-height: 1.55;
-  margin-bottom: 1.25rem;
-}
-.subtitle strong {
-  color: var(--text-main, #f8fafc);
-}
-
-/* Badge de Tentativas */
-.tentativas-badge {
-  display: inline-block;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 0.4rem 1rem;
-  border-radius: 9999px;
-  font-size: 0.82rem;
-  color: var(--text-muted, #94a3b8);
-  margin-bottom: 1.5rem;
-}
-.tentativas-badge strong {
-  color: var(--serv-cyan, #38bdf8);
-}
-.warning-tentativas {
-  border-color: rgba(245, 158, 11, 0.5);
-  background: rgba(245, 158, 11, 0.1);
-  color: #fde047;
-}
-.warning-tentativas strong {
-  color: #f59e0b;
-}
-.bloqueado-tag {
-  color: #ef4444;
-  font-weight: 700;
-}
-
-/* Grid com os 6 campos */
-.pin-grid {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 0.55rem;
-  margin-bottom: 1.5rem;
-}
-
-.pin-digit {
-  width: 100%;
-  height: 62px;
-  background: rgba(11, 15, 25, 0.85);
-  border: 2px solid rgba(255, 255, 255, 0.12);
-  border-radius: 0.85rem;
-  color: #ffffff;
-  font-size: 1.75rem;
-  font-weight: 800;
-  text-align: center;
-  outline: none;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
-  font-family: inherit;
-}
-
-.pin-digit:focus:not(:disabled) {
-  border-color: var(--serv-cyan, #06b6d4);
-  background: rgba(6, 182, 212, 0.08);
-  box-shadow: 0 0 15px rgba(6, 182, 212, 0.35), inset 0 2px 4px rgba(0, 0, 0, 0.2);
-  transform: translateY(-2px);
-}
-
-.digit-filled {
-  border-color: rgba(6, 182, 212, 0.5);
-  background: rgba(6, 182, 212, 0.04);
-}
-
-.digit-error {
-  border-color: var(--danger-color, #ef4444) !important;
-  background: rgba(239, 68, 68, 0.08) !important;
-}
-
-.digit-disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  background: rgba(0, 0, 0, 0.5);
-}
-
-/* Alerta de erro */
-.error-banner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  color: #fca5a5;
-  padding: 0.75rem 1rem;
-  border-radius: 0.75rem;
-  font-size: 0.85rem;
-  margin-bottom: 1.5rem;
-  font-weight: 500;
-}
-.error-banner-blocked {
-  background: rgba(239, 68, 68, 0.25);
-  border-color: #ef4444;
-  font-weight: 700;
-}
-
-.error-icon {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-}
-
-/* Botão de envio */
-.btn-submit {
-  width: 100%;
-  padding: 0.95rem 1.5rem;
-  background: var(--serv-gradient, linear-gradient(135deg, #d946ef 0%, #f59e0b 50%, #06b6d4 100%));
-  border: none;
-  border-radius: 0.85rem;
-  color: #ffffff;
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  box-shadow: 0 4px 15px rgba(217, 70, 239, 0.3);
-  transition: all 0.25s ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.btn-submit:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 22px rgba(217, 70, 239, 0.45);
-  filter: brightness(1.08);
-}
-
-.btn-submit:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-.btn-submit:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
-}
-
-.btn-content,
-.loading-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6rem;
-}
-
-.arrow-icon {
-  width: 18px;
-  height: 18px;
-  transition: transform 0.2s ease;
-}
-
-.btn-submit:hover:not(:disabled) .arrow-icon {
-  transform: translateX(4px);
-}
-
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #ffffff;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Rodapé */
-.footer-note {
-  margin-top: 1.8rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  color: var(--text-subtle, #64748b);
-  font-size: 0.78rem;
-}
-
-.shield-icon {
-  font-size: 0.9rem;
-}
-
-/* Animações */
-.shake-anim {
-  animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
-}
-
-@keyframes shake {
-  10%, 90% { transform: translate3d(-2px, 0, 0); }
-  20%, 80% { transform: translate3d(4px, 0, 0); }
-  30%, 50%, 70% { transform: translate3d(-6px, 0, 0); }
-  40%, 60% { transform: translate3d(6px, 0, 0); }
-}
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.25s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
-@media (max-width: 480px) {
-  .gate-card {
-    padding: 2rem 1.25rem;
-    border-radius: 1.25rem;
-  }
-  .pin-grid {
-    gap: 0.35rem;
-  }
-  .pin-digit {
-    height: 54px;
-    font-size: 1.45rem;
-    border-radius: 0.65rem;
-  }
-  .title {
-    font-size: 1.4rem;
-  }
 }
 </style>

@@ -1,0 +1,781 @@
+/* ==========================================================================
+   MESA DE SORTEIO AO VIVO E CATÁLOGO DE PRÊMIOS
+   Design System Global — Servindoor 2026
+   ========================================================================== */
+
+.mesa-stage-control-panel {
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  border-radius: var(--radius-lg, 16px);
+  padding: 24px;
+  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.5), 0 0 25px rgba(6, 182, 212, 0.1);
+}
+
+.mesa-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.mesa-badge-tag {
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--primary-accent);
+  letter-spacing: 1px;
+}
+
+.mesa-panel-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 4px 0;
+}
+
+.mesa-panel-subtitle {
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 600px;
+}
+
+.mesa-header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mesa-status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 18px 0 14px 0;
+  padding: 10px 16px;
+  background: rgba(11, 15, 25, 0.8);
+  border-radius: var(--radius-md, 12px);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.chip-sorteando {
+  color: var(--danger-color, #ef4444);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger-color, #ef4444);
+  animation: pulseDot 0.8s infinite alternate;
+}
+
+@keyframes pulseDot {
+  from { opacity: 0.4; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1.2); }
+}
+
+.chip-finalizado {
+  color: var(--warning-color, #fbbf24);
+}
+
+.chip-preparando {
+  color: var(--primary-accent);
+}
+
+.chip-idle {
+  color: var(--text-muted);
+}
+
+.badge-presentes-chip {
+  color: var(--text-light);
+}
+
+.mesa-items-deck {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.mesa-item-card {
+  position: relative;
+  background: rgba(11, 15, 25, 0.9);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md, 14px);
+  padding: 14px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.mesa-item-card.item-sorteado {
+  border-color: var(--warning-color, #fbbf24);
+  box-shadow: 0 0 18px rgba(251, 191, 36, 0.2);
+}
+
+.mesa-item-card.item-anulado {
+  opacity: 0.6;
+  border-color: var(--danger-color, #ef4444);
+}
+
+.mesa-item-photo {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-md, 12px);
+  overflow: hidden;
+  background: #0f172a;
+  border: 1px solid var(--border-glass);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.item-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.item-placeholder {
+  color: var(--text-muted);
+  font-size: 1.5rem;
+}
+
+.mesa-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mesa-item-cat {
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--primary-accent);
+  letter-spacing: 0.5px;
+}
+
+.mesa-item-nome {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 2px 0 6px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mesa-item-pending {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.mesa-item-winner {
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+}
+
+.winner-label {
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--warning-color, #fbbf24);
+}
+
+.winner-name {
+  color: #ffffff;
+  display: block;
+}
+
+.winner-details {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  display: block;
+}
+
+.btn-anular-mesa-link {
+  background: none;
+  border: none;
+  color: var(--danger-color, #f87171);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+  margin-top: 4px;
+}
+
+.btn-anular-mesa-link:hover {
+  text-decoration: underline;
+}
+
+.btn-remover-mesa {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.btn-remover-mesa:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #ffffff;
+}
+
+.mesa-deck-empty {
+  text-align: center;
+  padding: 35px 20px;
+  border: 1px dashed var(--border-glass);
+  border-radius: 14px;
+  margin-top: 14px;
+}
+
+.prizes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.prize-card-live {
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg, 16px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: all 0.25s ease;
+}
+
+.prize-card-live:hover {
+  border-color: rgba(6, 182, 212, 0.4);
+  transform: translateY(-2px);
+}
+
+.prize-card-live.prize-completed {
+  opacity: 0.6;
+}
+
+.prize-card-photo-box {
+  position: relative;
+  width: 100%;
+  height: 180px;
+  background: #050811;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.prize-card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.prize-placeholder {
+  font-size: 3.5rem;
+  color: var(--text-muted);
+}
+
+.cat-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  font-size: 0.74rem;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.5px;
+}
+
+.cat-1 {
+  background: rgba(6, 182, 212, 0.2);
+  color: #22d3ee;
+  border: 1px solid rgba(6, 182, 212, 0.4);
+}
+
+.cat-2 {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.prize-card-content {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.prize-card-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+
+.prize-card-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.prize-metrics-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.metric-pill {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  flex: 1;
+}
+
+.m-k {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.m-v {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #ffffff;
+}
+
+.mesa-add-action-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.qtd-stepper {
+  display: flex;
+  align-items: center;
+  background: rgba(11, 15, 25, 0.9);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.btn-step {
+  background: none;
+  border: none;
+  color: #ffffff;
+  font-weight: 800;
+  width: 28px;
+  height: 34px;
+  cursor: pointer;
+}
+
+.btn-step:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.input-step {
+  width: 38px;
+  height: 34px;
+  background: none;
+  border: none;
+  color: var(--primary-accent);
+  font-weight: 800;
+  text-align: center;
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.btn-add-mesa {
+  flex: 1;
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  color: var(--primary-accent);
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-add-mesa:hover:not(:disabled) {
+  background: var(--primary-accent);
+  color: #000000;
+}
+
+.btn-mesa-full,
+.btn-completed {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-glass);
+  color: var(--text-muted);
+  font-weight: 700;
+  padding: 10px;
+  border-radius: 10px;
+  text-align: center;
+  width: 100%;
+  font-size: 0.82rem;
+}
+
+.eixos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+}
+
+.eixo-card {
+  padding: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg, 16px);
+}
+
+.eixo-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.eixo-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+
+.eixo-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 0;
+}
+
+.eixo-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sec-label {
+  display: block;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.sec-chips-box {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sec-chip {
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  color: var(--primary-accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.secretarias-checkbox-grid {
+  max-height: 200px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  padding-right: 6px;
+}
+
+.sec-check-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-light);
+}
+
+.sec-check-item.selected {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.35);
+  color: #ffffff;
+}
+
+.upload-dropzone {
+  border: 2px dashed var(--border-glass);
+  border-radius: var(--radius-md, 12px);
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.upload-dropzone-label {
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.upload-icon {
+  font-size: 2rem;
+  color: var(--primary-accent);
+}
+
+.upload-title {
+  font-weight: 700;
+  color: #ffffff;
+  font-size: 0.9rem;
+}
+
+.upload-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.upload-preview-container {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md, 12px);
+}
+
+.upload-preview-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.upload-preview-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.upload-preview-filename {
+  font-weight: 700;
+  color: #ffffff;
+  font-size: 0.85rem;
+}
+
+.upload-preview-tag {
+  font-size: 0.75rem;
+  color: var(--success-color, #10b981);
+}
+
+.btn-remove-upload {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--danger-color, #ef4444);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.confirm-prizes-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.confirm-prize-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+}
+
+.badge-num {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--primary-accent);
+}
+
+.confirm-prize-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.confirm-prize-name {
+  font-size: 0.88rem;
+}
+
+/* ==========================================================================
+   ESTILOS DE CONSULTA DE PRÊMIOS DO PARTICIPANTE (MEUSPREMIOSVIEW)
+   ========================================================================== */
+.meus-premios-page {
+  padding: 32px 0 80px;
+}
+
+.query-box-card {
+  padding: 24px;
+  border-radius: 20px;
+  text-align: left;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
+}
+
+.winner-congrats-banner {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(217, 119, 6, 0.1) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 18px;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.winner-title {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--warning-color, #fbbf24);
+  margin-bottom: 2px;
+}
+
+.winner-subtitle {
+  color: #e2e8f0;
+  font-size: 0.95rem;
+  margin-bottom: 0;
+}
+
+.premios-won-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+}
+
+.prize-won-card {
+  padding: 22px;
+  border-radius: 20px;
+}
+
+.prize-won-header {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.prize-img-frame {
+  width: 84px;
+  height: 84px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--border-glass);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.p-img { width: 100%; height: 100%; object-fit: cover; }
+.p-ph { font-size: 2.2rem; color: var(--warning-color, #fbbf24); }
+
+.prize-title-meta { flex: 1; }
+
+.p-name {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+
+.p-desc {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.p-date {
+  font-size: 0.75rem;
+  color: var(--text-subtle);
+  display: block;
+}
+
+.delivery-status-section {
+  border-top: 1px solid var(--border-glass);
+  padding-top: 16px;
+}
+
+.delivered-box {
+  background: rgba(16, 185, 129, 0.06);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.delivered-tag {
+  font-weight: 800;
+  font-size: 0.88rem;
+  color: var(--success-color, #34d399);
+  margin-bottom: 10px;
+}
+
+.delivery-proof-card { margin-top: 8px; }
+.proof-title { display: block; font-size: 0.74rem; color: var(--text-subtle); margin-bottom: 6px; }
+.proof-photo { width: 100%; max-height: 240px; object-fit: cover; border-radius: 10px; border: 1px solid var(--border-glass); }
+
+.pending-box {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+}
+
+.no-prize-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--border-glass);
+  border-radius: 20px;
+  padding: 50px 20px;
+  max-width: 540px;
+  margin: 0 auto;
+}

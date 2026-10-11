@@ -1,0 +1,550 @@
+/* ==========================================================================
+   CARDS E SUPERFÍCIES GLASSMORPHISM
+   ========================================================================== */
+.card-surface,
+.card-glass {
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+[data-theme="light"] .card-surface,
+[data-theme="light"] .card-glass,
+.theme-light .card-surface,
+.theme-light .card-glass {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
+}
+
+.card-vip {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--card-shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* CARDS DE FILTRO E BARRA DE FERRAMENTAS */
+.filter-card,
+.filters-card {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md, 12px);
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+/* GRID DE KPIS CANÔNICA */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+/* ==========================================================================
+   CARDS DE INDICADORES (KPI CARDS)
+   ========================================================================== */
+.kpi-card {
+  background: var(--bg-card, rgba(15, 23, 42, 0.75));
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg, 16px);
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all var(--transition-normal);
+  user-select: none;
+  min-height: 96px;
+  width: 100%;
+}
+
+.kpi-card-clickable {
+  cursor: pointer;
+}
+
+.kpi-card-clickable:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-glass-hover);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+}
+
+.kpi-card-active,
+.kpi-card.kpi-card-active {
+  border-color: var(--primary-accent);
+  box-shadow: 0 0 20px rgba(6, 182, 212, 0.25);
+  background: rgba(15, 23, 42, 0.95);
+}
+
+.kpi-icon-box {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.kpi-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.kpi-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kpi-value {
+  font-size: 1.8rem;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.1;
+  margin: 4px 0 2px;
+}
+
+.kpi-desc {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+.kpi-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+}
+
+.kpi-badge-pulse {
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--warning-color);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  animation: kpi-pulse 1.5s infinite;
+}
+
+.pulse-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--warning-color);
+  box-shadow: 0 0 10px var(--warning-color);
+  animation: kpi-pulse-dot 1.5s infinite alternate;
+}
+
+@keyframes kpi-pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 0.7; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes kpi-pulse-dot {
+  from { opacity: 0.5; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1.15); }
+}
+
+/* Variantes sutis para ícones e caixas */
+.bg-cyan-subtle { background: rgba(6, 182, 212, 0.15); color: var(--primary-accent); }
+.bg-emerald-subtle { background: rgba(16, 185, 129, 0.15); color: var(--success-color); }
+.bg-warning-subtle { background: rgba(245, 158, 11, 0.15); color: var(--warning-color); }
+.bg-danger-subtle { background: rgba(239, 68, 68, 0.15); color: var(--danger-color); }
+.bg-purple-subtle { background: rgba(168, 85, 247, 0.15); color: var(--serv-purple); }
+.bg-blue-subtle { background: rgba(59, 130, 246, 0.15); color: var(--serv-blue); }
+
+/* ==========================================================================
+   CARDS DE ENTIDADES ADMINISTRATIVAS (GRID DE CARDS MODERNO V2)
+   Design System Global — Servindoor 2026
+   ========================================================================== */
+
+/* PADDING INTERNO OBRIGATÓRIO QUANDO DENTRO DE CONTAINER TABLE-CARD */
+.table-card .entity-cards-grid {
+  padding: 22px;
+  margin-bottom: 0;
+}
+
+.entity-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 768px) {
+  .table-card .entity-cards-grid {
+    padding: 16px;
+  }
+  .entity-cards-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+}
+
+.entity-card {
+  background: var(--bg-card, rgba(15, 23, 42, 0.75));
+  border: 1px solid var(--border-glass);
+  border-left: 4px solid var(--border-glass);
+  border-radius: var(--radius-lg, 16px);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  position: relative;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all var(--transition-normal);
+}
+
+.entity-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-glass-hover);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5), 0 0 20px rgba(6, 182, 212, 0.12);
+}
+
+/* FAIXAS LATERAIS SEMÂNTICAS POR STATUS DO PARTICIPANTE */
+.entity-card--presente {
+  border-left-color: var(--success-color);
+}
+
+.entity-card--fora {
+  border-left-color: var(--warning-color);
+}
+
+.entity-card--em_validacao {
+  border-left-color: var(--primary-accent);
+}
+
+.entity-card--extraviado,
+.entity-card--validacao_recusada {
+  border-left-color: var(--danger-color);
+}
+
+.entity-card--cancelado {
+  border-left-color: var(--warning-color);
+}
+
+.entity-card--sem_ingresso,
+.entity-card--neutral {
+  border-left-color: var(--text-subtle);
+}
+
+/* 1. TOPO: IDENTIFICADOR / LOTE À ESQUERDA E PÍLULA DE STATUS À DIREITA */
+.entity-card-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* COMPONENTE CANÔNICO DE PÍLULA DE STATUS */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  line-height: 1.2;
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+  border: 1px solid transparent;
+  transition: all var(--transition-fast);
+}
+
+.status-pill--presente,
+.status-pill--success {
+  background: rgba(16, 185, 129, 0.14);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.status-pill--fora,
+.status-pill--warning {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.status-pill--em_validacao,
+.status-pill--info {
+  background: rgba(6, 182, 212, 0.14);
+  color: #22d3ee;
+  border-color: rgba(6, 182, 212, 0.3);
+}
+
+.status-pill--extraviado,
+.status-pill--validacao_recusada,
+.status-pill--danger {
+  background: rgba(239, 68, 68, 0.14);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.status-pill--cancelado {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.status-pill--sem_ingresso,
+.status-pill--neutral,
+.status-pill--secondary {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* 2. IDENTIDADE: FOTO/AVATAR + NOME COMPLETO COM LARGURA TOTAL */
+.entity-card-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.entity-card-avatar {
+  width: 58px;
+  height: 58px;
+  border-radius: var(--radius-md, 14px);
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.entity-card-avatar:hover {
+  transform: scale(1.06);
+  box-shadow: 0 0 16px rgba(6, 182, 212, 0.4);
+  border-color: var(--primary-accent);
+}
+
+.entity-card-avatar--lg {
+  width: 68px;
+  height: 68px;
+  border-radius: var(--radius-md, 14px);
+}
+
+.entity-card-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-md, 14px);
+}
+
+.entity-card-avatar-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--serv-gradient);
+  color: var(--white);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 1.15rem;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 12px rgba(217, 70, 239, 0.3);
+  user-select: none;
+}
+
+.entity-card-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.entity-card-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0;
+  line-height: 1.3;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.entity-card-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* 3. CORPO: GRADE DE METADADOS COM TIPOGRAFIA HIERÁRQUICA */
+.entity-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md, 12px);
+  padding: 12px 14px;
+}
+
+.entity-meta-grid.single-col {
+  grid-template-columns: 1fr;
+}
+
+.entity-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.entity-meta-item.full-width {
+  grid-column: 1 / -1;
+}
+
+.meta-label {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-subtle);
+  margin-bottom: 2px;
+}
+
+.meta-value {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-main);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.meta-value.allow-wrap {
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.meta-sub {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  line-height: 1.3;
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+/* 4. RODAPÉ: AÇÕES OPERACIONAIS */
+.entity-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-glass);
+  margin-top: auto;
+}
+
+.entity-card-footer .actions-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.entity-card-footer .actions-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* BOTÃO DE AÇÃO PRINCIPAL DO CARD */
+.btn-card-primary {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.18) 0%, rgba(6, 182, 212, 0.28) 100%);
+  border: 1px solid rgba(6, 182, 212, 0.45);
+  color: var(--primary-accent);
+  font-weight: 700;
+  font-size: 0.8rem;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm, 8px);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btn-card-primary:hover {
+  background: var(--primary-accent);
+  color: var(--bg-base);
+  box-shadow: 0 4px 14px rgba(6, 182, 212, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-card-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+  color: var(--text-main);
+  font-weight: 600;
+  font-size: 0.8rem;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm, 8px);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btn-card-secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-glass-hover);
+}
+
+.action-divider {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.14);
+  margin: 0 4px;
+}
+
+/* AJUSTES NO SELETOR DE PÁGINAS */
+.select-page-size {
+  background-color: rgba(0, 0, 0, 0.45) !important;
+  color: var(--text-main) !important;
+  border: 1px solid var(--border-glass) !important;
+  font-weight: 600;
+}
+
+.select-page-size option {
+  background: #0f172a;
+  color: #ffffff;
+}

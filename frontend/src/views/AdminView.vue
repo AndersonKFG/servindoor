@@ -1,11 +1,15 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useToast } from '../composables/useToast'
 import Modal from '../components/Modal.vue'
+import KpiCard from '../components/KpiCard.vue'
 import { useAuth } from '../composables/useAuth'
 
+const { toast } = useToast()
+
 const router = useRouter()
-const { isAdminGeral, checkAuth } = useAuth()
+const { isAdmin, isAdminGeral, checkAuth } = useAuth()
 const loading = ref(true)
 const metricas = ref({
   total_vagas: 0,
@@ -17,7 +21,7 @@ const metricas = ref({
 const lotes = ref([])
 const secretarias = ref([])
 
-// Modais
+// Modais Lote
 const showModalNovo = ref(false)
 const showModalEditar = ref(false)
 const loteEditando = ref(null)
@@ -31,13 +35,80 @@ const novoLote = ref({
   ativo: true
 })
 
-let pollInterval = null
+// ==========================================
+// ESTADO DO FLUXO DE EXCLUSÃO CRÍTICA DE LOTE
+// ==========================================
+const showModalExcluirLote = ref(false)
+const loteParaExcluir = ref(null)
+const verificandoExclusao = ref(false)
+const processandoExclusao = ref(false)
+const erroExclusao = ref('')
 
+const excluirConfirmacaoTexto = ref('')
+const excluirSenha = ref('')
+const mostrarExcluirSenha = ref(false)
+
+const excluirTokenCodigo = ref('')
+const excluirCodigoEmail = ref('')
+const enviandoCodigoEmail = ref(false)
+const codigoEmailEnviado = ref(false)
+const emailEnvioMsg = ref('')
+
+const FRASE_CONFIRMACAO_OBRIGATORIA = 'Sim, eu realmente desejo excluir esse lote'
+
+const textoFraseValida = computed(() => {
+  return excluirConfirmacaoTexto.value.trim() === FRASE_CONFIRMACAO_OBRIGATORIA
+})
+
+const podeConfirmarExclusao = computed(() => {
+  if (!loteParaExcluir.value) return false
+  const senhaValida = excluirSenha.value.trim().length > 0
+
+  if (!loteParaExcluir.value.tem_participantes) {
+    // Caso NÃO tenha participantes: apenas confirmação de senha
+    return senhaValida
+  }
+
+  // Caso TENHA participantes: Texto + Senha + Código do E-mail
+  const codigoValido = codigoEmailEnviado.value && excluirCodigoEmail.value.trim().length === 6
+  return textoFraseValida.value && senhaValida && codigoValido
+})
+
+// ==========================================
+// ESTADO DO SISTEMA DE BACKUPS (RETENÇÃO 3 DIAS)
+// ==========================================
+const backups = ref([])
+const carregandoBackups = ref(false)
+
+// Modal Restaurar Backup
+const showModalRestaurarBackup = ref(false)
+const backupParaRestaurar = ref(null)
+const senhaRestaurar = ref('')
+const mostrarSenhaRestaurar = ref(false)
+const processandoRestauracao = ref(false)
+const erroRestaurar = ref('')
+
+// Modal Importar Backup JSON
+const showModalImportarBackup = ref(false)
+const arquivoBackupSelecionado = ref(null)
+const dadosBackupJson = ref(null)
+const previewBackup = ref(null)
+const senhaImportar = ref('')
+const mostrarSenhaImportar = ref(false)
+const processandoImportacao = ref(false)
+const erroImportar = ref('')
+
+// Modal Aviso Retenção Inviolável
+const showModalRegraRetencao = ref(false)
+
+// ==========================================
+// CARREGAMENTO DE DADOS
+// ==========================================
 async function carregarDadosAdmin(silent = false) {
   try {
     if (!silent) loading.value = true
     await checkAuth()
-    if (!isAdminGeral.value) {
+    if (!isAdmin.value) {
       router.push('/admin/participantes')
       return
     }
@@ -50,39 +121,42 @@ async function carregarDadosAdmin(silent = false) {
       return
     }
 
-    // Se o backend retornou HTML tradicional, fazemos o parse das métricas ou usamos endpoints
-    // Para garantir máxima sincronização e reatividade, consultamos os lotes
     try {
       const lotesRes = await fetch('/api/lotes-admin')
       if (lotesRes.ok) {
         const data = await lotesRes.json()
         metricas.value = data.metricas
         lotes.value = data.lotes
-        secretarias.value = data.secretarias
+        secretarias.value = Array.isArray(data.secretarias) ? data.secretarias : []
       }
     } catch {
-      // Fallback
-    }
-
-    // Carregar secretarias para o select
-    if (secretarias.value.length === 0) {
-      secretarias.value = [
-        { id: 1, nome: 'Secretaria Municipal de Administração' },
-        { id: 2, nome: 'Secretaria Municipal de Educação' },
-        { id: 3, nome: 'Secretaria Municipal de Saúde' },
-        { id: 4, nome: 'Secretaria Municipal de Obras e Serviços Públicos' },
-        { id: 5, nome: 'Secretaria Municipal de Finanças e Fazenda' },
-        { id: 6, nome: 'Secretaria Municipal de Assistência Social' },
-        { id: 7, nome: 'Gabinete do Prefeito' }
-      ]
+      // Falha temporária de rede
     }
     if (!silent) loading.value = false
   } catch (err) {
-    if (!silent) console.error('Erro carregando admin:', err)
+    if (!silent) toast.error('Erro ao carregar dados do painel.')
     if (!silent) loading.value = false
   }
 }
 
+async function carregarBackups() {
+  carregandoBackups.value = true
+  try {
+    const res = await fetch('/api/admin/lotes/backups')
+    if (res.ok) {
+      const data = await res.json()
+      backups.value = data.backups || []
+    }
+  } catch (e) {
+    // Falha ao carregar backups
+  } finally {
+    carregandoBackups.value = false
+  }
+}
+
+// ==========================================
+// AÇÕES DE LOTES
+// ==========================================
 async function handleCriarLote() {
   try {
     const formData = new FormData()
@@ -97,15 +171,23 @@ async function handleCriarLote() {
       formData.append('ativo', 'on')
     }
 
-    const res = await fetch('/admin/lote', {
+    await fetch('/admin/lote', {
       method: 'POST',
       body: formData
     })
 
     showModalNovo.value = false
+    novoLote.value = {
+      nome: '',
+      quantidade_total: 100,
+      data_abertura: '',
+      data_fechamento: '',
+      secretaria_id: '0',
+      ativo: true
+    }
     await carregarDadosAdmin()
   } catch (e) {
-    console.error('Erro ao criar lote:', e)
+    toast.error('Erro ao criar lote.')
   }
 }
 
@@ -145,7 +227,7 @@ async function handleSalvarEdicao() {
     showModalEditar.value = false
     await carregarDadosAdmin()
   } catch (e) {
-    console.error('Erro ao salvar edição:', e)
+    toast.error('Erro ao salvar edição do lote.')
   }
 }
 
@@ -154,34 +236,241 @@ async function handleToggleLote(loteId) {
     await fetch(`/admin/lote/${loteId}/toggle`, { method: 'POST' })
     await carregarDadosAdmin()
   } catch (e) {
-    console.error('Erro no toggle:', e)
+    toast.error('Erro ao alternar status do lote.')
   }
 }
 
-async function handleEncerrarLote(loteId) {
-  if (!confirm('Deseja realmente encerrar este lote imediatamente?')) return
+// ==========================================
+// FLUXO DE EXCLUSÃO CRÍTICA E DIFICULTOSA
+// ==========================================
+async function iniciarExclusaoLote(loteItem) {
+  erroExclusao.value = ''
+  excluirConfirmacaoTexto.value = ''
+  excluirSenha.value = ''
+  excluirTokenCodigo.value = ''
+  excluirCodigoEmail.value = ''
+  codigoEmailEnviado.value = false
+  emailEnvioMsg.value = ''
+  verificandoExclusao.value = true
+
   try {
-    await fetch(`/admin/lote/${loteId}/encerrar`, { method: 'POST' })
-    await carregarDadosAdmin()
+    const res = await fetch(`/api/admin/lote/${loteItem.model.id}/verificar-exclusao`)
+    const data = await res.json()
+    if (!res.ok) {
+      toast.error(data.detail || 'Erro ao verificar condições do lote.')
+      return
+    }
+
+    loteParaExcluir.value = {
+      id: data.lote.id,
+      nome: data.lote.nome,
+      tem_participantes: data.tem_participantes,
+      total_participantes: data.total_participantes,
+      admin_email: data.admin_email,
+      admin_email_mascarado: data.admin_email_mascarado
+    }
+    showModalExcluirLote.value = true
   } catch (e) {
-    console.error('Erro ao encerrar lote:', e)
+    toast.error('Erro de conexão ao verificar o lote.')
+  } finally {
+    verificandoExclusao.value = false
   }
 }
 
-async function handleExcluirLote(loteId) {
-  if (!confirm('ATENÇÃO: Deseja realmente excluir este lote e todos os seus ingressos emitidos?')) return
+async function handleSolicitarCodigoExclusao() {
+  if (!loteParaExcluir.value) return
+  enviandoCodigoEmail.value = true
+  erroExclusao.value = ''
+
   try {
-    await fetch(`/admin/lote/${loteId}/excluir`, { method: 'POST' })
-    await carregarDadosAdmin()
+    const res = await fetch(`/api/admin/lote/${loteParaExcluir.value.id}/solicitar-codigo-exclusao`, {
+      method: 'POST'
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.detail || 'Não foi possível enviar o código de segurança.')
+    }
+    excluirTokenCodigo.value = data.token
+    codigoEmailEnviado.value = true
+    emailEnvioMsg.value = data.mensagem || 'Código de 6 dígitos enviado para seu e-mail!'
   } catch (e) {
-    console.error('Erro ao excluir lote:', e)
+    erroExclusao.value = e.message || 'Erro ao solicitar código.'
+  } finally {
+    enviandoCodigoEmail.value = false
   }
+}
+
+async function handleConfirmarExclusao() {
+  if (!loteParaExcluir.value || !podeConfirmarExclusao.value) return
+  processandoExclusao.value = true
+  erroExclusao.value = ''
+
+  try {
+    const payload = {
+      senha: excluirSenha.value,
+      confirmacao_texto: excluirConfirmacaoTexto.value,
+      token_codigo: excluirTokenCodigo.value,
+      codigo_email: excluirCodigoEmail.value
+    }
+
+    const res = await fetch(`/api/admin/lote/${loteParaExcluir.value.id}/confirmar-exclusao`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.detail || 'Falha ao excluir o lote.')
+    }
+
+    showModalExcluirLote.value = false
+    toast.success(data.mensagem || 'Lote excluído com sucesso! O backup protegido de 3 dias já está disponível na lixeira.')
+    await carregarDadosAdmin()
+    await carregarBackups()
+  } catch (e) {
+    erroExclusao.value = e.message || 'Erro inesperado na exclusão.'
+  } finally {
+    processandoExclusao.value = false
+  }
+}
+
+// ==========================================
+// AÇÕES DE BACKUPS (RESTAURAR, EXPORTAR, IMPORTAR)
+// ==========================================
+function abrirModalRestaurar(b) {
+  backupParaRestaurar.value = b
+  senhaRestaurar.value = ''
+  erroRestaurar.value = ''
+  showModalRestaurarBackup.value = true
+}
+
+async function handleConfirmarRestauracao() {
+  if (!backupParaRestaurar.value || !senhaRestaurar.value.trim()) return
+  processandoRestauracao.value = true
+  erroRestaurar.value = ''
+
+  try {
+    const res = await fetch(`/api/admin/lotes/backups/${backupParaRestaurar.value.id}/restaurar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ senha: senhaRestaurar.value })
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.detail || 'Não foi possível restaurar o backup.')
+    }
+
+    showModalRestaurarBackup.value = false
+    toast.success(data.mensagem || 'Lote e ingressos restaurados com sucesso!')
+    await carregarDadosAdmin()
+    await carregarBackups()
+  } catch (e) {
+    erroRestaurar.value = e.message || 'Erro na restauração.'
+  } finally {
+    processandoRestauracao.value = false
+  }
+}
+
+function handleExportarBackup(b) {
+  window.open(`/api/admin/lotes/backups/${b.id}/exportar`, '_blank')
+}
+
+function abrirModalImportar() {
+  arquivoBackupSelecionado.value = null
+  dadosBackupJson.value = null
+  previewBackup.value = null
+  senhaImportar.value = ''
+  erroImportar.value = ''
+  showModalImportarBackup.value = true
+}
+
+function onArquivoSelecionado(e) {
+  erroImportar.value = ''
+  const file = e.target.files?.[0]
+  if (!file) return
+
+  if (!file.name.endsWith('.json')) {
+    erroImportar.value = 'Por favor, selecione um arquivo válido no formato .json'
+    return
+  }
+
+  arquivoBackupSelecionado.value = file
+  const reader = new FileReader()
+  reader.onload = (event) => {
+    try {
+      const parsed = JSON.parse(event.target.result)
+      if (!parsed.lote || !parsed.lote.nome) {
+        throw new Error('Estrutura de arquivo incompatível com backups do Serv indoor.')
+      }
+      dadosBackupJson.value = parsed
+      previewBackup.value = {
+        nome: parsed.lote.nome,
+        total_ingressos: parsed.total_ingressos || (parsed.ingressos ? parsed.ingressos.length : 0),
+        criado_em: parsed.criado_em ? new Date(parsed.criado_em).toLocaleString('pt-BR') : 'Desconhecido',
+        excluido_por: parsed.excluido_por?.nome || 'Administrador'
+      }
+    } catch (err) {
+      erroImportar.value = 'Erro ao ler arquivo JSON: ' + (err.message || 'Arquivo corrompido ou inválido.')
+      dadosBackupJson.value = null
+      previewBackup.value = null
+    }
+  }
+  reader.readAsText(file)
+}
+
+async function handleConfirmarImportacao() {
+  if (!dadosBackupJson.value || !senhaImportar.value.trim()) return
+  processandoImportacao.value = true
+  erroImportar.value = ''
+
+  try {
+    const res = await fetch('/api/admin/lotes/importar-backup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        senha: senhaImportar.value,
+        backup_json: dadosBackupJson.value
+      })
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.detail || 'Falha ao importar backup.')
+    }
+
+    showModalImportarBackup.value = false
+    toast.success(data.mensagem || 'Backup importado com sucesso!')
+    await carregarDadosAdmin()
+    await carregarBackups()
+  } catch (e) {
+    erroImportar.value = e.message || 'Erro ao importar backup.'
+  } finally {
+    processandoImportacao.value = false
+  }
+}
+
+function copiarFrase() {
+  navigator.clipboard.writeText(FRASE_CONFIRMACAO_OBRIGATORIA)
+  excluirConfirmacaoTexto.value = FRASE_CONFIRMACAO_OBRIGATORIA
 }
 
 onMounted(() => {
   carregarDadosAdmin()
+  carregarBackups()
 })
 </script>
+
 
 <template>
   <div class="admin-page">
@@ -190,7 +479,7 @@ onMounted(() => {
       <!-- Cabeçalho do Painel -->
       <div class="admin-header-row">
         <div>
-          <h1 class="admin-title font-outfit">Painel de Gestão VIP</h1>
+          <h1 class="page-title font-quattrocento">Painel de Gestão VIP</h1>
           <p class="admin-subtitle">Monitoramento de resgates, liberação de lotes e controle de participantes.</p>
         </div>
         <div class="header-actions">
@@ -200,55 +489,43 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Cards de Métricas Gerais -->
-      <div class="metrics-grid">
-        <div class="metric-card">
-          <div class="metric-icon-box bg-blue">
-            <i class="bi bi-ticket-detailed-fill"></i>
-          </div>
-          <div class="metric-body">
-            <span class="metric-label">Vagas Totais</span>
-            <strong class="metric-value font-outfit">{{ metricas.total_vagas }}</strong>
-          </div>
-        </div>
+      <!-- Cards de M?tricas Gerais -->
+      <div class="kpi-grid">
+        <KpiCard
+          title="Vagas Totais"
+          :value="metricas.total_vagas"
+          icon="bi bi-ticket-detailed-fill"
+          variant="cyan"
+        />
 
-        <div class="metric-card">
-          <div class="metric-icon-box bg-green">
-            <i class="bi bi-people-fill"></i>
-          </div>
-          <div class="metric-body">
-            <span class="metric-label">Ingressos Resgatados</span>
-            <strong class="metric-value text-success font-outfit">{{ metricas.total_resgatados }}</strong>
-          </div>
-        </div>
+        <KpiCard
+          title="Ingressos Resgatados"
+          :value="metricas.total_resgatados"
+          icon="bi bi-people-fill"
+          variant="emerald"
+        />
 
-        <div class="metric-card">
-          <div class="metric-icon-box bg-purple">
-            <i class="bi bi-qr-code-scan"></i>
-          </div>
-          <div class="metric-body">
-            <span class="metric-label">Check-ins na Portaria</span>
-            <strong class="metric-value text-info font-outfit">{{ metricas.total_checkins }}</strong>
-          </div>
-        </div>
+        <KpiCard
+          title="Check-ins na Portaria"
+          :value="metricas.total_checkins"
+          icon="bi bi-qr-code-scan"
+          variant="purple"
+        />
 
-        <div class="metric-card">
-          <div class="metric-icon-box bg-orange">
-            <i class="bi bi-percent"></i>
-          </div>
-          <div class="metric-body">
-            <span class="metric-label">Taxa de Ocupação</span>
-            <strong class="metric-value text-warning font-outfit">{{ metricas.taxa_ocupacao }}%</strong>
-          </div>
-        </div>
+        <KpiCard
+          title="Taxa de Ocupa??o"
+          :value="metricas.taxa_ocupacao + '%'"
+          icon="bi bi-percent"
+          variant="warning"
+        />
       </div>
 
-      <!-- Tabela de Gestão de Lotes -->
-      <div class="vip-glass-card lotes-table-card">
+      <!-- TABELA: Lotes Cadastrados -->
+      <div class="table-card lotes-table-card">
         <div class="table-header-box">
-          <h3 class="table-title font-outfit">
-            <i class="bi bi-layers-fill text-primary me-2"></i> Lotes Cadastrados
-          </h3>
+          <div class="table-title font-outfit">
+            <i class="bi bi-layers-fill me-2 text-primary"></i> Lotes Cadastrados
+          </div>
           <span class="badge-count">{{ lotes.length }} lotes no total</span>
         </div>
 
@@ -266,7 +543,7 @@ onMounted(() => {
             </thead>
             <tbody>
               <tr v-if="lotes.length === 0">
-                <td colspan="6" class="text-center py-4 text-muted">
+                <td colspan="6" class="text-center py-4 text-subtle">
                   Nenhum lote cadastrado no momento. Clique em <strong>Criar Novo Lote</strong>.
                 </td>
               </tr>
@@ -293,14 +570,14 @@ onMounted(() => {
                 <td style="min-width: 140px;">
                   <div class="progress-info">
                     <div class="progress-bar-bg">
-                      <div class="progress-bar-fill" :style="{ width: item.pct + '%', backgroundColor: item.pct >= 100 ? '#ef4444' : item.pct >= 80 ? '#f59e0b' : '#10b981' }"></div>
+                      <div class="progress-bar-fill" :class="['progress-bar-fill', item.pct >= 100 ? 'fill-danger' : item.pct >= 80 ? 'fill-warning' : 'fill-success']" :style="{ width: item.pct + '%' }"></div>
                     </div>
                     <span class="progress-text">{{ item.model.quantidade_resgatada }} / {{ item.model.quantidade_total }} ({{ item.pct }}%)</span>
                   </div>
                 </td>
                 <td class="text-end">
                   <div class="action-buttons-group">
-                    <router-link :to="'/admin/lote/' + item.model.id + '/ingressos'" class="btn-action-icon" title="Ver Ingressos Resgatados">
+                    <router-link :to="'/admin/lote/' + item.model.id + '/ingressos'" class="btn-action-icon btn-action-icon--blue" title="Ver Ingressos Resgatados">
                       <i class="bi bi-people-fill"></i>
                     </router-link>
 
@@ -314,12 +591,136 @@ onMounted(() => {
                       <i :class="['bi', item.status.key === 'pausado' ? 'bi-play-circle-fill text-success' : 'bi-pause-circle-fill text-warning']"></i>
                     </button>
 
-                    <button type="button" class="btn-action-icon" title="Editar Lote" @click="abrirEditarLote(item)">
+                    <button type="button" class="btn-action-icon btn-action-icon--cyan" title="Editar Lote" @click="abrirEditarLote(item)">
                       <i class="bi bi-pencil-fill text-info"></i>
                     </button>
 
-                    <button type="button" class="btn-action-icon" title="Excluir Lote" @click="handleExcluirLote(item.model.id)">
+                    <button
+                      type="button"
+                      class="btn-action-icon btn-action-icon--danger"
+                      title="Excluir Lote (Protocolo Blindado)"
+                      :disabled="verificandoExclusao"
+                      @click="iniciarExclusaoLote(item)"
+                    >
                       <i class="bi bi-trash-fill text-danger"></i>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SEÇÃO: Lixeira & Backups Blindados (Retenção 3 Dias) -->
+      <div class="table-card lotes-table-card mt-5">
+        <div class="table-header-box backup-header-box">
+          <div>
+            <div class="table-title font-outfit text-warning">
+              <i class="bi bi-shield-lock-fill me-2 text-warning"></i> Backups e Recuperação de Lotes
+            </div>
+            <p class="backup-header-desc">
+              Lotes excluídos ficam salvos por <strong>3 dias com retenção blindada</strong>. O backup não pode ser excluído manualmente.
+            </p>
+          </div>
+          <div class="backup-header-actions">
+            <button type="button" class="btn-secondary-sm me-2" @click="carregarBackups" :disabled="carregandoBackups" title="Atualizar Backups">
+              <i :class="['bi bi-arrow-clockwise', { 'spin-icon': carregandoBackups }]"></i> Atualizar
+            </button>
+            <button type="button" class="btn-primary-sm font-outfit" @click="abrirModalImportar">
+              <i class="bi bi-file-earmark-arrow-up-fill me-1"></i> Importar Backup (.json)
+            </button>
+          </div>
+        </div>
+
+        <!-- Alerta de Retenção Obrigatória -->
+        <div class="backup-policy-alert">
+          <i class="bi bi-info-circle-fill text-warning me-2 fs-5"></i>
+          <span>
+            <strong>Diretriz de Segurança Inviolável:</strong> Todos os lotes excluídos geram um snapshot criptografado completo que permanece preservado por no mínimo 72 horas (3 dias). Exclusão manual de backups é estritamente bloqueada pelo servidor.
+          </span>
+        </div>
+
+        <div class="table-responsive">
+          <table class="custom-table">
+            <thead>
+              <tr>
+                <th>Lote Excluído</th>
+                <th>Ingressos Preservados</th>
+                <th>Data da Exclusão</th>
+                <th>Excluído Por</th>
+                <th>Retenção Obrigatória</th>
+                <th>Estado</th>
+                <th class="text-end">Ações Protegidas</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="backups.length === 0">
+                <td colspan="7" class="text-center py-4 text-subtle">
+                  <i class="bi bi-shield-check text-success me-2"></i> Nenhum lote na lixeira de proteção. O histórico de backups está vazio.
+                </td>
+              </tr>
+              <tr v-for="b in backups" :key="b.id">
+                <td>
+                  <strong class="text-white">{{ b.lote_nome }}</strong>
+                  <span class="d-block small text-subtle">ID Original #{{ b.lote_id }}</span>
+                </td>
+                <td>
+                  <span class="badge-tickets">
+                    <i class="bi bi-ticket-perforated-fill me-1"></i> {{ b.total_ingressos }} ingressos
+                  </span>
+                </td>
+                <td>
+                  <span class="small text-white"><i class="bi bi-calendar-x me-1"></i> {{ b.excluido_em }}</span>
+                </td>
+                <td>
+                  <span class="small text-subtle">{{ b.excluido_por_nome }}</span>
+                </td>
+                <td>
+                  <span class="retention-pill" :title="'Expira em ' + b.expira_em">
+                    <i class="bi bi-hourglass-split me-1 text-warning"></i>
+                    {{ b.horas_restantes > 0 ? b.horas_restantes + 'h restantes' : 'Protegido (3 dias)' }}
+                  </span>
+                </td>
+                <td>
+                  <span v-if="b.restaurado" class="status-badge bg-info-subtle text-info">
+                    <i class="bi bi-arrow-counterclockwise me-1"></i> Restaurado
+                  </span>
+                  <span v-else class="status-badge bg-warning-subtle text-warning">
+                    <i class="bi bi-archive-fill me-1"></i> Ativo no Backup
+                  </span>
+                </td>
+                <td class="text-end">
+                  <div class="action-buttons-group">
+                    <!-- Restaurar Lote -->
+                    <button
+                      v-if="!b.restaurado"
+                      type="button"
+                      class="btn-action-icon text-success"
+                      title="Restaurar Lote e Ingressos"
+                      @click="abrirModalRestaurar(b)"
+                    >
+                      <i class="bi bi-arrow-counterclockwise"></i>
+                    </button>
+
+                    <!-- Exportar Arquivo JSON -->
+                    <button
+                      type="button"
+                      class="btn-action-icon text-info"
+                      title="Salvar Backup em Arquivo (.json)"
+                      @click="handleExportarBackup(b)"
+                    >
+                      <i class="bi bi-download"></i>
+                    </button>
+
+                    <!-- Excluir Backup (BLOQUEADO INVIOLAVELMENTE) -->
+                    <button
+                      type="button"
+                      class="btn-action-icon btn-action-locked"
+                      title="Exclusão Proibida: Retenção obrigatória de 3 dias"
+                      @click="showModalRegraRetencao = true"
+                    >
+                      <i class="bi bi-lock-fill text-muted"></i>
                     </button>
                   </div>
                 </td>
@@ -331,7 +732,7 @@ onMounted(() => {
 
     </div>
 
-    <!-- Modal: Criar Novo Lote -->
+    <!-- MODAL: Criar Novo Lote -->
     <Modal
       :show="showModalNovo"
       title="Criar Novo Lote"
@@ -376,7 +777,7 @@ onMounted(() => {
       </form>
     </Modal>
 
-    <!-- Modal: Editar Lote -->
+    <!-- MODAL: Editar Lote -->
     <Modal
       :show="showModalEditar"
       title="Editar Lote"
@@ -421,6 +822,347 @@ onMounted(() => {
       </form>
     </Modal>
 
+    <!-- MODAL: EXCLUSÃO DIFICULTOSA E SEGURA DE LOTE -->
+    <Modal
+      :show="showModalExcluirLote"
+      :title="loteParaExcluir?.tem_participantes ? 'Exclusão Crítica: Lote com Ingressos' : 'Confirmação de Exclusão de Lote'"
+      :icon="loteParaExcluir?.tem_participantes ? 'bi-exclamation-triangle-fill' : 'bi-trash-fill'"
+      :icon-color="loteParaExcluir?.tem_participantes ? 'text-danger' : 'text-warning'"
+      max-width="620px"
+      @close="!processandoExclusao ? showModalExcluirLote = false : null"
+    >
+      <div v-if="loteParaExcluir" class="exclusao-modal-body">
+        
+        <!-- Alerta quando TEM participantes -->
+        <div v-if="loteParaExcluir.tem_participantes" class="alert-danger-custom">
+          <div class="alert-icon-col">
+            <i class="bi bi-shield-fill-exclamation text-danger fs-3"></i>
+          </div>
+          <div>
+            <h4 class="alert-danger-title">ATENÇÃO EXTREMA: LOTE EMITIDO!</h4>
+            <p class="alert-danger-text">
+              O lote <strong>"{{ loteParaExcluir.nome }}"</strong> possui <strong>{{ loteParaExcluir.total_participantes }} participante(s)</strong> com ingressos emitidos e resgatados.
+            </p>
+            <p class="alert-danger-sub">
+              Para impossibilitar exclusões acidentais ou não autorizadas, a eliminação deste lote exige o cumprimento obrigatório de <strong>todas as 3 etapas de segurança</strong> abaixo.
+            </p>
+          </div>
+        </div>
+
+        <!-- Alerta quando NÃO tem participantes -->
+        <div v-else class="alert-warning-custom">
+          <i class="bi bi-info-circle-fill text-warning fs-4 me-3"></i>
+          <div>
+            <h4 class="alert-warning-title">Exclusão de Lote Sem Ingressos</h4>
+            <p class="alert-warning-text">
+              O lote <strong>"{{ loteParaExcluir.nome }}"</strong> não possui participantes nem ingressos resgatados. Para prosseguir, confirme a senha da sua conta de administrador.
+            </p>
+          </div>
+        </div>
+
+        <form @submit.prevent="handleConfirmarExclusao" class="form-exclusao">
+
+          <!-- ETAPA 1: Confirmação Textual Obrigatória (apenas se tiver participantes) -->
+          <div v-if="loteParaExcluir.tem_participantes" class="step-card" :class="{ 'step-valid': textoFraseValida }">
+            <div class="step-header">
+              <span class="step-badge">Etapa 1 de 3</span>
+              <span class="step-title">Confirmação Textual Obrigatória</span>
+              <i v-if="textoFraseValida" class="bi bi-check-circle-fill text-success ms-auto fs-5"></i>
+            </div>
+            <p class="step-desc">
+              Digite exatamente a frase entre aspas abaixo para confirmar que está ciente:
+            </p>
+            <div class="phrase-box">
+              <code>"Sim, eu realmente desejo excluir esse lote"</code>
+              <button type="button" class="btn-copy-phrase" title="Copiar e preencher" @click="copiarFrase">
+                <i class="bi bi-clipboard-check"></i>
+              </button>
+            </div>
+            <input
+              v-model="excluirConfirmacaoTexto"
+              type="text"
+              class="form-control mt-2"
+              placeholder="Digite a frase exatamente como exibida acima"
+              :class="{ 'is-valid': textoFraseValida, 'is-invalid': excluirConfirmacaoTexto && !textoFraseValida }"
+              required
+            />
+          </div>
+
+          <!-- ETAPA 2: Senha da Conta (Obrigatório em ambos os casos) -->
+          <div class="step-card" :class="{ 'step-valid': excluirSenha.trim().length > 0 }">
+            <div class="step-header">
+              <span v-if="loteParaExcluir.tem_participantes" class="step-badge">Etapa 2 de 3</span>
+              <span v-else class="step-badge">Confirmação de Identidade</span>
+              <span class="step-title">Senha da sua Conta de Administrador</span>
+              <i v-if="excluirSenha.trim().length > 0" class="bi bi-check-circle-fill text-success ms-auto fs-5"></i>
+            </div>
+            <p class="step-desc">
+              Informe a sua senha atual de acesso para autenticar a solicitação:
+            </p>
+            <div class="password-input-wrapper">
+              <input
+                v-model="excluirSenha"
+                :type="mostrarExcluirSenha ? 'text' : 'password'"
+                class="form-control"
+                placeholder="Sua senha de administrador"
+                required
+              />
+              <button
+                type="button"
+                class="btn-toggle-eye"
+                @click="mostrarExcluirSenha = !mostrarExcluirSenha"
+              >
+                <i :class="['bi', mostrarExcluirSenha ? 'bi-eye-slash-fill' : 'bi-eye-fill']"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- ETAPA 3: Código de Confirmação 2FA via E-mail (Apenas se tiver participantes) -->
+          <div v-if="loteParaExcluir.tem_participantes" class="step-card" :class="{ 'step-valid': codigoEmailEnviado && excluirCodigoEmail.trim().length === 6 }">
+            <div class="step-header">
+              <span class="step-badge">Etapa 3 de 3</span>
+              <span class="step-title">Código 2FA Enviado ao seu E-mail</span>
+              <i v-if="codigoEmailEnviado && excluirCodigoEmail.trim().length === 6" class="bi bi-check-circle-fill text-success ms-auto fs-5"></i>
+            </div>
+            <p class="step-desc">
+              Um código numérico de 6 dígitos será enviado ao seu endereço:
+              <strong class="text-white">{{ loteParaExcluir.admin_email_mascarado }}</strong>
+            </p>
+
+            <div class="email-code-action-row">
+              <button
+                type="button"
+                class="btn-request-code"
+                :disabled="enviandoCodigoEmail"
+                @click="handleSolicitarCodigoExclusao"
+              >
+                <i v-if="enviandoCodigoEmail" class="bi bi-arrow-repeat spin-icon me-1"></i>
+                <i v-else class="bi bi-envelope-arrow-up-fill me-1"></i>
+                {{ codigoEmailEnviado ? 'Reenviar Código' : 'Enviar Código ao Meu E-mail' }}
+              </button>
+
+              <div v-if="codigoEmailEnviado" class="code-input-box">
+                <input
+                  v-model="excluirCodigoEmail"
+                  type="text"
+                  maxlength="6"
+                  class="form-control text-center code-input"
+                  placeholder="000000"
+                  required
+                />
+              </div>
+            </div>
+
+            <div v-if="emailEnvioMsg" class="email-success-note">
+              <i class="bi bi-check2-circle text-success me-1"></i> {{ emailEnvioMsg }}
+            </div>
+          </div>
+
+          <!-- Mensagem de Erro Geral -->
+          <div v-if="erroExclusao" class="error-banner">
+            <i class="bi bi-x-circle-fill me-2"></i> {{ erroExclusao }}
+          </div>
+
+          <!-- Nota de Retenção e Backup Seguro -->
+          <div class="backup-guarantee-box">
+            <i class="bi bi-shield-check text-info fs-5 me-2"></i>
+            <span class="small text-subtle">
+              <strong>Garantia de Recuperação:</strong> Ao confirmar, um backup blindado com todos os dados e participantes será arquivado por <strong>3 dias</strong> e poderá ser restaurado a qualquer momento.
+            </span>
+          </div>
+
+          <!-- Botões do Rodapé -->
+          <div class="modal-footer-box mt-4">
+            <button
+              type="button"
+              class="btn-secondary"
+              :disabled="processandoExclusao"
+              @click="showModalExcluirLote = false"
+            >
+              Cancelar e Manter Lote
+            </button>
+            <button
+              type="submit"
+              class="btn-danger-critical"
+              :disabled="!podeConfirmarExclusao || processandoExclusao"
+            >
+              <i v-if="processandoExclusao" class="bi bi-arrow-repeat spin-icon me-1"></i>
+              <i v-else class="bi bi-trash3-fill me-1"></i>
+              {{ loteParaExcluir.tem_participantes ? 'Excluir Definitivamente o Lote' : 'Confirmar Exclusão' }}
+            </button>
+          </div>
+
+        </form>
+      </div>
+    </Modal>
+
+    <!-- MODAL: Restaurar Backup -->
+    <Modal
+      :show="showModalRestaurarBackup"
+      title="Restaurar Lote e Ingressos"
+      icon="bi-arrow-counterclockwise"
+      icon-color="text-success"
+      max-width="500px"
+      @close="!processandoRestauracao ? showModalRestaurarBackup = false : null"
+    >
+      <div v-if="backupParaRestaurar" class="p-2">
+        <p class="text-white mb-2">
+          Você está prestes a restaurar o lote <strong>"{{ backupParaRestaurar.lote_nome }}"</strong> com todos os seus <strong>{{ backupParaRestaurar.total_ingressos }} ingressos resgatados</strong>.
+        </p>
+        <p class="small text-subtle mb-4">
+          O lote voltará a ficar ativo no sistema exatamente com os mesmos dados e QR Codes originais.
+        </p>
+
+        <form @submit.prevent="handleConfirmarRestauracao">
+          <div class="form-group">
+            <label class="form-label" for="senha-restaurar">Digite sua Senha de Administrador para Confirmar</label>
+            <div class="password-input-wrapper">
+              <input
+                id="senha-restaurar"
+                v-model="senhaRestaurar"
+                :type="mostrarSenhaRestaurar ? 'text' : 'password'"
+                class="form-control"
+                placeholder="Sua senha"
+                required
+              />
+              <button
+                type="button"
+                class="btn-toggle-eye"
+                @click="mostrarSenhaRestaurar = !mostrarSenhaRestaurar"
+              >
+                <i :class="['bi', mostrarSenhaRestaurar ? 'bi-eye-slash-fill' : 'bi-eye-fill']"></i>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="erroRestaurar" class="error-banner mb-3">
+            <i class="bi bi-x-circle-fill me-2"></i> {{ erroRestaurar }}
+          </div>
+
+          <div class="modal-footer-box">
+            <button type="button" class="btn-secondary" @click="showModalRestaurarBackup = false">Cancelar</button>
+            <button type="submit" class="btn-success-custom" :disabled="!senhaRestaurar.trim() || processandoRestauracao">
+              <i v-if="processandoRestauracao" class="bi bi-arrow-repeat spin-icon me-1"></i>
+              <i v-else class="bi bi-check-circle-fill me-1"></i>
+              Confirmar Restauração
+            </button>
+          </div>
+        </form>
+      </div>
+    </Modal>
+
+    <!-- MODAL: Importar Backup (.json) -->
+    <Modal
+      :show="showModalImportarBackup"
+      title="Importar Backup em Arquivo (.json)"
+      icon="bi-file-earmark-arrow-up-fill"
+      icon-color="text-info"
+      max-width="560px"
+      @close="!processandoImportacao ? showModalImportarBackup = false : null"
+    >
+      <div class="p-2">
+        <p class="small text-subtle mb-3">
+          Selecione o arquivo <code>.json</code> exportado anteriormente pelo sistema para recuperar o lote e seus ingressos.
+        </p>
+
+        <div class="file-upload-box mb-3">
+          <input
+            type="file"
+            id="file-backup-json"
+            accept=".json,application/json"
+            class="d-none"
+            @change="onArquivoSelecionado"
+          />
+          <label for="file-backup-json" class="file-upload-label">
+            <i class="bi bi-cloud-arrow-up-fill fs-2 text-primary mb-1"></i>
+            <span v-if="arquivoBackupSelecionado" class="text-white font-weight-bold">
+              {{ arquivoBackupSelecionado.name }}
+            </span>
+            <span v-else class="text-subtle">
+              Clique para selecionar o arquivo <strong>.json</strong>
+            </span>
+          </label>
+        </div>
+
+        <!-- Preview do Arquivo Selecionado -->
+        <div v-if="previewBackup" class="preview-backup-card mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <strong class="text-white font-outfit">{{ previewBackup.nome }}</strong>
+            <span class="badge-tickets">{{ previewBackup.total_ingressos }} ingressos</span>
+          </div>
+          <div class="small text-subtle">
+            Criado em: {{ previewBackup.criado_em }} • Backup por: {{ previewBackup.excluido_por }}
+          </div>
+        </div>
+
+        <form @submit.prevent="handleConfirmarImportacao">
+          <div class="form-group">
+            <label class="form-label" for="senha-importar">Confirme sua Senha de Administrador</label>
+            <div class="password-input-wrapper">
+              <input
+                id="senha-importar"
+                v-model="senhaImportar"
+                :type="mostrarSenhaImportar ? 'text' : 'password'"
+                class="form-control"
+                placeholder="Sua senha"
+                required
+              />
+              <button
+                type="button"
+                class="btn-toggle-eye"
+                @click="mostrarSenhaImportar = !mostrarSenhaImportar"
+              >
+                <i :class="['bi', mostrarSenhaImportar ? 'bi-eye-slash-fill' : 'bi-eye-fill']"></i>
+              </button>
+            </div>
+          </div>
+
+          <div v-if="erroImportar" class="error-banner mb-3">
+            <i class="bi bi-x-circle-fill me-2"></i> {{ erroImportar }}
+          </div>
+
+          <div class="modal-footer-box">
+            <button type="button" class="btn-secondary" @click="showModalImportarBackup = false">Cancelar</button>
+            <button
+              type="submit"
+              class="btn-primary"
+              :disabled="!dadosBackupJson || !senhaImportar.trim() || processandoImportacao"
+            >
+              <i v-if="processandoImportacao" class="bi bi-arrow-repeat spin-icon me-1"></i>
+              <i v-else class="bi bi-cloud-check-fill me-1"></i>
+              Importar e Restaurar
+            </button>
+          </div>
+        </form>
+      </div>
+    </Modal>
+
+    <!-- MODAL: Regra de Ouro (Retenção Inviolável de 3 Dias) -->
+    <Modal
+      :show="showModalRegraRetencao"
+      title="Ação Estritamente Proibida"
+      icon="bi-shield-slash-fill"
+      icon-color="text-danger"
+      max-width="480px"
+      @close="showModalRegraRetencao = false"
+    >
+      <div class="p-3 text-center">
+        <div class="shield-lock-icon mb-3">
+          <i class="bi bi-lock-fill text-warning fs-1"></i>
+        </div>
+        <h4 class="text-white font-outfit mb-2">Backups Blindados por 3 Dias</h4>
+        <p class="text-subtle small mb-3">
+          Conforme as regras de integridade do sistema, <strong>nenhum administrador possui permissão para deletar backups</strong> antes do prazo de retenção de 72 horas.
+        </p>
+        <p class="text-subtle small mb-4">
+          Essa medida garante que qualquer exclusão de lote, mesmo que feita por administradores gerais, possua uma janela segura e auditável para recuperação integral.
+        </p>
+        <button type="button" class="btn-secondary w-100" @click="showModalRegraRetencao = false">
+          Entendido
+        </button>
+      </div>
+    </Modal>
+
   </div>
 </template>
 
@@ -438,223 +1180,8 @@ onMounted(() => {
   gap: 16px;
 }
 
-.admin-title {
-  font-size: 2rem;
-  font-weight: 800;
-  color: #ffffff;
-  margin-bottom: 4px;
-}
-
 .admin-subtitle {
   color: var(--text-muted);
   font-size: 0.9rem;
 }
-
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  margin-bottom: 32px;
-}
-
-.metric-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-glass);
-  border-radius: 16px;
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.metric-icon-box {
-  width: 50px;
-  height: 50px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.5rem;
-}
-
-.bg-blue { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
-.bg-green { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-.bg-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
-.bg-orange { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-
-.metric-label {
-  display: block;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.metric-value {
-  font-size: 1.75rem;
-  font-weight: 800;
-  color: #ffffff;
-}
-
-.lotes-table-card {
-  overflow: hidden;
-}
-
-.table-header-box {
-  padding: 20px 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.table-title {
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-}
-
-.badge-count {
-  font-size: 0.8rem;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-muted);
-  padding: 4px 10px;
-  border-radius: 999px;
-}
-
-.table-responsive {
-  overflow-x: auto;
-}
-
-.custom-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-.custom-table th {
-  padding: 14px 20px;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  font-weight: 700;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.custom-table td {
-  padding: 16px 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  font-size: 0.9rem;
-  vertical-align: middle;
-}
-
-.custom-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.sec-tag {
-  background: rgba(59, 130, 246, 0.1);
-  color: #93c5fd;
-  border: 1px solid rgba(59, 130, 246, 0.2);
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 0.78rem;
-}
-
-.sec-tag-global {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-muted);
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 0.78rem;
-}
-
-.date-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 0.82rem;
-}
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.progress-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.progress-bar-bg {
-  width: 100%;
-  height: 6px;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.progress-bar-fill {
-  height: 100%;
-  transition: width 0.3s ease;
-}
-
-.progress-text {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.action-buttons-group {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.btn-action-icon {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #ffffff;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  text-decoration: none;
-  font-size: 0.95rem;
-}
-
-.btn-action-icon:hover {
-  background: rgba(255, 255, 255, 0.15);
-  transform: translateY(-2px);
-}
-
-.modal-footer-box {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 20px;
-}
-
-.text-end { text-align: right; }
-.text-center { text-align: center; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.text-white { color: #ffffff; }
-.text-subtle { color: var(--text-subtle); }
-.text-info { color: #38bdf8; }
-.text-danger { color: #f87171; }
-.text-success { color: var(--success-color); }
-.text-warning { color: var(--warning-color); }
 </style>

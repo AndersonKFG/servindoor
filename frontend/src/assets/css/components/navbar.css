@@ -1,0 +1,415 @@
+/* ==========================================================================
+   BARRA DE NAVEGAÇÃO SUPERIOR CANÔNICA (NAVBAR) & DRAWER MOBILE
+   Design System Global — Servindoor 2026
+   ========================================================================== */
+
+.navbar-wrapper {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background: var(--bg-surface-navbar, rgba(7, 9, 14, 0.96));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border-glass, rgba(255, 255, 255, 0.08));
+  width: 100%;
+  transition: background-color var(--transition-normal), border-color var(--transition-normal);
+}
+
+.navbar-main {
+  padding: 8px 0;
+}
+
+.navbar-main-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.navbar-brand {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+
+.navbar-brand:hover {
+  transform: scale(1.02);
+}
+
+.navbar-logo-img {
+  height: 48px;
+  max-width: 170px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 8px rgba(217, 70, 239, 0.25));
+}
+
+/* 2. CENTRO: MENUS DINÂMICOS */
+.navbar-center-menu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  margin: 0 12px;
+}
+
+.navbar-center-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.navbar-center-list.staff-links {
+  gap: 4px;
+}
+
+.nav-center-link {
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+  border: 1px solid transparent;
+}
+
+.nav-center-link:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.nav-center-link.router-link-active {
+  background: rgba(6, 182, 212, 0.12);
+  color: var(--primary-accent);
+  border-color: rgba(6, 182, 212, 0.35);
+  box-shadow: 0 0 16px rgba(6, 182, 212, 0.15);
+}
+
+.nav-link-highlight {
+  color: var(--warning-color);
+}
+
+/* 3. DIREITA: AÇÕES / USUÁRIO */
+.navbar-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.btn-staff-access {
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  color: var(--primary-accent);
+  font-weight: 700;
+  font-size: 0.84rem;
+  padding: 7px 14px;
+  border-radius: var(--radius-md, 10px);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--transition-fast);
+}
+
+.btn-staff-access:hover {
+  background: rgba(6, 182, 212, 0.25);
+  border-color: var(--primary-accent);
+  color: var(--text-main);
+  transform: translateY(-1px);
+}
+
+/* APRESENTAÇÃO AO USUÁRIO LOGADO */
+.user-greeting-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 14px;
+  padding: 4px 10px 4px 5px;
+}
+
+.user-avatar-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--serv-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-main);
+  font-size: 1.1rem;
+  box-shadow: 0 4px 12px rgba(217, 70, 239, 0.35);
+}
+
+.user-info-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.greeting-line {
+  font-size: 0.84rem;
+  color: var(--text-main);
+}
+
+.greeting-prefix {
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.user-full-name {
+  font-weight: 800;
+  background: var(--serv-text-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.user-role-tag {
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 7px;
+  border-radius: var(--radius-xs, 4px);
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-subtle);
+}
+
+.badge-role-admin_geral {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--danger-color);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.badge-role-admin {
+  background: rgba(168, 85, 247, 0.2);
+  color: var(--serv-purple);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.badge-role-validador {
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--success-color);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.badge-role-portaria {
+  background: rgba(6, 182, 212, 0.2);
+  color: var(--primary-accent);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+}
+
+.badge-role-entregador {
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--warning-color);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.btn-logout-header {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--danger-color);
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm, 8px);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all var(--transition-fast);
+  margin-left: 4px;
+}
+
+.btn-logout-header:hover {
+  background: var(--danger-color);
+  color: var(--text-main);
+  transform: translateY(-1px);
+}
+
+/* BOTÃO TOGGLE MOBILE */
+.navbar-toggle-btn {
+  display: none;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+  font-size: 1.35rem;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md, 10px);
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.navbar-toggle-btn:hover,
+.navbar-toggle-btn.active {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: var(--primary-accent);
+  color: var(--primary-accent);
+}
+
+/* GAVETA MOBILE */
+.mobile-nav-drawer {
+  display: none;
+  background: var(--bg-surface, #07090e);
+  border-top: 1px solid var(--border-glass, rgba(255, 255, 255, 0.1));
+  padding: 16px 0 20px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+  transition: background-color var(--transition-normal), border-color var(--transition-normal);
+}
+
+.mobile-user-greeting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+
+.mobile-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--serv-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  color: var(--text-main);
+}
+
+.mobile-name {
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: var(--text-main);
+}
+
+.mobile-nav-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mobile-nav-link {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  font-weight: 600;
+  padding: 11px 14px;
+  border-radius: var(--radius-md, 12px);
+  transition: all var(--transition-fast);
+}
+
+.mobile-nav-link:hover,
+.mobile-nav-link.router-link-active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--primary-accent);
+}
+
+.mobile-section-header {
+  margin-top: 10px;
+  padding-left: 8px;
+}
+
+.mobile-section-header span {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-subtle);
+}
+
+.mobile-divider {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 8px 0;
+}
+
+.menu-slide-enter-active,
+.menu-slide-leave-active {
+  transition: all var(--transition-normal);
+}
+
+.menu-slide-enter-from,
+.menu-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* RESPONSIVIDADE NAVBAR */
+@media (max-width: 1240px) {
+  .staff-center-menu {
+    display: none;
+  }
+  .navbar-toggle-btn.staff-toggle {
+    display: flex;
+  }
+  .mobile-nav-drawer {
+    display: block;
+  }
+}
+
+@media (max-width: 860px) {
+  .guest-center-menu {
+    display: none;
+  }
+  .navbar-toggle-btn.guest-toggle {
+    display: flex;
+  }
+  .btn-staff-access {
+    display: none;
+  }
+}
+
+@media (max-width: 576px) {
+  .navbar-logo-img {
+    height: 40px;
+    max-width: 135px;
+  }
+  .user-greeting-box {
+    padding: 3px 8px 3px 4px;
+    gap: 8px;
+  }
+  .user-avatar-badge {
+    width: 32px;
+    height: 32px;
+    font-size: 0.95rem;
+  }
+  .greeting-line {
+    font-size: 0.78rem;
+  }
+  .user-role-tag {
+    font-size: 0.62rem;
+  }
+  .btn-logout-header {
+    padding: 5px 8px;
+  }
+  .d-none-sm {
+    display: none;
+  }
+}

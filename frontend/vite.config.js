@@ -1,4 +1,4 @@
-﻿import { defineConfig } from 'vite'
+import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
@@ -35,7 +35,8 @@ export default defineConfig({
       },
       '/api': {
         target: 'http://127.0.0.1:8000',
-        changeOrigin: true
+        changeOrigin: true,
+        timeout: 0
       },
       '/static': {
         target: 'http://127.0.0.1:8000',

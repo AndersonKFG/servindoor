@@ -5,6 +5,8 @@ import confetti from 'canvas-confetti'
 import { useServerTime } from '../composables/useServerTime'
 import { useLoteStatus } from '../composables/useLoteStatus'
 import Modal from '../components/Modal.vue'
+import FaqModal from '../components/FaqModal.vue'
+import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
 const { serverClockOffsetMs, calibrarRelogioComServidor, getSynchronizedServerTime } = useServerTime()
@@ -14,20 +16,25 @@ const {
   modoFesta,
   lote,
   statusInfo,
-  reservasAtivas,
-  vagasDisponiveis,
   minhaReservaSegundos,
   minhaReservaExpiraEmMs,
   minhaReservaToken,
   dataAberturaIso,
+  dataFechamentoIso,
   dataFestaIso,
   dataFestaFormatada,
+  temLoteComPrevisao,
+  lotePrevisaoId,
+  lotePrevisaoAberturaIso,
+  loteEncerradoRecente,
   fetchLiveStatus,
   startPolling,
-  stopPolling
+  stopPolling,
+  parseSaoPauloTimeToMs
 } = useLoteStatus()
 
-const showModalEmResgate = ref(false)
+const { isAdminGeral } = useAuth()
+const showFaqModal = ref(false)
 const showModalDesistirHome = ref(false)
 const desistindoHome = ref(false)
 const confetesDisparados = ref(false)
@@ -40,10 +47,73 @@ const segundos = ref('00')
 const apenasSegundos = ref('00')
 const isHalo10s = ref(false)
 const isState1min = ref(false)
+const loteJaAbriuNaSessao = ref(false)
+const aberturaNotificada = ref(false)
+
+watch(() => statusInfo.value.status_slug, (slug) => {
+  if (slug === 'aberto') {
+    loteJaAbriuNaSessao.value = true
+  } else {
+    loteJaAbriuNaSessao.value = false
+  }
+})
+const isState10s = ref(false)
 const isState10min = ref(false)
+const textoLoteEncerraEm = ref('')
 
 // Estados específicos da Minha Reserva Ativa
 const tempoReservaFormatado = ref('')
+
+// Aviso de tempo desde que o lote mais recente encerrou
+const textoLoteEncerradoRecente = ref('')
+const tempoParaFecharFormatado = ref('')
+
+function formatarContagemFechamento(segundosTotais) {
+  if (segundosTotais <= 0) return '00:00:00'
+  const h = Math.floor(segundosTotais / 3600)
+  const m = Math.floor((segundosTotais % 3600) / 60)
+  const s = segundosTotais % 60
+  const pad = (n) => (n < 10 ? '0' + n : '' + n)
+
+  if (h >= 24) {
+    const d = Math.floor(h / 24)
+    const remH = h % 24
+    return `${d}d ${pad(remH)}:${pad(m)}:${pad(s)}`
+  }
+  return `${pad(h)}:${pad(m)}:${pad(s)}`
+}
+
+function formatarTempoDecorrido(segundosTotais) {
+  const seg = Math.max(0, Math.floor(segundosTotais))
+  
+  if (seg < 60) {
+    const s = seg
+    const unidade = s === 1 ? 'segundo' : 'segundos'
+    return `O lote mais recente aberto encerrou há ${s} ${unidade} atrás.`
+  }
+  
+  const min = Math.floor(seg / 60)
+  if (min < 60) {
+    const unidade = min === 1 ? 'minuto' : 'minutos'
+    return `O lote mais recente aberto encerrou há ${min} ${unidade} atrás.`
+  }
+  
+  const horas = Math.floor(min / 60)
+  if (horas < 24) {
+    const unidade = horas === 1 ? 'hora' : 'horas'
+    return `O lote mais recente aberto encerrou há ${horas} ${unidade} atrás.`
+  }
+  
+  const dias = Math.floor(horas / 24)
+  if (dias < 30) {
+    const unidade = dias === 1 ? 'dia' : 'dias'
+    return `O lote mais recente aberto encerrou há ${dias} ${unidade} atrás.`
+  }
+
+  const meses = Math.floor(dias / 30)
+  const unidade = meses === 1 ? 'mês' : 'meses'
+  return `O lote mais recente aberto encerrou há ${meses} ${unidade} atrás.`
+}
 
 // Controle de Patrocinador Master (Alternância a cada 15 segundos)
 const sponsorIndex = ref(0) // 0 = Servindoor Oficial, 1 = Bradesco
@@ -374,10 +444,53 @@ function tickMotorRelogio() {
     tempoReservaFormatado.value = ''
   }
 
-  // 2. Cronômetro do Lote ou Modo Festa
-  let targetIso = dataAberturaIso.value
-  if (modoFesta.value && dataFestaIso.value) {
-    targetIso = dataFestaIso.value
+  // 2. Atualização da mensagem de lote encerrado recente
+  if (!temLoteComPrevisao.value && loteEncerradoRecente.value?.data_encerramento_iso) {
+    const dataEncerrado = new Date(loteEncerradoRecente.value.data_encerramento_iso).getTime()
+    const diffSegundos = Math.max(0, Math.floor((agora - dataEncerrado) / 1000))
+    textoLoteEncerradoRecente.value = formatarTempoDecorrido(diffSegundos)
+  } else {
+    textoLoteEncerradoRecente.value = ''
+  }
+
+  // 2.1. Texto e contagem de encerramento quando o lote estiver aberto
+  if (statusInfo.value.status_slug === 'aberto' || loteJaAbriuNaSessao.value) {
+    const isoFechamento = lote.value?.data_fechamento_iso || dataFechamentoIso.value
+    if (isoFechamento) {
+      const targetClose = new Date(isoFechamento).getTime()
+      const distClose = targetClose - agora
+      if (distClose > 0) {
+        const segClose = Math.floor(distClose / 1000)
+        tempoParaFecharFormatado.value = formatarContagemFechamento(segClose)
+        textoLoteEncerraEm.value = `O lote encerrará em ${tempoParaFecharFormatado.value}.`
+      } else {
+        tempoParaFecharFormatado.value = '00:00:00'
+        textoLoteEncerraEm.value = 'O lote encerrará em instantes.'
+      }
+    } else {
+      tempoParaFecharFormatado.value = ''
+      textoLoteEncerraEm.value = 'O lote encerrará ao esgotarem as vagas disponíveis.'
+    }
+  } else {
+    tempoParaFecharFormatado.value = ''
+    textoLoteEncerraEm.value = ''
+  }
+
+  // 3. Cronômetro:
+  // Se houver lote com previsão para abrir: contagem regressiva para abertura deste lote
+  // Se não houver lote em previsão: sempre contagem para 30 de outubro às 12h
+  let targetIso = null
+  let isCountdownToLote = false
+
+  if (temLoteComPrevisao.value && (lotePrevisaoAberturaIso.value || dataAberturaIso.value)) {
+    targetIso = lotePrevisaoAberturaIso.value || dataAberturaIso.value
+    isCountdownToLote = true
+  } else if (hasLote.value && dataAberturaIso.value) {
+    targetIso = dataAberturaIso.value
+    isCountdownToLote = true
+  } else {
+    targetIso = dataFestaIso.value || '2026-10-30T12:00:00'
+    isCountdownToLote = false
   }
 
   if (!targetIso) {
@@ -390,17 +503,21 @@ function tickMotorRelogio() {
     return
   }
 
-  const targetDate = new Date(targetIso).getTime()
+  const targetDate = parseSaoPauloTimeToMs(targetIso)
   const distancia = targetDate - agora
 
   if (distancia <= 0) {
-    // Se o lote estava agendado e o tempo de abertura zerou, transiciona instantaneamente no cliente
-    if (statusInfo.value.status_slug === 'agendado' && !modoFesta.value) {
+    if (isCountdownToLote) {
+      loteJaAbriuNaSessao.value = true
       statusInfo.value.status_slug = 'aberto'
-      statusInfo.value.status_label = 'ABERTO'
+      statusInfo.value.status_label = 'RESGATE LIBERADO'
       statusInfo.value.badge_class = 'bg-success'
-      // Sincroniza em segundo plano com o servidor imediatamente, sem esperar os 1.5s do polling
-      fetchLiveStatus()
+      statusInfo.value.pode_resgatar = true
+      statusInfo.value.segundos_para_abrir = 0
+      if (!aberturaNotificada.value) {
+        aberturaNotificada.value = true
+        fetchLiveStatus()
+      }
     }
 
     if (statusInfo.value.status_slug === 'aberto' && !confetesDisparados.value) {
@@ -408,51 +525,57 @@ function tickMotorRelogio() {
     }
     isHalo10s.value = false
     isState1min.value = false
-    dias.value = '00'
-    horas.value = '00'
-    minutos.value = '00'
-    segundos.value = '00'
-    apenasSegundos.value = '00'
+    isState10s.value = false
     return
   }
 
-  const totalSegundos = Math.floor(distancia / 1000)
+  // Se a abertura é no futuro, desativa loteJaAbriuNaSessao e reseta a trava de notificação
+  loteJaAbriuNaSessao.value = false
+  aberturaNotificada.value = false
 
-  if ([30, 10, 5, 3].includes(totalSegundos) && !checkpointsExecutados[totalSegundos]) {
-    checkpointsExecutados[totalSegundos] = true
-    if ('vibrate' in navigator) navigator.vibrate(200)
-  }
+  // Contagem regressiva precisa com Math.ceil para evitar o estado "00" no cronômetro
+  const totalSegundos = Math.ceil(distancia / 1000)
 
-  if (totalSegundos === 0 && !confetesDisparados.value) {
-    soltarConfetes()
-  }
+  if (isCountdownToLote) {
+    if ([30, 10, 5, 3].includes(totalSegundos) && !checkpointsExecutados[totalSegundos]) {
+      checkpointsExecutados[totalSegundos] = true
+      if ('vibrate' in navigator) navigator.vibrate(200)
+    }
 
-  if (statusInfo.value.status_slug === 'agendado' && totalSegundos <= 10) {
-    isHalo10s.value = true
-    isState1min.value = true
-    apenasSegundos.value = formatarTempo(totalSegundos)
-    return
-  } else {
-    isHalo10s.value = false
-  }
+    if (totalSegundos <= 60 && totalSegundos >= 1) {
+      isState1min.value = true
+      isState10s.value = totalSegundos <= 10
+      isHalo10s.value = false
+      apenasSegundos.value = formatarTempo(totalSegundos)
+      segundos.value = formatarTempo(totalSegundos)
+      dias.value = '00'
+      horas.value = '00'
+      minutos.value = '00'
+    } else {
+      isState1min.value = false
+      isState10s.value = false
+      isHalo10s.value = false
+    }
 
-  if (statusInfo.value.status_slug === 'agendado') {
-    isState1min.value = totalSegundos <= 60
     isState10min.value = totalSegundos > 60 && totalSegundos <= 600
   } else {
+    isHalo10s.value = false
     isState1min.value = false
+    isState10s.value = false
     isState10min.value = false
   }
 
-  const d = Math.floor(distancia / (1000 * 60 * 60 * 24))
-  const h = Math.floor((distancia % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
-  const m = Math.floor((distancia % (1000 * 60 * 60)) / (1000 * 60))
-  const s = Math.floor((distancia % (1000 * 60)) / 1000)
+  if (!isState1min.value) {
+    const d = Math.floor(distancia / (1000 * 60 * 60 * 24))
+    const h = Math.floor((distancia % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+    const m = Math.floor((distancia % (1000 * 60 * 60)) / (1000 * 60))
+    const s = Math.floor((distancia % (1000 * 60)) / 1000)
 
-  dias.value = formatarTempo(d)
-  horas.value = formatarTempo(h)
-  minutos.value = formatarTempo(m)
-  segundos.value = formatarTempo(s)
+    dias.value = formatarTempo(d)
+    horas.value = formatarTempo(h)
+    minutos.value = formatarTempo(m)
+    segundos.value = formatarTempo(s)
+  }
 }
 
 // Desistir da vaga diretamente pela Home
@@ -483,9 +606,23 @@ async function desistirVagaPelaHome() {
   }
 }
 
-onMounted(async () => {
-  await calibrarRelogioComServidor()
-  startPolling(1500)
+function handleVisibilityHome() {
+  if (typeof document === 'undefined') return
+  if (document.hidden) {
+    if (renderInterval) {
+      clearInterval(renderInterval)
+      renderInterval = null
+    }
+  } else {
+    if (!renderInterval) {
+      tickMotorRelogio()
+      renderInterval = setInterval(tickMotorRelogio, 100)
+    }
+  }
+}
+
+onMounted(() => {
+  startPolling()
   renderInterval = setInterval(tickMotorRelogio, 100)
 
   sponsorTimer = setInterval(() => {
@@ -493,6 +630,10 @@ onMounted(async () => {
       alternarSponsor()
     }
   }, 15000)
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibilityHome)
+  }
 
   if (cometsCanvasRef.value) {
     canvasCtx = cometsCanvasRef.value.getContext('2d')
@@ -520,11 +661,56 @@ onUnmounted(() => {
     cancelAnimationFrame(animFrameId)
     animFrameId = null
   }
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibilityHome)
+  }
   window.removeEventListener('resize', resizeCanvas)
 })
 
 const temReservaAtiva = computed(() => {
-  return minhaReservaExpiraEmMs.value && minhaReservaExpiraEmMs.value > getSynchronizedServerTime()
+  return (
+    (minhaReservaExpiraEmMs.value && minhaReservaExpiraEmMs.value > getSynchronizedServerTime()) ||
+    (minhaReservaToken.value && minhaReservaSegundos.value && minhaReservaSegundos.value > 0)
+  )
+})
+
+const isContagemFesta = computed(() => {
+  if (loading.value) return false
+  return (
+    statusInfo.value.status_slug !== 'aberto' &&
+    !loteJaAbriuNaSessao.value &&
+    !temLoteComPrevisao.value &&
+    (modoFesta.value || statusInfo.value.status_slug === 'festa')
+  )
+})
+
+const tituloPrincipal = computed(() => {
+  if (loading.value) {
+    return 'Serv indoor 2026'
+  }
+  if (isContagemFesta.value) {
+    return 'A festa iniciará em:'
+  }
+  return hasLote.value && lote.value ? lote.value.nome : 'Serv indoor 2026'
+})
+
+const isSqueezing = ref(false)
+
+const deveExibirWhatsapp = computed(() => {
+  if (loading.value) return false
+  if (statusInfo.value.status_slug === 'aberto' || loteJaAbriuNaSessao.value) return false
+  if (temReservaAtiva.value) return false
+  if ((temLoteComPrevisao.value || !isContagemFesta.value) && (isState1min.value || loteJaAbriuNaSessao.value)) return false
+  return true
+})
+
+watch(deveExibirWhatsapp, (newVal, oldVal) => {
+  if (oldVal === true && newVal === false) {
+    isSqueezing.value = true
+    setTimeout(() => {
+      isSqueezing.value = false
+    }, 850)
+  }
 })
 
 const cardClass = computed(() => {
@@ -535,6 +721,7 @@ const cardClass = computed(() => {
   return ''
 })
 </script>
+
 
 <template>
   <div :class="['hero-section', { 'theme-bradesco': isBradescoTheme }]">
@@ -559,15 +746,18 @@ const cardClass = computed(() => {
 
           <!-- Badge Superior do Status / Patrocinador Master -->
           <div class="badge-wrapper">
+            <span v-if="loading" class="vip-badge badge-loading">
+              <span class="dot-pulse-subtle"></span> SINCRONIZANDO...
+            </span>
             <!-- SE O USUÁRIO ESTIVER COM RESERVA ATIVA, DESTACA IMEDIATAMENTE -->
-            <span v-if="temReservaAtiva" class="vip-badge badge-reserva-ativa">
+            <span v-else-if="temReservaAtiva" class="vip-badge badge-reserva-ativa">
               <i class="bi bi-hourglass-split me-1 dot-pulse"></i> SUA VAGA ESTÁ RESERVADA ({{ tempoReservaFormatado }})
             </span>
             <span v-else-if="isBradescoTheme" class="vip-badge badge-bradesco-master">
               <i class="bi bi-star-fill text-gold me-1"></i> PATROCINADOR MASTER • BRADESCO
             </span>
             <span v-else-if="statusInfo.status_slug === 'aberto'" class="vip-badge bg-success">
-              <i class="bi bi-circle-fill dot-pulse"></i> {{ statusInfo.status_label }}
+              <i class="bi bi-circle-fill dot-pulse"></i> {{ statusInfo.status_label || 'RESGATE LIBERADO' }}
             </span>
             <span v-else-if="statusInfo.status_slug === 'agendado'" class="vip-badge bg-warning">
               <i class="bi bi-clock-history"></i> {{ statusInfo.status_label }}
@@ -597,7 +787,7 @@ const cardClass = computed(() => {
               <img
                 v-show="sponsorIndex === 0"
                 src="/images/logo_servindoor_sem-fundo.png?v=2026"
-                alt="Servindoor • A Festa do Servidor 2026"
+                alt="Serv indoor • A Festa do Servidor 2026"
                 class="hero-logo-img logo-servindoor"
               />
               <!-- Logo 2: Bradesco -->
@@ -611,53 +801,87 @@ const cardClass = computed(() => {
           </div>
 
           <!-- Título Principal -->
-          <h1 class="hero-title font-outfit">
-            {{ hasLote && lote ? lote.nome : 'Servindoor 2026' }}
+          <h1 class="hero-title font-quattrocento">
+            {{ tituloPrincipal }}
           </h1>
 
-          <p v-if="hasLote && lote && lote.secretaria_nome" class="hero-subtitle">
+          <p v-if="!isContagemFesta && hasLote && lote && lote.secretaria_nome" class="hero-subtitle">
             <i class="bi bi-building me-1"></i> Exclusivo para servidores: <strong>{{ lote.secretaria_nome }}</strong>
           </p>
 
           <!-- BLOCO DE CRONÔMETRO DO LOTE / MODO FESTA (SE AGENDADO OU FESTA) -->
-          <div v-if="!temReservaAtiva && (statusInfo.status_slug === 'agendado' || modoFesta || !hasLote)" class="clock-wrapper">
-            <div v-if="!isHalo10s" class="clock-digits">
-              <div class="digit-box">
+          <div
+            v-if="!loading && !temReservaAtiva && (statusInfo.status_slug === 'agendado' || isContagemFesta)"
+            class="clock-wrapper"
+          >
+            <div
+              class="clock-digits"
+              :class="{
+                'clock-digits-fire-yellow': isState1min && !isState10s,
+                'clock-digits-fire-red': isState10s
+              }"
+            >
+              <!-- Caixa Dias -->
+              <div class="digit-box" :class="{ 'box-sucked-into-sec': isState1min }">
                 <span class="digit-number">{{ dias }}</span>
                 <span class="digit-label">Dias</span>
               </div>
-              <span class="digit-sep">:</span>
-              <div class="digit-box">
+              <span class="digit-sep" :class="{ 'sep-sucked': isState1min }">:</span>
+
+              <!-- Caixa Horas -->
+              <div class="digit-box" :class="{ 'box-sucked-into-sec': isState1min }">
                 <span class="digit-number">{{ horas }}</span>
                 <span class="digit-label">Horas</span>
               </div>
-              <span class="digit-sep">:</span>
-              <div class="digit-box">
+              <span class="digit-sep" :class="{ 'sep-sucked': isState1min }">:</span>
+
+              <!-- Caixa Minutos -->
+              <div class="digit-box" :class="{ 'box-sucked-into-sec': isState1min }">
                 <span class="digit-number">{{ minutos }}</span>
                 <span class="digit-label">Min</span>
               </div>
-              <span class="digit-sep">:</span>
-              <div class="digit-box">
-                <span class="digit-number">{{ segundos }}</span>
-                <span class="digit-label">Seg</span>
+              <span class="digit-sep" :class="{ 'sep-sucked': isState1min }">:</span>
+
+              <!-- Caixa Segundos (A ÚNICA EXIBIDA QUANDO <= 60s) -->
+              <div
+                class="digit-box digit-box-seconds"
+                :class="{
+                  'box-fire-yellow': isState1min && !isState10s,
+                  'box-fire-red': isState10s
+                }"
+              >
+                <!-- Animação de Fogo Realista (Amarelo nos 60s, Vermelho Intenso nos últimos 10s) -->
+                <div v-if="isState1min" class="flame-fx-container" :class="{ 'flame-fx-red': isState10s }">
+                  <div class="flame-tongue tongue-center"></div>
+                  <div class="flame-tongue tongue-left"></div>
+                  <div class="flame-tongue tongue-right"></div>
+                  <div class="flame-particles">
+                    <span class="ember ember-1"></span>
+                    <span class="ember ember-2"></span>
+                    <span class="ember ember-3"></span>
+                    <span class="ember ember-4"></span>
+                  </div>
+                </div>
+
+                <span class="digit-number font-outfit">{{ isState1min ? apenasSegundos : segundos }}</span>
+                <span class="digit-label">{{ isState1min ? 'SEGUNDOS' : 'Seg' }}</span>
               </div>
             </div>
 
-            <!-- Modo Halo 10 Segundos -->
-            <div v-else class="halo-wrapper">
-              <div class="halo-circle">
-                <span class="halo-number font-outfit">{{ apenasSegundos }}</span>
-                <span class="halo-label">SEGUNDOS</span>
-              </div>
-            </div>
           </div>
 
           <!-- Botões de Ação Dinâmicos -->
-          <div class="action-buttons-wrapper">
-            <!-- 1. Botão de Continuação de Reserva Ativa -->
-            <div v-if="temReservaAtiva && lote" class="reserva-action-container">
+          <div class="action-buttons-wrapper" :class="{ 'has-split-buttons': deveExibirWhatsapp }">
+            <div class="main-action-slot">
+              <!-- 0. Skeleton Neutro durante Carregamento -->
+              <div v-if="loading" class="btn-vip-skeleton">
+                <span class="skeleton-shimmer"></span>
+              </div>
+
+              <!-- 1. Botão de Continuação de Reserva Ativa -->
+              <div v-else-if="temReservaAtiva && (lote || lotePrevisaoId)" class="reserva-action-container">
               <router-link
-                :to="'/resgate/' + lote.id"
+                :to="'/resgate/' + (lote?.id || lotePrevisaoId)"
                 class="btn-vip-mega btn-reserva-continua font-outfit"
               >
                 <span>Continuar Meu Resgate</span>
@@ -679,8 +903,8 @@ const cardClass = computed(() => {
 
             <!-- 2. Botão de Resgate Aberto -->
             <router-link
-              v-else-if="statusInfo.status_slug === 'aberto' && lote"
-              :to="'/resgate/' + lote.id"
+              v-else-if="statusInfo.status_slug === 'aberto' && (lote || lotePrevisaoId)"
+              :to="'/resgate/' + (lote?.id || lotePrevisaoId)"
               class="btn-vip-mega font-outfit"
             >
               <span>Resgatar Ingresso</span>
@@ -689,8 +913,8 @@ const cardClass = computed(() => {
 
             <!-- 3. Botão de Vaga Reservada em Espera -->
             <router-link
-              v-else-if="statusInfo.status_slug === 'reservado' && lote"
-              :to="'/resgate/' + lote.id"
+              v-else-if="statusInfo.status_slug === 'reservado' && (lote || lotePrevisaoId)"
+              :to="'/resgate/' + (lote?.id || lotePrevisaoId)"
               class="btn-vip-mega btn-reserva-continua font-outfit"
             >
               <span>Tentar Vaga em Liberação</span>
@@ -714,33 +938,45 @@ const cardClass = computed(() => {
 
             <!-- 7. Modo Agendado / Contagem Festa -->
             <div v-else-if="statusInfo.status_slug === 'agendado' || modoFesta" class="btn-vip-disabled font-outfit">
-              <i class="bi bi-stars"></i> Liberação em breve! Fique atento ao cronômetro
+              <i class="bi bi-stars"></i> Em breve...
             </div>
           </div>
 
-          <!-- Rodapé com Chips Informativos -->
-          <div v-if="hasLote && lote" class="chips-footer">
-            <span class="info-chip">
-              <i class="bi bi-ticket-perforated text-success"></i>
-              <span>Vagas Livres: <strong class="text-white">{{ vagasDisponiveis }}</strong></span>
-            </span>
-
-            <button type="button" class="info-chip-btn" @click="showModalEmResgate = true">
-              <i class="bi bi-hourglass-split text-warning"></i>
-              <span>Em Resgate: <strong class="text-white">{{ reservasAtivas }}</strong></span>
-              <i class="bi bi-question-circle-fill text-warning opacity-75"></i>
-            </button>
-
-            <span class="info-chip">
-              <i class="bi bi-people-fill text-primary"></i>
-              <span>Garantidos: <strong class="text-white">{{ lote.quantidade_resgatada }}</strong> / {{ lote.quantidade_total }}</span>
-            </span>
-
-            <span v-if="lote.data_fechamento_formatada" class="info-chip">
-              <i class="bi bi-clock-history text-danger"></i>
-              <span>Encerra: <strong class="text-white">{{ lote.data_fechamento_formatada }}</strong></span>
-            </span>
+            <!-- Botão do Canal do WhatsApp -->
+            <a
+              v-if="deveExibirWhatsapp || isSqueezing"
+              href="https://whatsapp.com/channel/0029VbDEW8KBFLgMTmjdco0C"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="btn-whatsapp-channel font-outfit"
+              :class="{ 'btn-whatsapp-squeezed': isSqueezing || !deveExibirWhatsapp }"
+              title="Acessar Canal Oficial no WhatsApp"
+            >
+              <i class="bi bi-whatsapp whatsapp-icon"></i>
+              <span class="whatsapp-text">Canal do WhatsApp</span>
+              <i class="bi bi-box-arrow-up-right whatsapp-ext-icon"></i>
+            </a>
           </div>
+
+
+
+          <!-- Quando o lote estiver aberto: texto em quanto tempo o lote encerrará -->
+          <div
+            v-if="statusInfo.status_slug === 'aberto' && textoLoteEncerraEm"
+            class="lote-encerrado-aviso-subtle"
+          >
+            <i class="bi bi-clock-history text-danger me-1"></i>
+            <span>{{ textoLoteEncerraEm }}</span>
+          </div>
+
+          <!-- Mensagem discreta de lote encerrado recente abaixo do botão -->
+          <div v-else-if="textoLoteEncerradoRecente" class="lote-encerrado-aviso-subtle">
+            <i class="bi bi-info-circle me-1 opacity-50"></i>
+            <span>{{ textoLoteEncerradoRecente }}</span>
+          </div>
+
+
+
 
           <div v-else-if="modoFesta" class="chips-footer">
             <span class="info-chip">
@@ -749,8 +985,23 @@ const cardClass = computed(() => {
             </span>
             <span class="info-chip">
               <i class="bi bi-clock-fill text-warning"></i>
-              <span>Horário: <strong class="text-white">14:00</strong></span>
+              <span>Horário: <strong class="text-white">12:00</strong></span>
             </span>
+          </div>
+
+          <!-- Botão de Dúvidas Frequentes (FAQ) no local da antiga contagem de ingressos -->
+          <div class="faq-home-trigger-wrap">
+            <button
+              type="button"
+              class="btn-faq-home font-outfit"
+              @click="showFaqModal = true"
+            >
+              <i class="bi bi-question-circle-fill btn-faq-icon"></i>
+              <span>Dúvidas Frequentes (FAQ)</span>
+              <span v-if="isAdminGeral" class="badge-faq-admin font-outfit">
+                <i class="bi bi-pencil-fill me-1"></i> Admin
+              </span>
+            </button>
           </div>
 
         </div>
@@ -787,418 +1038,23 @@ const cardClass = computed(() => {
       </template>
     </Modal>
 
-    <!-- Modal Informativo: Vagas em Resgate -->
-    <Modal
-      :show="showModalEmResgate"
-      title="Como funcionam as Vagas em Resgate?"
-      icon="bi-hourglass-split"
-      @close="showModalEmResgate = false"
-    >
-      <div class="modal-info-box">
-        <div class="modal-info-header">
-          <i class="bi bi-shield-check text-warning display-icon"></i>
-          <div>
-            <strong>Garantia de 5 minutos</strong>
-            <p class="modal-desc">Quando um servidor clica para resgatar, a vaga fica temporariamente bloqueada para ele preencher os dados.</p>
-          </div>
-        </div>
-      </div>
+    <!-- Modal de Perguntas Frequentes (FAQ) -->
+    <FaqModal v-model="showFaqModal" />
 
-      <div class="modal-rules-list">
-        <div class="rule-item">
-          <i class="bi bi-check-circle-fill text-success"></i>
-          <span>Se o servidor concluir o resgate com foto dentro do prazo, o ingresso é <strong>garantido</strong>.</span>
-        </div>
-        <div class="rule-item">
-          <i class="bi bi-arrow-repeat text-warning"></i>
-          <span>Se o tempo expirar sem conclusão, a vaga volta <strong>imediatamente</strong> para o lote.</span>
-        </div>
-      </div>
 
-      <template #footer>
-        <button type="button" class="btn-primary w-100 font-outfit" @click="showModalEmResgate = false">
-          Entendi, continuar acompanhando
-        </button>
-      </template>
-    </Modal>
 
   </div>
 </template>
 
 <style scoped>
 .hero-section {
-  min-height: calc(100vh - 120px);
+  min-height: calc(100vh - 72px);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 0 60px;
+  padding: 30px 0 50px;
   position: relative;
   overflow: hidden;
   background: transparent;
-  transition: background 1s ease;
-}
-
-/* ========================================================================== */
-/* 1. LUZES AMBIENTES DINÂMICAS EM MOVIMENTO (MODO SERVINDOOR)               */
-/* ========================================================================== */
-.servindoor-orbs-container {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-  transition: opacity 1s cubic-bezier(0.4, 0, 0.2, 1);
-  opacity: 1;
-}
-
-.servindoor-orbs-container.hidden-orbs {
-  opacity: 0;
-}
-
-.ambient-glow {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(110px);
-  pointer-events: none;
-}
-
-.glow-magenta {
-  width: 500px;
-  height: 500px;
-  background: var(--serv-magenta);
-  top: -80px;
-  left: 5%;
-  opacity: 0.32;
-  animation: floatMagenta 14s infinite alternate ease-in-out;
-}
-
-@keyframes floatMagenta {
-  0% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(70px, 60px) scale(1.15); }
-  66% { transform: translate(-40px, 90px) scale(0.9); }
-  100% { transform: translate(50px, -30px) scale(1.08); }
-}
-
-.glow-cyan {
-  width: 480px;
-  height: 480px;
-  background: var(--serv-cyan);
-  bottom: -60px;
-  right: 5%;
-  opacity: 0.28;
-  animation: floatCyan 16s infinite alternate ease-in-out;
-}
-
-@keyframes floatCyan {
-  0% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(-60px, -50px) scale(1.18); }
-  66% { transform: translate(50px, -70px) scale(0.88); }
-  100% { transform: translate(-40px, 40px) scale(1.12); }
-}
-
-.glow-gold {
-  width: 320px;
-  height: 320px;
-  background: var(--serv-amber);
-  top: 40%;
-  left: 45%;
-  opacity: 0.15;
-  animation: floatGold 18s infinite alternate ease-in-out;
-}
-
-@keyframes floatGold {
-  0% { transform: translate(-50%, -50%) scale(0.9); }
-  50% { transform: translate(-30%, -60%) scale(1.2); }
-  100% { transform: translate(-60%, -40%) scale(1); }
-}
-
-/* ========================================================================== */
-/* 2. CANVAS DE COMETAS FLUIDOS A 60FPS (MODO BRADESCO MASTER)               */
-/* ========================================================================== */
-.bradesco-comets-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 1s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 1;
-}
-
-.bradesco-comets-canvas.active-canvas {
-  opacity: 1;
-}
-
-/* ========================================================================== */
-/* TEMA BRADESCO MASTER                                                       */
-/* ========================================================================== */
-.theme-bradesco .hero-title {
-  background: linear-gradient(135deg, #ffffff 0%, #ff8095 50%, #ff1744 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.theme-bradesco .btn-vip-mega {
-  background: linear-gradient(135deg, #cc092f 0%, #ff1744 50%, #990000 100%) !important;
-  box-shadow: 0 12px 35px rgba(255, 23, 68, 0.6) !important;
-  border-color: rgba(255, 255, 255, 0.35) !important;
-}
-
-.theme-bradesco .btn-vip-mega:hover {
-  background: linear-gradient(135deg, #e6002e 0%, #ff2d55 50%, #b30000 100%) !important;
-  box-shadow: 0 18px 50px rgba(255, 23, 68, 0.8) !important;
-}
-
-.badge-bradesco-master {
-  background: linear-gradient(135deg, rgba(204, 9, 47, 0.5) 0%, rgba(255, 23, 68, 0.3) 100%) !important;
-  border: 1px solid rgba(255, 23, 68, 0.75) !important;
-  color: #ffffff !important;
-  box-shadow: 0 0 18px rgba(255, 23, 68, 0.5);
-  animation: pulseGlow 2s infinite ease-in-out;
-}
-
-@keyframes pulseGlow {
-  0% { transform: scale(1); box-shadow: 0 0 14px rgba(255, 23, 68, 0.4); }
-  50% { transform: scale(1.04); box-shadow: 0 0 24px rgba(255, 23, 68, 0.75); }
-  100% { transform: scale(1); box-shadow: 0 0 14px rgba(255, 23, 68, 0.4); }
-}
-
-/* ========================================================================== */
-/* CRONÔMETRO DE MINHA RESERVA ATIVA NA HOME                                 */
-/* ========================================================================== */
-.badge-reserva-ativa {
-  background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%) !important;
-  color: #ffffff !important;
-  border: 1px solid rgba(255, 255, 255, 0.4) !important;
-  box-shadow: 0 0 20px rgba(245, 158, 11, 0.6) !important;
-  animation: pulseReserva 1.5s infinite ease-in-out;
-}
-
-@keyframes pulseReserva {
-  0% { transform: scale(1); box-shadow: 0 0 14px rgba(245, 158, 11, 0.4); }
-  50% { transform: scale(1.04); box-shadow: 0 0 24px rgba(245, 158, 11, 0.8); }
-  100% { transform: scale(1); box-shadow: 0 0 14px rgba(245, 158, 11, 0.4); }
-}
-
-.reserva-action-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.btn-desistir-home-link {
-  background: none;
-  border: none;
-  color: #94a3b8;
-  font-size: 0.84rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 0.2s ease;
-  display: inline-flex;
-  align-items: center;
-}
-
-.btn-desistir-home-link:hover {
-  color: #f87171;
-  text-decoration: underline;
-}
-
-/* ========================================================================== */
-/* HERO CENTER & LAYOUT LIMPO                                                 */
-/* ========================================================================== */
-.hero-center {
-  max-width: 680px;
-  margin: 0 auto;
-  position: relative;
-  z-index: 10;
-}
-
-.hero-card-clean {
-  padding: 30px 16px;
-  text-align: center;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.badge-wrapper {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 14px;
-}
-
-/* 3D FLIP DA LOGO */
-.hero-logo-perspective {
-  perspective: 1200px;
-  display: flex;
-  justify-content: center;
-  margin: 6px 0 18px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.hero-logo-card {
-  transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
-  transform-style: preserve-3d;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.hero-logo-card.spinning {
-  transform: rotateY(360deg) scale(1.08);
-}
-
-.hero-logo-img {
-  max-height: 130px;
-  max-width: 90%;
-  object-fit: contain;
-  transition: filter 0.5s ease, transform 0.3s ease;
-}
-
-.logo-servindoor {
-  filter: drop-shadow(0 8px 25px rgba(217, 70, 239, 0.45));
-}
-
-.logo-bradesco {
-  filter: drop-shadow(0 8px 25px rgba(255, 23, 68, 0.65));
-}
-
-.hero-logo-card:hover .hero-logo-img {
-  transform: scale(1.03);
-}
-
-.hero-title {
-  font-size: clamp(2rem, 5vw, 2.7rem);
-  font-weight: 900;
-  color: #ffffff;
-  margin-bottom: 6px;
-  line-height: 1.15;
-  transition: all 0.8s ease;
-}
-
-.hero-subtitle {
-  color: var(--text-muted);
-  font-size: 0.92rem;
-  margin-bottom: 12px;
-}
-
-/* HALO MODE 10s */
-.halo-wrapper {
-  display: flex;
-  justify-content: center;
-  margin: 20px 0;
-}
-
-.halo-circle {
-  width: 140px;
-  height: 140px;
-  border-radius: 50%;
-  border: 4px solid #ef4444;
-  box-shadow: 0 0 40px rgba(239, 68, 68, 0.6);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  animation: haloPulse 1s infinite;
-}
-
-@keyframes haloPulse {
-  0% { transform: scale(1); box-shadow: 0 0 30px rgba(239, 68, 68, 0.4); }
-  50% { transform: scale(1.06); box-shadow: 0 0 50px rgba(239, 68, 68, 0.8); }
-  100% { transform: scale(1); box-shadow: 0 0 30px rgba(239, 68, 68, 0.4); }
-}
-
-.halo-number {
-  font-size: 3.8rem;
-  font-weight: 900;
-  color: #ffffff;
-  line-height: 1;
-}
-
-.halo-label {
-  font-size: 0.65rem;
-  font-weight: 800;
-  color: #fca5a5;
-  letter-spacing: 1px;
-}
-
-.action-buttons-wrapper {
-  margin-top: 28px;
-}
-
-.chips-footer {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 28px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.modal-info-box {
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.3);
-  border-radius: 14px;
-  padding: 16px;
-  margin-bottom: 20px;
-}
-
-.modal-info-header {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-}
-
-.display-icon {
-  font-size: 2rem;
-}
-
-.modal-desc {
-  font-size: 0.85rem;
-  color: #e2e8f0;
-  margin-top: 4px;
-}
-
-.modal-rules-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  font-size: 0.85rem;
-  color: var(--text-muted);
-}
-
-.rule-item {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-
-.rule-item i {
-  font-size: 1.1rem;
-  margin-top: 2px;
-}
-
-.text-gold { color: #fbbf24 !important; }
-.w-100 { width: 100%; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.text-white { color: #ffffff; }
-.text-warning { color: var(--warning-color); }
-.text-success { color: var(--success-color); }
-.text-danger { color: var(--danger-color); }
-.text-primary { color: var(--primary-accent); }
-.opacity-75 { opacity: 0.75; }
-.flex-1 { flex: 1; }
-
-@media (max-width: 576px) {
-  .hero-logo-img {
-    max-height: 90px;
-  }
-  .hero-title {
-    font-size: 1.75rem;
-  }
 }
 </style>

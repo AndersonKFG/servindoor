@@ -2,13 +2,76 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
+import { useToast } from '../composables/useToast'
 
 const router = useRouter()
 const route = useRoute()
-const { currentUser, isAuthenticated, isStaff, isAdminGeral, isAdmin, isPortaria, isEntregador, sessaoSubstituida, checkAuth, clearAuth } = useAuth()
+const { currentUser, isAuthenticated, isStaff, isAdminGeral, isAdmin, isPortaria, isEntregador, isValidador, sessaoSubstituida, hasRole, checkAuth, clearAuth } = useAuth()
 const mobileMenuOpen = ref(false)
 
+const { toast } = useToast()
 let authHeartbeat = null
+let originalFetch = null
+let isRedirecionandoPorRevogacao = false
+
+const MENSAGEM_REVOGACAO = 'O seu acesso a esta tela foi revogado, você será redirecionada para a tela inicial, onde poderá ver através do menu onde poderá acessar. Sua conta também pode ter sido desativada.'
+
+function isRotaRestrita(r) {
+  if (!r) return false
+  return (
+    r.matched?.some(record => record.meta?.requiresAuth) ||
+    r.meta?.requiresAuth ||
+    r.path?.startsWith('/admin') ||
+    r.path?.startsWith('/portaria')
+  )
+}
+
+function getRequiredRoles(r) {
+  if (!r) return []
+  if (Array.isArray(r.meta?.roles) && r.meta.roles.length > 0) {
+    return r.meta.roles
+  }
+  if (r.matched && r.matched.length > 0) {
+    for (const record of r.matched) {
+      if (Array.isArray(record.meta?.roles) && record.meta.roles.length > 0) {
+        return record.meta.roles
+      }
+    }
+  }
+  return []
+}
+
+function verificarAcessoRotaAtual() {
+  const currentRoute = router.currentRoute.value || route
+  if (!isRotaRestrita(currentRoute)) return
+  if (isRedirecionandoPorRevogacao) return
+
+  // 1. Caso o usuário não esteja mais autenticado (desativado ou logout)
+  if (!currentUser.value || !isAuthenticated.value) {
+    executarRevogacao()
+    return
+  }
+
+  // 2. Caso a rota exija roles específicas e o usuário não as possua mais
+  const requiredRoles = getRequiredRoles(currentRoute)
+  if (requiredRoles && requiredRoles.length > 0) {
+    const permitida = hasRole(...requiredRoles)
+    if (!permitida) {
+      executarRevogacao()
+    }
+  }
+}
+
+function executarRevogacao() {
+  if (isRedirecionandoPorRevogacao) return
+  isRedirecionandoPorRevogacao = true
+  toast.warning(MENSAGEM_REVOGACAO, 'Acesso Revogado', 10000)
+  router.push('/').finally(() => {
+    setTimeout(() => {
+      isRedirecionandoPorRevogacao = false
+    }, 1500)
+  })
+}
 
 watch(sessaoSubstituida, (val) => {
   if (val) {
@@ -17,18 +80,66 @@ watch(sessaoSubstituida, (val) => {
   }
 })
 
+function onFocusOrVisibility() {
+  if (document.visibilityState === 'visible') {
+    checkAuth(true).then(() => verificarAcessoRotaAtual()).catch(() => {})
+  }
+}
+
 onMounted(async () => {
   await checkAuth()
+  verificarAcessoRotaAtual()
+
+  // Heartbeat para checagem ativa de permissões em rotas restritas (pausa quando aba oculta ou na Home pública)
   authHeartbeat = setInterval(async () => {
-    if (currentUser.value) {
-      await checkAuth(true)
+    try {
+      if (typeof document !== 'undefined' && document.hidden) return
+      const currentRoute = router.currentRoute.value || route
+      if (isRotaRestrita(currentRoute)) {
+        await checkAuth(true)
+        verificarAcessoRotaAtual()
+      }
+    } catch {
+      // Ignora falha de rede transitória
     }
-  }, 8000)
+  }, 10000)
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('visibilitychange', onFocusOrVisibility)
+    window.addEventListener('focus', onFocusOrVisibility)
+
+    // Interceptador global para resposta 401/403 imediata caso uma ação seja executada na tela restrita
+    if (window.fetch) {
+      originalFetch = window.fetch
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args)
+        if (response.status === 401 || response.status === 403) {
+          const currentRoute = router.currentRoute.value || route
+          if (isRotaRestrita(currentRoute)) {
+            try {
+              await checkAuth(true)
+              verificarAcessoRotaAtual()
+            } catch {
+              // Ignora erro
+            }
+          }
+        }
+        return response
+      }
+    }
+  }
 })
 
 onUnmounted(() => {
   if (authHeartbeat) {
     clearInterval(authHeartbeat)
+  }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('visibilitychange', onFocusOrVisibility)
+    window.removeEventListener('focus', onFocusOrVisibility)
+    if (originalFetch) {
+      window.fetch = originalFetch
+    }
   }
 })
 
@@ -36,12 +147,13 @@ watch(
   () => route.path,
   async () => {
     mobileMenuOpen.value = false
-    await checkAuth()
+    await checkAuth(true)
+    verificarAcessoRotaAtual()
   }
 )
 
 const showStaffNav = computed(() => {
-  return isStaff.value || ['/admin', '/portaria'].some(p => route.path.startsWith(p))
+  return isAuthenticated.value && isStaff.value
 })
 
 // Extrai PRIMEIRO e ÚLTIMO nome do usuário logado
@@ -62,6 +174,7 @@ const rolePrincipalLabel = computed(() => {
   
   if (roles.includes('admin_geral')) return 'Admin Geral'
   if (roles.includes('admin')) return 'Administrador'
+  if (roles.includes('validador')) return 'Validador'
   if (roles.includes('portaria')) return 'Portaria'
   if (roles.includes('entregador')) return 'Entregador'
   return 'Staff'
@@ -80,60 +193,126 @@ function toggleMobileMenu() {
 
 <template>
   <header class="navbar-wrapper">
-    
-    <!-- 1. BARRA PRINCIPAL SUPERIOR (MAIN NAV) -->
+    <!-- BARRA ÚNICA SUPERIOR -->
     <div class="navbar-main">
       <div class="app-container">
         <div class="navbar-main-inner">
           
-          <!-- Logo Oficial Servindoor -->
+          <!-- 1. ESQUERDA: Logo Oficial Serv indoor -->
           <router-link to="/" class="navbar-brand" @click="mobileMenuOpen = false">
             <img
               src="/images/logo_servindoor_sem-fundo.png"
-              alt="Servindoor • A Festa do Servidor 2026"
+              alt="Serv indoor • A Festa do Servidor 2026"
               class="navbar-logo-img"
             />
           </router-link>
 
-          <!-- Botão Hamburger no Mobile -->
-          <button
-            type="button"
-            class="navbar-toggle-btn"
-            :class="{ 'active': mobileMenuOpen }"
-            aria-label="Abrir Menu"
-            @click="toggleMobileMenu"
-          >
-            <i :class="mobileMenuOpen ? 'bi bi-x-lg' : 'bi bi-list'"></i>
-          </button>
-
-          <!-- Área Direita Desktop -->
-          <div class="desktop-main-actions">
+          <!-- 2. CENTRO: Menus Dinâmicos (Entre a Logo e a div do Usuário) -->
+          <nav class="navbar-center-menu" :class="showStaffNav ? 'staff-center-menu' : 'guest-center-menu'">
             
-            <!-- VISITANTE NÃO AUTENTICADO -->
-            <ul v-if="!showStaffNav" class="navbar-nav-guest">
+            <!-- LINKS PARA VISITANTE / NÃO LOGADO -->
+            <ul v-if="!showStaffNav" class="navbar-center-list">
               <li>
-                <router-link to="/" class="nav-link-guest">
+                <router-link to="/" class="nav-center-link">
                   <i class="bi bi-house-door"></i>
                   <span>Início</span>
                 </router-link>
               </li>
 
+              <li>
+                <router-link to="/meu-ingresso" class="nav-center-link">
+                  <i class="bi bi-ticket-detailed text-cyan"></i>
+                  <span>Meu Ingresso</span>
+                </router-link>
+              </li>
+
               <li v-if="!isAuthenticated">
-                <router-link to="/meus-premios" class="nav-link-guest nav-link-highlight">
+                <router-link to="/meus-premios" class="nav-center-link nav-link-highlight">
                   <i class="bi bi-gift-fill text-gold"></i>
                   <span>Meus Prêmios</span>
                 </router-link>
               </li>
+            </ul>
 
-              <li>
-                <router-link to="/login" class="btn-staff-access">
-                  <i class="bi bi-shield-lock-fill"></i>
-                  <span>Acesso Staff</span>
+            <!-- LINKS PARA EQUIPE / USUÁRIO LOGADO -->
+            <ul v-else class="navbar-center-list staff-links">
+              <!-- Gestão de Lotes (Admin Geral) -->
+              <li v-if="isAdminGeral">
+                <router-link to="/admin" class="nav-center-link" exact>
+                  <i class="bi bi-speedometer2"></i>
+                  <span>Lotes</span>
+                </router-link>
+              </li>
+
+              <!-- Validações de Servidores (Validador, Admin, Admin Geral) -->
+              <li v-if="isValidador">
+                <router-link to="/admin/validacoes" class="nav-center-link">
+                  <i class="bi bi-person-check-fill text-emerald"></i>
+                  <span>Validações</span>
+                </router-link>
+              </li>
+
+              <!-- Participantes (Admin & Admin Geral) -->
+              <li v-if="isAdmin">
+                <router-link to="/admin/participantes" class="nav-center-link">
+                  <i class="bi bi-ticket-perforated-fill text-emerald"></i>
+                  <span>Participantes</span>
+                </router-link>
+              </li>
+
+              <!-- Cancelamentos (Admin & Admin Geral) -->
+              <li v-if="isAdmin">
+                <router-link to="/admin/cancelamentos" class="nav-center-link">
+                  <i class="bi bi-person-x-fill text-danger"></i>
+                  <span>Cancelamentos</span>
+                </router-link>
+              </li>
+
+              <!-- Equipe & Acessos (Admin & Admin Geral) -->
+              <li v-if="isAdmin">
+                <router-link to="/admin/usuarios" class="nav-center-link">
+                  <i class="bi bi-person-gear text-purple"></i>
+                  <span>Equipe</span>
+                </router-link>
+              </li>
+
+              <!-- Mesa de Sorteios (Admin & Admin Geral) -->
+              <li v-if="isAdmin">
+                <router-link to="/admin/sorteios" class="nav-center-link">
+                  <i class="bi bi-trophy-fill text-gold"></i>
+                  <span>Sorteios</span>
+                </router-link>
+              </li>
+
+              <!-- Portaria & Scanner (Portaria, Admin, Admin Geral) -->
+              <li v-if="isPortaria">
+                <router-link to="/portaria" class="nav-center-link">
+                  <i class="bi bi-qr-code-scan text-cyan"></i>
+                  <span>Portaria</span>
+                </router-link>
+              </li>
+
+              <!-- Registro de Entregas (Entregador, Admin, Admin Geral) -->
+              <li v-if="isEntregador">
+                <router-link to="/admin/entregas" class="nav-center-link">
+                  <i class="bi bi-camera-fill text-amber"></i>
+                  <span>Entregas</span>
                 </router-link>
               </li>
             </ul>
 
-            <!-- USUÁRIO EQUIPE AUTENTICADO: APRESENTAÇÃO E LOGOUT -->
+          </nav>
+
+          <!-- 3. DIREITA: Botão de Acesso Staff ou Apresentação do Usuário -->
+          <div class="navbar-right-actions">
+            
+            <!-- Visitante / Não Autenticado -->
+            <router-link v-if="!showStaffNav" to="/login" class="btn-staff-access">
+              <i class="bi bi-shield-lock-fill"></i>
+              <span>Acesso Staff</span>
+            </router-link>
+
+            <!-- Usuário Equipe Autenticado: Avatar, Nome, Cargo e Logout -->
             <div v-else class="user-greeting-box">
               <div class="user-avatar-badge">
                 <i class="bi bi-person-fill"></i>
@@ -161,70 +340,26 @@ function toggleMobileMenu() {
               </button>
             </div>
 
+
+
+            <!-- Botão Hamburguer no Mobile/Tablet -->
+            <button
+              type="button"
+              class="navbar-toggle-btn"
+              :class="[{ 'active': mobileMenuOpen }, showStaffNav ? 'staff-toggle' : 'guest-toggle']"
+              aria-label="Abrir Menu"
+              @click="toggleMobileMenu"
+            >
+              <i :class="mobileMenuOpen ? 'bi bi-x-lg' : 'bi bi-list'"></i>
+            </button>
+
           </div>
 
         </div>
       </div>
     </div>
 
-    <!-- 2. SUBNAV OPERACIONAL (EXCLUSIVA PARA EQUIPE LOGADA) -->
-    <nav v-if="showStaffNav" class="navbar-subnav">
-      <div class="app-container">
-        <ul class="subnav-list">
-          
-          <!-- Gestão de Lotes (Admin Geral) -->
-          <li v-if="isAdminGeral">
-            <router-link to="/admin" class="subnav-link link-lotes" exact>
-              <i class="bi bi-speedometer2"></i>
-              <span>Lotes</span>
-            </router-link>
-          </li>
-
-          <!-- Participantes (Admin & Admin Geral) -->
-          <li v-if="isAdmin">
-            <router-link to="/admin/participantes" class="subnav-link link-participantes">
-              <i class="bi bi-ticket-perforated-fill"></i>
-              <span>Participantes</span>
-            </router-link>
-          </li>
-
-          <!-- Equipe & Acessos (Admin & Admin Geral) -->
-          <li v-if="isAdmin">
-            <router-link to="/admin/usuarios" class="subnav-link link-equipe">
-              <i class="bi bi-person-gear"></i>
-              <span>Equipe</span>
-            </router-link>
-          </li>
-
-          <!-- Mesa de Sorteios (Admin & Admin Geral) -->
-          <li v-if="isAdmin">
-            <router-link to="/admin/sorteios" class="subnav-link link-sorteios">
-              <i class="bi bi-trophy-fill"></i>
-              <span>Sorteios</span>
-            </router-link>
-          </li>
-
-          <!-- Portaria & Scanner (Portaria, Admin, Admin Geral) -->
-          <li v-if="isPortaria">
-            <router-link to="/portaria" class="subnav-link link-portaria">
-              <i class="bi bi-qr-code-scan"></i>
-              <span>Portaria</span>
-            </router-link>
-          </li>
-
-          <!-- Registro de Entregas (Entregador, Admin, Admin Geral) -->
-          <li v-if="isEntregador">
-            <router-link to="/admin/entregas" class="subnav-link link-entregas">
-              <i class="bi bi-camera-fill"></i>
-              <span>Entregas</span>
-            </router-link>
-          </li>
-
-        </ul>
-      </div>
-    </nav>
-
-    <!-- 3. GAVETA MOBILE DROPDOWN -->
+    <!-- GAVETA MOBILE DROPDOWN -->
     <transition name="menu-slide">
       <nav v-show="mobileMenuOpen" class="mobile-nav-drawer">
         <div class="app-container">
@@ -236,16 +371,25 @@ function toggleMobileMenu() {
             </div>
             <div>
               <div class="mobile-name">Olá, {{ primeiroEUltimoNome }}</div>
-              <span class="user-role-tag">{{ rolePrincipalLabel }}</span>
+              <span class="user-role-tag" :class="'badge-role-' + (currentUser?.roles?.[0] || currentUser?.role)">
+                <i class="bi bi-patch-check-fill me-1"></i>
+                {{ rolePrincipalLabel }}
+              </span>
             </div>
           </div>
 
           <ul class="mobile-nav-list">
-            
             <li v-if="!showStaffNav">
               <router-link to="/" class="mobile-nav-link" @click="mobileMenuOpen = false">
                 <i class="bi bi-house-door me-2 text-cyan"></i>
                 <span>Início / Resgate de Ingressos</span>
+              </router-link>
+            </li>
+
+            <li v-if="!showStaffNav">
+              <router-link to="/meu-ingresso" class="mobile-nav-link" @click="mobileMenuOpen = false">
+                <i class="bi bi-ticket-detailed me-2 text-cyan"></i>
+                <span>Meu Ingresso / Consultar</span>
               </router-link>
             </li>
 
@@ -256,7 +400,7 @@ function toggleMobileMenu() {
               </router-link>
             </li>
 
-            <!-- Seção Subnav no Mobile -->
+            <!-- Seção Operacional no Mobile -->
             <template v-if="showStaffNav">
               <li class="mobile-section-header">
                 <span>PAINEL OPERACIONAL</span>
@@ -269,10 +413,24 @@ function toggleMobileMenu() {
                 </router-link>
               </li>
 
+              <li v-if="isValidador">
+                <router-link to="/admin/validacoes" class="mobile-nav-link" @click="mobileMenuOpen = false">
+                  <i class="bi bi-person-check-fill me-2 text-emerald"></i>
+                  <span>Validações de Servidores</span>
+                </router-link>
+              </li>
+
               <li v-if="isAdmin">
                 <router-link to="/admin/participantes" class="mobile-nav-link" @click="mobileMenuOpen = false">
                   <i class="bi bi-ticket-perforated-fill me-2 text-emerald"></i>
                   <span>Participantes & Presença</span>
+                </router-link>
+              </li>
+
+              <li v-if="isAdmin">
+                <router-link to="/admin/cancelamentos" class="mobile-nav-link" @click="mobileMenuOpen = false">
+                  <i class="bi bi-person-x-fill me-2 text-danger"></i>
+                  <span>Cancelamentos de Ingressos</span>
                 </router-link>
               </li>
 
@@ -299,11 +457,13 @@ function toggleMobileMenu() {
 
               <li v-if="isEntregador">
                 <router-link to="/admin/entregas" class="mobile-nav-link" @click="mobileMenuOpen = false">
-                  <i class="bi bi-camera-fill me-2 text-copper"></i>
+                  <i class="bi bi-camera-fill me-2 text-amber"></i>
                   <span>Registro de Entregas</span>
                 </router-link>
               </li>
             </template>
+
+
 
             <li class="mobile-divider"></li>
 
@@ -325,406 +485,3 @@ function toggleMobileMenu() {
 
   </header>
 </template>
-
-<style scoped>
-.navbar-wrapper {
-  position: sticky;
-  top: 0;
-  z-index: 1000;
-  background: rgba(7, 9, 14, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-/* 1. BARRA PRINCIPAL SUPERIOR */
-.navbar-main {
-  padding: 8px 0;
-}
-
-.navbar-main-inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.navbar-brand {
-  display: flex;
-  align-items: center;
-  text-decoration: none;
-  transition: transform 0.2s ease;
-}
-
-.navbar-brand:hover {
-  transform: scale(1.02);
-}
-
-.navbar-logo-img {
-  height: 52px;
-  max-width: 180px;
-  object-fit: contain;
-  filter: drop-shadow(0 2px 8px rgba(217, 70, 239, 0.25));
-}
-
-@media (max-width: 576px) {
-  .navbar-logo-img {
-    height: 42px;
-    max-width: 140px;
-  }
-}
-
-/* ÁREA DIREITA DESKTOP */
-.desktop-main-actions {
-  display: flex;
-  align-items: center;
-}
-
-.navbar-nav-guest {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.nav-link-guest {
-  color: var(--text-muted);
-  font-weight: 600;
-  font-size: 0.88rem;
-  padding: 7px 12px;
-  border-radius: 10px;
-  text-decoration: none;
-  transition: all 0.2s ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.nav-link-guest:hover,
-.nav-link-guest.router-link-active {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.nav-link-highlight {
-  color: #fde047;
-}
-
-.btn-staff-access {
-  background: rgba(6, 182, 212, 0.12);
-  border: 1px solid rgba(6, 182, 212, 0.35);
-  color: #22d3ee;
-  font-weight: 700;
-  font-size: 0.84rem;
-  padding: 7px 14px;
-  border-radius: 10px;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  transition: all 0.2s ease;
-}
-
-.btn-staff-access:hover {
-  background: rgba(6, 182, 212, 0.25);
-  border-color: #22d3ee;
-  color: #ffffff;
-  transform: translateY(-1px);
-}
-
-/* APRESENTAÇÃO AO USUÁRIO LOGADO */
-.user-greeting-box {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 14px;
-  padding: 5px 12px 5px 6px;
-}
-
-.user-avatar-badge {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: var(--serv-gradient);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #ffffff;
-  font-size: 1.15rem;
-  box-shadow: 0 4px 12px rgba(217, 70, 239, 0.35);
-}
-
-.user-info-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-}
-
-.greeting-line {
-  font-size: 0.86rem;
-  color: #ffffff;
-}
-
-.greeting-prefix {
-  color: var(--text-muted);
-  margin-right: 4px;
-}
-
-.user-full-name {
-  font-weight: 800;
-  background: var(--serv-text-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.user-role-tag {
-  font-size: 0.68rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 1px 7px;
-  border-radius: 4px;
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  margin-top: 2px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #cbd5e1;
-}
-
-.badge-role-admin_geral {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.35);
-}
-
-.badge-role-admin {
-  background: rgba(168, 85, 247, 0.2);
-  color: #c084fc;
-  border: 1px solid rgba(168, 85, 247, 0.35);
-}
-
-.badge-role-portaria {
-  background: rgba(6, 182, 212, 0.2);
-  color: #22d3ee;
-  border: 1px solid rgba(6, 182, 212, 0.35);
-}
-
-.badge-role-entregador {
-  background: rgba(245, 158, 11, 0.2);
-  color: #fbbf24;
-  border: 1px solid rgba(245, 158, 11, 0.35);
-}
-
-.btn-logout-header {
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #fca5a5;
-  font-size: 0.82rem;
-  font-weight: 700;
-  padding: 6px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  transition: all 0.2s ease;
-  margin-left: 4px;
-}
-
-.btn-logout-header:hover {
-  background: #ef4444;
-  color: #ffffff;
-  transform: translateY(-1px);
-}
-
-/* 2. SUBNAV OPERACIONAL */
-.navbar-subnav {
-  background: rgba(11, 15, 25, 0.88);
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  padding: 6px 0;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
-
-.subnav-list {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.subnav-list::-webkit-scrollbar {
-  display: none;
-}
-
-.subnav-link {
-  color: var(--text-muted);
-  font-weight: 700;
-  font-size: 0.82rem;
-  padding: 7px 14px;
-  border-radius: 999px;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  transition: all 0.2s ease;
-  border: 1px solid transparent;
-}
-
-.subnav-link:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.subnav-link.router-link-active {
-  background: var(--serv-gradient);
-  color: #ffffff;
-  box-shadow: 0 4px 14px rgba(217, 70, 239, 0.35);
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
-/* BOTÃO TOGGLE MOBILE */
-.navbar-toggle-btn {
-  display: none;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #ffffff;
-  font-size: 1.35rem;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.navbar-toggle-btn:hover,
-.navbar-toggle-btn.active {
-  background: rgba(255, 255, 255, 0.15);
-  border-color: #06b6d4;
-  color: #06b6d4;
-}
-
-/* GAVETA MOBILE */
-.mobile-nav-drawer {
-  display: none;
-  background: #07090e;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 16px 0 20px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
-}
-
-.mobile-user-greeting {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  margin-bottom: 14px;
-}
-
-.mobile-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: var(--serv-gradient);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.2rem;
-  color: #ffffff;
-}
-
-.mobile-name {
-  font-weight: 800;
-  font-size: 0.95rem;
-  color: #ffffff;
-}
-
-.mobile-nav-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.mobile-nav-link {
-  display: flex;
-  align-items: center;
-  color: #cbd5e1;
-  text-decoration: none;
-  font-size: 0.92rem;
-  font-weight: 600;
-  padding: 11px 14px;
-  border-radius: 12px;
-  transition: all 0.15s ease;
-}
-
-.mobile-nav-link:hover,
-.mobile-nav-link.router-link-active {
-  background: rgba(255, 255, 255, 0.08);
-  color: #06b6d4;
-}
-
-.mobile-section-header {
-  margin-top: 10px;
-  padding-left: 8px;
-}
-
-.mobile-section-header span {
-  font-size: 0.7rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: #64748b;
-}
-
-.mobile-divider {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  margin: 8px 0;
-}
-
-.menu-slide-enter-active,
-.menu-slide-leave-active {
-  transition: all 0.25s ease-out;
-}
-
-.menu-slide-enter-from,
-.menu-slide-leave-to {
-  opacity: 0;
-  transform: translateY(-8px);
-}
-
-.text-gold { color: var(--serv-gold) !important; }
-.text-cyan { color: var(--serv-cyan) !important; }
-.text-magenta { color: var(--serv-magenta) !important; }
-.text-emerald { color: var(--serv-emerald) !important; }
-.text-purple { color: var(--serv-purple) !important; }
-.text-copper { color: var(--serv-copper) !important; }
-.text-danger { color: #f87171 !important; }
-
-/* RESPONSIVIDADE */
-@media (max-width: 900px) {
-  .navbar-toggle-btn {
-    display: flex;
-  }
-  .desktop-main-actions {
-    display: none;
-  }
-  .mobile-nav-drawer {
-    display: block;
-  }
-}
-</style>

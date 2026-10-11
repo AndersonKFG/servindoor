@@ -1,9 +1,13 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import { useToast } from '../composables/useToast'
 import { Html5Qrcode } from 'html5-qrcode'
 
 const router = useRouter()
+const { toast } = useToast()
+const currentFacingMode = ref('environment')
+const cameraPermissaoErro = ref(false)
 
 // Estados
 const cpfInput = ref('')
@@ -43,12 +47,28 @@ async function buscarParticipante(identificador) {
       body: JSON.stringify({ identificador: identificador.trim() })
     })
 
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       router.push('/login')
       return
     }
 
     const data = await res.json()
+
+    if (res.status === 403 && data.cancelado) {
+      mensagemErro.value = data.mensagem || 'Ingresso CANCELADO. Entrada não permitida!'
+      setTimeout(() => {
+        isProcessing = false
+      }, 3000)
+      return
+    }
+
+    if (res.status === 403 && !data.cancelado) {
+      mensagemErro.value = data.mensagem || data.detail || 'Acesso negado para esta operação.'
+      setTimeout(() => {
+        isProcessing = false
+      }, 2000)
+      return
+    }
 
     if (!res.ok || !data.sucesso) {
       mensagemErro.value = data.mensagem || 'Participante não encontrado.'
@@ -93,7 +113,7 @@ async function alternarStatus() {
       })
     })
 
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       router.push('/login')
       return
     }
@@ -101,13 +121,15 @@ async function alternarStatus() {
     const data = await res.json()
 
     if (!res.ok || !data.sucesso) {
-      mensagemErro.value = data.detail || 'Erro ao alterar status.'
+      mensagemErro.value = data.detail || data.mensagem || 'Erro ao alterar status.'
       alterandoStatus.value = false
       return
     }
 
     participante.value.status = data.status
     mensagemSucesso.value = data.mensagem
+    const msgToast = novoStatus === 'saida' ? 'Saída registrada' : 'Entrada registrada'
+    toast.success(msgToast, 'Portaria', 3000)
 
     // Retorna automaticamente para o scanner após 1.2 segundos
     setTimeout(() => {
@@ -147,11 +169,13 @@ watch(cpfInput, (novoValor) => {
 // Inicialização da Câmera contínua com enquadramento perfeito
 async function startQRScanner() {
   if (scannerActive.value) return
+  cameraPermissaoErro.value = false
 
   try {
     const devices = await Html5Qrcode.getCameras()
     if (!devices || !devices.length) {
       console.warn('Nenhuma câmera encontrada no dispositivo.')
+      cameraPermissaoErro.value = true
       return
     }
 
@@ -160,7 +184,7 @@ async function startQRScanner() {
     }
 
     await qrScanner.start(
-      { facingMode: 'environment' },
+      { facingMode: currentFacingMode.value },
       {
         fps: 20,
         aspectRatio: 1.0,
@@ -179,8 +203,15 @@ async function startQRScanner() {
     scannerActive.value = true
   } catch (err) {
     console.warn('Câmera não pôde ser iniciada:', err)
+    cameraPermissaoErro.value = true
     scannerActive.value = false
   }
+}
+
+async function toggleCamera() {
+  currentFacingMode.value = currentFacingMode.value === 'environment' ? 'user' : 'environment'
+  await stopQRScanner()
+  await startQRScanner()
 }
 
 async function stopQRScanner() {
@@ -204,6 +235,7 @@ onUnmounted(() => {
 })
 </script>
 
+
 <template>
   <div class="portaria-page">
     <div class="app-container">
@@ -214,7 +246,7 @@ onUnmounted(() => {
           <div class="badge-role">
             <i class="bi bi-shield-check me-1"></i> PORTARIA & CONTROLE DE ACESSO
           </div>
-          <h1 class="portaria-title">Presença no Evento</h1>
+          <h1 class="portaria-title font-quattrocento">Presença no Evento</h1>
         </header>
 
         <!-- ALERTA DE ERRO TEMPORÁRIO -->
@@ -268,6 +300,18 @@ onUnmounted(() => {
                   <i class="bi bi-camera-video-fill me-1"></i> Ligar Câmera
                 </button>
               </div>
+            </div>
+
+            <div v-if="scannerActive" class="text-center mt-2">
+              <button
+                type="button"
+                class="btn btn-secondary-sm"
+                :title="currentFacingMode === 'environment' ? 'Alternar para a câmera frontal' : 'Alternar para a câmera traseira'"
+                @click="toggleCamera"
+              >
+                <i class="bi bi-camera-reverse me-1 text-cyan"></i>
+                {{ currentFacingMode === 'environment' ? 'Usar Câmera Frontal' : 'Usar Câmera Traseira' }}
+              </button>
             </div>
             
             <p class="scanner-hint">
@@ -425,590 +469,4 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
 }
-
-.portaria-wrapper {
-  width: 100%;
-  max-width: 480px;
-  margin: 0 auto;
-}
-
-.portaria-header {
-  text-align: center;
-  margin-bottom: 14px;
-}
-
-.badge-role {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  padding: 4px 12px;
-  border-radius: 999px;
-  margin-bottom: 6px;
-}
-
-.portaria-title {
-  font-size: clamp(1.3rem, 4vw, 1.6rem);
-  font-weight: 800;
-  color: #ffffff;
-  margin: 0;
-}
-
-/* ALERTAS */
-.alert-box {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  border-radius: 12px;
-  margin-bottom: 14px;
-  font-size: 0.88rem;
-}
-
-.error-alert {
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  color: #fca5a5;
-}
-
-.success-alert {
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.4);
-  color: #6ee7b7;
-}
-
-.btn-close-alert {
-  background: transparent;
-  border: none;
-  color: inherit;
-  font-size: 1.25rem;
-  cursor: pointer;
-}
-
-/* SCANNER CARD */
-.scanner-card {
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
-  padding: 16px 14px 12px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-}
-
-/* ======================================================== */
-/* VIEWPORT DA CÂMERA COM CENTRALIZAÇÃO TOTAL               */
-/* ======================================================== */
-.scanner-viewport-wrapper {
-  position: relative;
-  width: 100%;
-  max-width: 360px;
-  aspect-ratio: 1 / 1;
-  margin: 0 auto;
-  border-radius: 18px;
-  overflow: hidden;
-  background: #000000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: inset 0 0 25px rgba(0, 0, 0, 0.8), 0 4px 20px rgba(0, 0, 0, 0.4);
-}
-
-/* Elemento container do html5-qrcode */
-.qr-viewport,
-:deep(#qr-reader-container) {
-  width: 100% !important;
-  height: 100% !important;
-  border: none !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  position: absolute !important;
-  top: 0 !important;
-  left: 0 !important;
-  right: 0 !important;
-  bottom: 0 !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  overflow: hidden !important;
-}
-
-/* Forçar o vídeo inserido dinamicamente a ocupar 100% e centralizar com object-fit: cover */
-:deep(#qr-reader-container video) {
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: cover !important;
-  object-position: center center !important;
-  display: block !important;
-  margin: 0 auto !important;
-  border-radius: 18px !important;
-}
-
-/* Esconde elementos nativos do html5-qrcode para dar lugar ao nosso design */
-:deep(#qr-shaded-region) {
-  display: none !important;
-}
-
-:deep(#qr-reader-container__scan_region) {
-  width: 100% !important;
-  height: 100% !important;
-  min-height: 100% !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-}
-
-:deep(#qr-reader-container__dashboard) {
-  display: none !important;
-}
-
-/* Overlay do Retículo Perfeitamente Centralizado */
-.scanner-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-}
-
-.scanner-target-box {
-  width: 72%;
-  height: 72%;
-  max-width: 250px;
-  max-height: 250px;
-  position: relative;
-  border: 2px dashed rgba(255, 255, 255, 0.28);
-  border-radius: 18px;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.32);
-}
-
-.corner {
-  position: absolute;
-  width: 24px;
-  height: 24px;
-}
-
-.corner-tl {
-  top: -2px;
-  left: -2px;
-  border-top: 4px solid #38bdf8;
-  border-left: 4px solid #38bdf8;
-  border-top-left-radius: 10px;
-}
-
-.corner-tr {
-  top: -2px;
-  right: -2px;
-  border-top: 4px solid #38bdf8;
-  border-right: 4px solid #38bdf8;
-  border-top-right-radius: 10px;
-}
-
-.corner-bl {
-  bottom: -2px;
-  left: -2px;
-  border-bottom: 4px solid #38bdf8;
-  border-left: 4px solid #38bdf8;
-  border-bottom-left-radius: 10px;
-}
-
-.corner-br {
-  bottom: -2px;
-  right: -2px;
-  border-bottom: 4px solid #38bdf8;
-  border-right: 4px solid #38bdf8;
-  border-bottom-right-radius: 10px;
-}
-
-.scan-laser-bar {
-  position: absolute;
-  left: 5%;
-  width: 90%;
-  height: 3px;
-  background: linear-gradient(90deg, transparent, #38bdf8, #818cf8, transparent);
-  box-shadow: 0 0 10px #38bdf8;
-  animation: scanLaser 2.2s ease-in-out infinite alternate;
-}
-
-@keyframes scanLaser {
-  0% { top: 6%; opacity: 0.4; }
-  50% { opacity: 1; }
-  100% { top: 90%; opacity: 0.4; }
-}
-
-.scanner-fallback {
-  text-align: center;
-  padding: 24px;
-}
-
-.scanner-hint {
-  text-align: center;
-  margin: 10px 0 2px;
-  font-size: 0.8rem;
-  color: #94a3b8;
-}
-
-/* SEPARADOR */
-.or-separator {
-  display: flex;
-  align-items: center;
-  text-align: center;
-  margin: 14px 0;
-}
-
-.or-separator::before,
-.or-separator::after {
-  content: '';
-  flex: 1;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.or-separator span {
-  padding: 0 12px;
-  color: #64748b;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-/* CPF CARD */
-.cpf-card {
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
-}
-
-.cpf-label {
-  display: block;
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: #f1f5f9;
-  margin-bottom: 8px;
-}
-
-.cpf-input-group {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.search-icon {
-  position: absolute;
-  left: 14px;
-  color: #64748b;
-  font-size: 1.1rem;
-}
-
-.cpf-input {
-  width: 100%;
-  padding: 14px 54px 14px 44px;
-  background: #090d16;
-  border: 2px solid #1e293b;
-  border-radius: 12px;
-  color: #ffffff;
-  font-size: 1.2rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  font-family: monospace, sans-serif;
-  transition: all 0.2s ease;
-}
-
-.cpf-input:focus {
-  outline: none;
-  border-color: #38bdf8;
-  box-shadow: 0 0 15px rgba(56, 189, 248, 0.3);
-}
-
-.cpf-counter {
-  position: absolute;
-  right: 12px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: #64748b;
-  background: #1e293b;
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
-.cpf-counter.ready {
-  background: #10b981;
-  color: #ffffff;
-}
-
-.cpf-subtext {
-  margin: 8px 0 0;
-  font-size: 0.74rem;
-  color: #64748b;
-  text-align: center;
-}
-
-.loading-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin-top: 14px;
-  color: #38bdf8;
-  font-weight: 600;
-}
-
-/* ============================================== */
-/* TELA 2: CARD DE DECISÃO RÁPIDA                 */
-/* ============================================== */
-.participant-card {
-  background: #0f172a;
-  border-radius: 22px;
-  overflow: hidden;
-  border: 2px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
-}
-
-.card-inside {
-  border-color: rgba(16, 185, 129, 0.6);
-  box-shadow: 0 15px 40px rgba(16, 185, 129, 0.25);
-}
-
-.card-outside {
-  border-color: rgba(239, 68, 68, 0.6);
-  box-shadow: 0 15px 40px rgba(239, 68, 68, 0.25);
-}
-
-/* BANNER DE STATUS */
-.status-banner {
-  padding: 14px 10px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-}
-
-.banner-inside {
-  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
-  color: #ffffff;
-}
-
-.banner-outside {
-  background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
-  color: #ffffff;
-}
-
-.status-title {
-  font-size: clamp(1.15rem, 4vw, 1.35rem);
-  font-weight: 900;
-  letter-spacing: 0.03em;
-}
-
-.status-subtitle {
-  font-size: 0.78rem;
-  opacity: 0.9;
-  font-weight: 600;
-}
-
-/* PERFIL DO SERVIDOR */
-.profile-box {
-  padding: 18px 14px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 12px;
-}
-
-.photo-container {
-  width: 130px;
-  height: 130px;
-  border-radius: 18px;
-  overflow: hidden;
-  border: 3px solid rgba(255, 255, 255, 0.25);
-  background: #000000;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
-  flex-shrink: 0;
-}
-
-.servant-photo {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.photo-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 3.5rem;
-  color: #475569;
-}
-
-.details-container {
-  width: 100%;
-}
-
-.servant-name {
-  font-size: clamp(1.2rem, 3.5vw, 1.35rem);
-  font-weight: 900;
-  color: #ffffff;
-  margin: 0 0 6px;
-  line-height: 1.25;
-  word-break: break-word;
-}
-
-/* CPF COMPLETO */
-.cpf-badge-box {
-  display: inline-block;
-  background: #000000;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  padding: 6px 12px;
-  border-radius: 10px;
-  margin-bottom: 6px;
-  max-width: 100%;
-}
-
-.cpf-label-mini {
-  display: block;
-  font-size: 0.62rem;
-  font-weight: 800;
-  color: #94a3b8;
-  letter-spacing: 0.06em;
-}
-
-.cpf-value-raw {
-  font-size: clamp(0.9rem, 3vw, 1.05rem);
-  font-weight: 900;
-  color: #38bdf8;
-  font-family: monospace;
-}
-
-.servant-meta {
-  font-size: 0.85rem;
-  color: #cbd5e1;
-  margin: 4px 0;
-  word-break: break-word;
-}
-
-.servant-vinculo {
-  margin: 4px 0 8px;
-}
-
-.vinculo-chip {
-  background: rgba(59, 130, 246, 0.15);
-  color: #93c5fd;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 2px 10px;
-  border-radius: 6px;
-  display: inline-block;
-}
-
-.last-seen-box {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.76rem;
-  color: #94a3b8;
-  background: rgba(255, 255, 255, 0.05);
-  padding: 4px 10px;
-  border-radius: 6px;
-}
-
-/* BOTÕES DE AÇÃO */
-.action-buttons-group {
-  padding: 0 14px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.btn-toggle-status {
-  width: 100%;
-  min-height: 54px;
-  padding: 16px;
-  border-radius: 16px;
-  border: none;
-  font-size: 1.15rem;
-  font-weight: 900;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
-  transition: all 0.2s ease;
-}
-
-.btn-toggle-status:active {
-  transform: scale(0.98);
-}
-
-.btn-mark-entry {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  color: #ffffff;
-  box-shadow: 0 10px 25px rgba(16, 185, 129, 0.35);
-}
-
-.btn-mark-exit {
-  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-  color: #ffffff;
-  box-shadow: 0 10px 25px rgba(239, 68, 68, 0.35);
-}
-
-.btn-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.btn-cancel-return {
-  width: 100%;
-  min-height: 48px;
-  padding: 12px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #94a3b8;
-  font-size: 0.92rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-cancel-return:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
-}
-
-.animate-scale-up {
-  animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes scaleUp {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
-}
-
-.fs-1 { font-size: 2rem; }
-.fs-4 { font-size: 1.3rem; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.m-0 { margin: 0; }
-.text-muted { color: #64748b; }
-.text-primary { color: #38bdf8; }
-.btn-action {
-  background: #2563eb;
-  color: #ffffff;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.btn-sm { padding: 6px 14px; font-size: 0.8rem; }
 </style>

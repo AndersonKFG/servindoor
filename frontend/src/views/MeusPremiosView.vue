@@ -1,5 +1,8 @@
 <script setup>
+import { useToast } from '../composables/useToast'
 import { ref } from 'vue'
+
+const { toast } = useToast()
 
 const cpfInput = ref('')
 const dataNascInput = ref('')
@@ -21,12 +24,12 @@ function formatarCPF(e) {
 async function buscarPremios() {
   const limpo = cpfInput.value.replace(/\D/g, '')
   if (limpo.length !== 11) {
-    alert('Por favor, digite um CPF válido com 11 dígitos.')
+    toast.warning('Por favor, digite um CPF válido com 11 dígitos.')
     return
   }
 
   if (!dataNascInput.value) {
-    alert('Por favor, informe a sua Data de Nascimento.')
+    toast.warning('Por favor, informe a sua Data de Nascimento.')
     return
   }
 
@@ -52,7 +55,7 @@ async function buscarPremios() {
     }
     buscado.value = true
   } catch (err) {
-    console.error('Erro buscando prêmios:', err)
+    toast.error('Erro ao buscar prêmios.')
     mensagemErro.value = 'Falha de comunicação com o servidor. Tente novamente.'
     buscado.value = true
   } finally {
@@ -60,6 +63,7 @@ async function buscarPremios() {
   }
 }
 </script>
+
 
 <template>
   <div class="meus-premios-page">
@@ -69,7 +73,7 @@ async function buscarPremios() {
         <span class="vip-badge bg-warning mb-2">
           <i class="bi bi-gift-fill me-1"></i> Área do Servidor
         </span>
-        <h1 class="page-title font-outfit">Consultar Meus Prêmios</h1>
+        <h1 class="page-title font-quattrocento">Consultar Meus Prêmios</h1>
         <p class="page-subtitle">Informe seu CPF e Data de Nascimento para consultar seus prêmios sorteados.</p>
 
         <!-- Formulário de Consulta com CPF e Data de Nascimento -->
@@ -202,218 +206,4 @@ async function buscarPremios() {
   max-width: 620px;
   margin: 0 auto 32px;
 }
-
-.page-title {
-  font-size: clamp(1.8rem, 4vw, 2.4rem);
-  font-weight: 900;
-  color: #ffffff;
-  margin-bottom: 6px;
-}
-
-.page-subtitle {
-  color: var(--text-muted);
-  font-size: 0.95rem;
-  margin-bottom: 20px;
-}
-
-.query-box-card {
-  padding: 24px;
-  border-radius: 20px;
-  text-align: left;
-  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
-}
-
-.inputs-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-bottom: 8px;
-}
-
-@media (max-width: 576px) {
-  .inputs-grid {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-}
-
-.form-label {
-  display: block;
-  font-size: 0.84rem;
-  font-weight: 700;
-  color: #e2e8f0;
-  margin-bottom: 6px;
-}
-
-.query-input {
-  min-height: 48px;
-  font-size: 1.05rem;
-  font-weight: 600;
-}
-
-.btn-buscar {
-  margin-top: 14px;
-}
-
-.error-box {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  border-radius: 16px;
-  padding: 30px 20px;
-  max-width: 500px;
-  margin: 0 auto;
-}
-
-.winner-congrats-banner {
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(217, 119, 6, 0.1) 100%);
-  border: 1px solid rgba(245, 158, 11, 0.4);
-  border-radius: 18px;
-  padding: 20px 24px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 28px;
-}
-
-.winner-title {
-  font-size: 1.6rem;
-  font-weight: 800;
-  color: #fbbf24;
-  margin-bottom: 2px;
-}
-
-.winner-subtitle {
-  color: #e2e8f0;
-  font-size: 0.95rem;
-  margin-bottom: 0;
-}
-
-.premios-won-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 20px;
-}
-
-.prize-won-card {
-  padding: 22px;
-  border-radius: 20px;
-}
-
-.prize-won-header {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-
-.prize-img-frame {
-  width: 84px;
-  height: 84px;
-  border-radius: 14px;
-  overflow: hidden;
-  background: #000;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.p-img { width: 100%; height: 100%; object-fit: cover; }
-.p-ph { font-size: 2.2rem; color: #fbbf24; }
-
-.prize-title-meta { flex: 1; }
-
-.cat-pill {
-  display: inline-block;
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.4);
-  color: #93c5fd;
-  font-size: 0.72rem;
-  font-weight: 800;
-  padding: 2px 8px;
-  border-radius: 999px;
-  margin-bottom: 4px;
-}
-
-.p-name {
-  font-size: 1.25rem;
-  font-weight: 800;
-  color: #ffffff;
-  margin-bottom: 4px;
-}
-
-.p-desc {
-  font-size: 0.84rem;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-
-.p-date {
-  font-size: 0.75rem;
-  color: var(--text-subtle);
-  display: block;
-}
-
-.delivery-status-section {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding-top: 16px;
-}
-
-.delivered-box {
-  background: rgba(16, 185, 129, 0.06);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  border-radius: 14px;
-  padding: 14px;
-}
-
-.delivered-tag {
-  font-weight: 800;
-  font-size: 0.88rem;
-  color: #34d399;
-  margin-bottom: 10px;
-}
-
-.delivery-proof-card { margin-top: 8px; }
-.proof-title { display: block; font-size: 0.74rem; color: var(--text-subtle); margin-bottom: 6px; }
-.proof-photo { width: 100%; max-height: 240px; object-fit: cover; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.2); }
-
-.pending-box {
-  background: rgba(245, 158, 11, 0.08);
-  border: 1px solid rgba(245, 158, 11, 0.25);
-  border-radius: 14px;
-  padding: 14px;
-  display: flex;
-  align-items: center;
-}
-
-.no-prize-box {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-  border-radius: 20px;
-  padding: 50px 20px;
-  max-width: 540px;
-  margin: 0 auto;
-}
-
-.animate-fade-in {
-  animation: fadeIn 0.3s ease-out;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.max-w-md { max-width: 450px; }
-.mx-auto { margin-left: auto; margin-right: auto; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.mb-0 { margin-bottom: 0; }
-.mb-1 { margin-bottom: 4px; }
-.mb-2 { margin-bottom: 8px; }
-.mb-3 { margin-bottom: 12px; }
-.mb-4 { margin-bottom: 24px; }
-.text-warning { color: var(--warning-color); }
-.text-danger { color: #f87171; }
-.font-monospace { font-family: monospace; }
 </style>

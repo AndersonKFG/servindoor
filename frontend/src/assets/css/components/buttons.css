@@ -1,0 +1,324 @@
+/* ==========================================================================
+   BOTÕES PADRÃO DO SISTEMA SERVINDOOR 2026
+   Design System Global
+   ========================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+  font-weight: 600;
+  border-radius: var(--radius-sm, 8px);
+  padding: 10px 18px;
+  font-size: 0.9rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  user-select: none;
+  line-height: 1.2;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* BOTÃO PRIMÁRIO (CIANO / DESTAQUE) */
+.btn-primary {
+  background: var(--primary-accent);
+  color: #07090e !important;
+  font-weight: 700;
+  border: none;
+  box-shadow: 0 4px 14px rgba(6, 182, 212, 0.35);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+  box-shadow: 0 6px 20px rgba(6, 182, 212, 0.5);
+  transform: translateY(-1px);
+}
+
+/* BOTÃO SECUNDÁRIO (GLASS / NEUTRO) */
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+  color: var(--text-main);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-glass-hover);
+  color: #ffffff;
+}
+
+/* BOTÃO PERIGO (VERMELHO / ALERTA) */
+.btn-danger {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: var(--danger-color);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-color);
+  color: #ffffff;
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.4);
+}
+
+/* BOTÕES DE AÇÃO COMPACTOS EM TABELAS (.btn-action-icon) */
+.btn-action-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm, 8px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: 0.88rem;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  user-select: none;
+  padding: 0;
+}
+
+.btn-action-icon:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: #ffffff;
+}
+
+/* VARIANTES SEMÂNTICAS GLOBAIS DE .btn-action-icon */
+.btn-action-icon--cyan {
+  background: rgba(6, 182, 212, 0.1);
+  color: var(--primary-accent);
+  border-color: rgba(6, 182, 212, 0.25);
+}
+.btn-action-icon--cyan:hover:not(:disabled) {
+  background: rgba(6, 182, 212, 0.25);
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.3);
+}
+
+.btn-action-icon--blue {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.3);
+}
+.btn-action-icon--blue:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.25);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+}
+
+.btn-action-icon--emerald {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--success-color);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.btn-action-icon--emerald:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.25);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+}
+
+.btn-action-icon--amber {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--warning-color);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+.btn-action-icon--amber:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.25);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
+}
+
+.btn-action-icon--danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger-color);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+.btn-action-icon--danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.25);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
+}
+
+/* BOTÕES DE AJUDA E TOOLTIPS INLINE */
+.btn-inline-help {
+  background: transparent;
+  border: none;
+  color: var(--primary-accent);
+  padding: 0 4px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  transition: transform var(--transition-fast), color var(--transition-fast);
+}
+
+.btn-inline-help:hover {
+  transform: scale(1.15);
+}
+
+.btn-inline-info-square {
+  background: rgba(6, 182, 212, 0.12);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  color: var(--primary-accent);
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm, 6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.btn-inline-info-square:hover {
+  background: rgba(6, 182, 212, 0.25);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+/* BOTÕES MEGA VIP OFICIAIS */
+.btn-vip-mega {
+  background: var(--serv-gradient);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff !important;
+  font-weight: 800;
+  font-size: clamp(1.1rem, 3.5vw, 1.35rem);
+  min-height: 56px;
+  padding: 16px 28px;
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: 0 10px 30px rgba(217, 70, 239, 0.45);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 100%;
+}
+
+.btn-vip-mega:hover {
+  background: var(--serv-gradient-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 16px 45px rgba(245, 158, 11, 0.55);
+  filter: brightness(1.08);
+}
+
+/* BOTÕES COMPACTOS SECUNDÁRIOS E PRIMÁRIOS */
+.btn-secondary-sm {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass);
+  color: var(--text-muted);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-secondary-sm:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border-color: var(--border-glass-hover);
+}
+
+.btn-primary-sm {
+  background: var(--primary-accent);
+  color: #07090e;
+  border: none;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-primary-sm:hover:not(:disabled) {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
+}
+
+.btn-action-locked {
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+.btn-action-locked:hover {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.btn-danger-critical {
+  background: linear-gradient(135deg, #dc2626, #991b1b);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  color: #ffffff;
+  padding: 10px 20px;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-danger-critical:hover:not(:disabled) {
+  box-shadow: 0 4px 16px rgba(220, 38, 38, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-danger-critical:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+
+.btn-success-custom {
+  background: linear-gradient(135deg, #10b981, #059669);
+  border: none;
+  color: #ffffff;
+  padding: 8px 18px;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-success-custom:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.btn-success-custom:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* GRUPO DE BOTÕES DE AÇÃO OPERACIONAIS EM TABELAS E CARDS */
+.action-buttons-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}

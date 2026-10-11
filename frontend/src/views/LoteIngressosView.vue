@@ -3,6 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
+const { toast } = useToast()
+const { confirmModal } = useConfirm()
 const router = useRouter()
 const loteId = route.params.loteId
 
@@ -34,7 +36,7 @@ async function carregarIngressos() {
     }
     loading.value = false
   } catch (err) {
-    console.error('Erro carregando ingressos:', err)
+    toast.error('Erro ao carregar ingressos do lote.')
     loading.value = false
   }
 }
@@ -51,12 +53,23 @@ const ingressosFiltrados = computed(() => {
 })
 
 async function handleCancelarIngresso(ingressoId) {
-  if (!confirm('Deseja realmente cancelar/estornar este ingresso? A vaga será devolvida ao lote.')) return
+  const confirmado = await confirmModal({
+    title: 'Cancelar Ingresso',
+    message: 'Deseja realmente cancelar/estornar este ingresso? A vaga será devolvida ao lote.',
+    confirmText: 'Sim, Cancelar',
+    variant: 'danger'
+  })
+  if (!confirmado) return
   try {
-    await fetch(`/admin/ingresso/${ingressoId}/cancelar`, { method: 'POST' })
-    await carregarIngressos()
+    const res = await fetch(`/admin/ingresso/${ingressoId}/cancelar`, { method: 'POST' })
+    if (res.ok) {
+      toast.success('Ingresso cancelado com sucesso.')
+      await carregarIngressos()
+    } else {
+      toast.error('Erro ao cancelar ingresso.')
+    }
   } catch (e) {
-    console.error('Erro ao cancelar:', e)
+    toast.error('Erro de conexão ao cancelar ingresso.')
   }
 }
 
@@ -64,6 +77,7 @@ onMounted(() => {
   carregarIngressos()
 })
 </script>
+
 
 <template>
   <div class="lote-ingressos-page">
@@ -93,7 +107,7 @@ onMounted(() => {
           </div>
 
           <div class="summary-actions">
-            <a :href="'/admin/lote/' + loteId + '/exportar-csv'" class="btn-success-export font-outfit">
+            <a :href="'/api/admin/lote/' + loteId + '/exportar-csv'" class="btn-success-export font-outfit">
               <i class="bi bi-file-earmark-spreadsheet-fill me-1"></i> Exportar para Excel / CSV
             </a>
           </div>
@@ -145,7 +159,7 @@ onMounted(() => {
               <tr>
                 <th>Servidor / CPF</th>
                 <th>Secretaria / Setor</th>
-                <th>Vínculo / Contato</th>
+                <th>Status no Lote</th>
                 <th>Data do Resgate</th>
                 <th>Portaria</th>
                 <th class="text-end">Ação</th>
@@ -167,8 +181,16 @@ onMounted(() => {
                   <span v-if="item.usuario?.setor" class="d-block small text-subtle mt-1">{{ item.usuario.setor }}</span>
                 </td>
                 <td>
-                  <span class="text-light">{{ item.usuario?.vinculo || 'Servidor' }}</span>
-                  <span class="d-block small text-subtle">{{ item.usuario?.telefone }}</span>
+                  <span v-if="item.status === 'aprovado'" class="badge bg-success">
+                    <i class="bi bi-check-circle-fill me-1"></i> Aprovado
+                  </span>
+                  <span v-else-if="item.status === 'rejeitado'" class="badge bg-danger" :title="item.motivo_rejeicao">
+                    <i class="bi bi-x-circle-fill me-1"></i> Recusado
+                  </span>
+                  <span v-else class="badge bg-warning text-dark">
+                    <i class="bi bi-hourglass-split me-1"></i> Em Análise
+                  </span>
+                  <span v-if="item.motivo_rejeicao" class="d-block small text-danger mt-1">{{ item.motivo_rejeicao }}</span>
                 </td>
                 <td>
                   <span class="small text-light">{{ new Date(item.model.data_resgate).toLocaleString('pt-BR') }}</span>
@@ -205,244 +227,4 @@ onMounted(() => {
 .lote-ingressos-page {
   padding: 32px 0 60px;
 }
-
-.breadcrumb-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 20px;
-  font-size: 0.9rem;
-}
-
-.back-breadcrumb {
-  color: var(--text-muted);
-  text-decoration: none;
-  transition: color 0.15s ease;
-}
-
-.back-breadcrumb:hover {
-  color: #ffffff;
-}
-
-.sep {
-  color: var(--text-subtle);
-}
-
-.current-crumb {
-  color: var(--text-main);
-  font-weight: 600;
-}
-
-.lote-summary-card {
-  padding: 28px;
-  margin-bottom: 28px;
-}
-
-.summary-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.lote-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.lote-title {
-  font-size: 1.75rem;
-  font-weight: 800;
-  color: #ffffff;
-  margin-bottom: 0;
-}
-
-.lote-id-tag {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-muted);
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.8rem;
-}
-
-.lote-dates {
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  margin-top: 6px;
-}
-
-.btn-success-export {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  color: #ffffff;
-  font-weight: 700;
-  padding: 10px 20px;
-  border-radius: 10px;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
-  transition: all 0.2s ease;
-}
-
-.btn-success-export:hover {
-  filter: brightness(1.1);
-  transform: translateY(-2px);
-}
-
-.metrics-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-}
-
-.mini-metric {
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 14px;
-  text-align: center;
-}
-
-.mini-label {
-  display: block;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.mini-value {
-  font-size: 1.4rem;
-  font-weight: 800;
-  color: #ffffff;
-}
-
-.table-card {
-  overflow: hidden;
-}
-
-.table-top-bar {
-  padding: 20px 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.table-title {
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-}
-
-.search-box {
-  position: relative;
-  width: 100%;
-  max-width: 340px;
-}
-
-.search-icon {
-  position: absolute;
-  left: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-subtle);
-}
-
-.search-input {
-  padding-left: 38px;
-}
-
-.table-responsive {
-  overflow-x: auto;
-}
-
-.custom-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-.custom-table th {
-  padding: 14px 20px;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  font-weight: 700;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.custom-table td {
-  padding: 14px 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  font-size: 0.88rem;
-  vertical-align: middle;
-}
-
-.sec-tag {
-  background: rgba(59, 130, 246, 0.1);
-  color: #93c5fd;
-  border: 1px solid rgba(59, 130, 246, 0.2);
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 0.78rem;
-}
-
-.badge-portaria {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.badge-portaria.bg-success {
-  background: rgba(16, 185, 129, 0.15);
-  color: #34d399;
-}
-
-.badge-portaria.bg-secondary {
-  background: rgba(100, 116, 139, 0.15);
-  color: #94a3b8;
-}
-
-.btn-danger-sm {
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  color: #f87171;
-  font-size: 0.78rem;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.btn-danger-sm:hover {
-  background: rgba(239, 68, 68, 0.25);
-  color: #ffffff;
-}
-
-.text-end { text-align: right; }
-.text-center { text-align: center; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.mt-1 { margin-top: 4px; }
-.text-white { color: #ffffff; }
-.text-subtle { color: var(--text-subtle); }
-.text-primary { color: var(--primary-accent); }
-.text-success { color: var(--success-color); }
-.text-info { color: #38bdf8; }
-.font-monospace { font-family: monospace; }
 </style>

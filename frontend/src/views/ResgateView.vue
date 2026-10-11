@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useServerTime } from '../composables/useServerTime'
+import { getDeviceFingerprint } from '../composables/useLoteStatus'
 import WebcamCapture from '../components/WebcamCapture.vue'
 import Modal from '../components/Modal.vue'
 
@@ -16,6 +17,20 @@ const secretarias = ref([])
 const tokenReserva = ref('')
 const reservaExpiraEmMs = ref(null)
 const tempoRestanteSegundos = ref(300)
+
+const form = ref({
+  cpf: '',
+  data_nascimento: '',
+  nome: '',
+  secretaria_id: '',
+  setor: '',
+  vinculo: 'Efetivo',
+  telefone: '',
+  email: '',
+  foto_base64: ''
+})
+
+
 
 // Form fields
 // Estado de Seleção Amigável de Data de Nascimento (Ano -> Mês -> Dia)
@@ -106,17 +121,7 @@ watch(() => form.value.data_nascimento, (val) => {
   }
 })
 
-const form = ref({
-  cpf: '',
-  data_nascimento: '',
-  nome: '',
-  secretaria_id: '',
-  setor: '',
-  vinculo: 'Efetivo / Concursado',
-  telefone: '',
-  email: '',
-  foto_base64: ''
-})
+
 
 // ============================================================================
 // PERSISTÊNCIA AUTOMÁTICA DE RASCUNHO (Dentro dos 5 minutos de reserva)
@@ -176,7 +181,7 @@ function restaurarRascunhoFormulario() {
     if (draft.data_nascimento) form.value.data_nascimento = draft.data_nascimento
 
     if (draft.cpf && draft.cpf.replace(/\D/g, '').length === 11) {
-      validarCpfServidor(draft.cpf)
+      validarCpfNoServidor(draft.cpf.replace(/\D/g, ''))
     }
     return true
   } catch (e) {
@@ -188,6 +193,12 @@ function restaurarRascunhoFormulario() {
 function limparRascunhoFormulario() {
   try {
     localStorage.removeItem(DRAFT_STORAGE_PREFIX + loteId)
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i)
+      if (key && key.startsWith(DRAFT_STORAGE_PREFIX)) {
+        localStorage.removeItem(key)
+      }
+    }
   } catch (e) {
     // Ignore
   }
@@ -252,37 +263,45 @@ let timerInterval = null
 let statusPollInterval = null
 let debounceCpfTimer = null
 
-// Geração de Hardware Device Fingerprint
-function getDeviceFingerprint() {
-  try {
-    const canvas = document.createElement('canvas')
-    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl')
-    let renderer = ''
-    if (gl) {
-      const dbg = gl.getExtension('WEBGL_debug_renderer_info')
-      if (dbg) {
-        renderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || ''
-      }
-    }
-    const raw = [
-      screen.width,
-      screen.height,
-      screen.colorDepth,
-      navigator.hardwareConcurrency || 4,
-      navigator.deviceMemory || 4,
-      Intl.DateTimeFormat().resolvedOptions().timeZone || '',
-      renderer
-    ].join('###')
+let resgateEventSource = null
 
-    let hash = 0
-    for (let i = 0; i < raw.length; i++) {
-      hash = ((hash << 5) - hash) + raw.charCodeAt(i)
-      hash |= 0
-    }
-    return 'hw_' + Math.abs(hash).toString(36)
-  } catch {
-    return 'hw_fallback_' + screen.width + 'x' + screen.height
+function connectResgateSSE() {
+  if (typeof window === 'undefined' || !window.EventSource) return
+  if (resgateEventSource) {
+    resgateEventSource.close()
+    resgateEventSource = null
   }
+  try {
+    const myFp = getDeviceFingerprint()
+    resgateEventSource = new EventSource(`/api/lote/stream?device_fingerprint=${myFp}&lote_id=${loteId}`)
+    const handleEvent = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        // Se a reserva deste token específico for liberada ou concluída em outra aba/janela:
+        if (
+          (data.tipo === 'reserva_liberada' || data.tipo === 'resgate_concluido') &&
+          tokenReserva.value &&
+          data.token_reserva === tokenReserva.value &&
+          !desistindo.value &&
+          !submitting.value &&
+          !modalFeedback.value.show
+        ) {
+          if (data.tipo === 'resgate_concluido') {
+            router.push('/')
+            return
+          }
+          if (data.motivo === 'desistencia') {
+            if (timerInterval) clearInterval(timerInterval)
+            if (statusPollInterval) clearInterval(statusPollInterval)
+            showModalDesistir.value = false
+            showModalDesistidaOutroNavegador.value = true
+          }
+        }
+      } catch {}
+    }
+    resgateEventSource.addEventListener('LOTE_ATUALIZADO', handleEvent)
+    resgateEventSource.addEventListener('RESERVA_ATUALIZADA', handleEvent)
+  } catch {}
 }
 
 // Validação matemática oficial do CPF (módulo 11 com 2 dígitos verificadores)
@@ -324,7 +343,8 @@ async function validarCpfNoServidor(digits) {
   try {
     validandoCpf.value = true
     cpfStatus.value = null
-    const res = await fetch(`/api/resgate/validar-cpf?cpf=${digits}`)
+    const tokenParam = tokenReserva.value ? `&token_reserva=${encodeURIComponent(tokenReserva.value)}` : ''
+    const res = await fetch(`/api/resgate/validar-cpf?cpf=${digits}${tokenParam}`)
     const data = await res.json()
 
     if (!data.valido) {
@@ -333,22 +353,77 @@ async function validarCpfNoServidor(digits) {
         msg: data.mensagem
       }
       errorMessage.value = data.mensagem
+
+      // Caso o CPF já possua ingresso resgatado ou solicitação ativa:
+      if (
+        data.tipo_erro === 'ingresso_existente' ||
+        data.tipo_erro === 'solicitacao_existente' ||
+        (data.mensagem && data.mensagem.includes('Já foi realizado um resgate'))
+      ) {
+        if (timerInterval) clearInterval(timerInterval)
+        if (statusPollInterval) clearInterval(statusPollInterval)
+        limparRascunhoFormulario()
+        form.value.cpf = ''
+
+        // Libera a sessão de reserva deste dispositivo/token no backend imediatamente
+        if (tokenReserva.value) {
+          const tok = tokenReserva.value
+          tokenReserva.value = ''
+          const formData = new FormData()
+          formData.append('token_reserva', tok)
+          fetch('/api/resgate/desistir', { method: 'POST', body: formData }).catch(() => {})
+        }
+
+        showModalDesistidaOutroNavegador.value = false
+        showModalDesistir.value = false
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Aviso de Resgate',
+          subtitulo: data.mensagem || 'Já foi realizado um resgate para este CPF.',
+          icone: 'bi-exclamation-triangle-fill',
+          corIcone: 'text-warning',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+        return
+      }
+
+      // Caso o CPF já possua reserva ativa em andamento:
+      if (data.tipo_erro === 'reserva_existente') {
+        if (timerInterval) clearInterval(timerInterval)
+        if (statusPollInterval) clearInterval(statusPollInterval)
+        limparRascunhoFormulario()
+        form.value.cpf = ''
+
+        if (tokenReserva.value) {
+          const tok = tokenReserva.value
+          tokenReserva.value = ''
+          const formData = new FormData()
+          formData.append('token_reserva', tok)
+          fetch('/api/resgate/desistir', { method: 'POST', body: formData }).catch(() => {})
+        }
+
+        showModalDesistidaOutroNavegador.value = false
+        showModalDesistir.value = false
+        modalFeedback.value = {
+          show: true,
+          titulo: 'Reserva em Andamento',
+          subtitulo: data.mensagem || 'Este CPF já possui uma reserva ativa em andamento.',
+          icone: 'bi-hourglass-split',
+          corIcone: 'text-warning',
+          btnTexto: 'Voltar à Página Inicial',
+          btnIcone: 'bi-house-door'
+        }
+        return
+      }
     } else {
+      const msgSucesso = data.mensagem || (data.nome_preview ? `CPF identificado: ${data.nome_preview}` : 'CPF apto para resgate!')
       cpfStatus.value = {
         valido: true,
-        msg: 'CPF apto para resgate!'
+        msg: msgSucesso
       }
-      if (errorMessage.value === 'Esse CPF já possui um ingresso.' || errorMessage.value === 'Não é possível resgatar para esse CPF.' || errorMessage.value === 'CPF inválido. Verifique os números digitados.') {
+      if (errorMessage.value === 'Já foi realizado um resgate para este CPF' || errorMessage.value === 'Esse CPF já possui um ingresso.' || errorMessage.value === 'Não é possível resgatar para esse CPF.' || errorMessage.value === 'CPF inválido. Verifique os números digitados.') {
         errorMessage.value = ''
-      }
-      if (data.usuario_existente) {
-        if (!form.value.nome && data.nome) form.value.nome = data.nome
-        if (!form.value.data_nascimento && data.data_nascimento) form.value.data_nascimento = data.data_nascimento
-        if (!form.value.telefone && data.telefone) form.value.telefone = formatPhone(data.telefone)
-        if (!form.value.email && data.email) form.value.email = data.email
-        if (!form.value.secretaria_id && data.secretaria_id) form.value.secretaria_id = data.secretaria_id
-        if (!form.value.setor && data.setor) form.value.setor = data.setor
-        if (!form.value.vinculo && data.vinculo) form.value.vinculo = data.vinculo
       }
     }
   } catch (err) {
@@ -413,11 +488,13 @@ function updateCountdown() {
 
 // Polling do status da reserva (sincronização cross-browser)
 async function verificarStatusReservaServidor() {
-  if (!tokenReserva.value || submitting.value) return
+  if (!tokenReserva.value || submitting.value || modalFeedback.value.show) return
   try {
     const res = await fetch(`/api/resgate/status-reserva?token_reserva=${tokenReserva.value}`)
     if (!res.ok) return
     const data = await res.json()
+
+    if (modalFeedback.value.show) return
 
     if (data.status === 'desistida' || (!data.ativa && data.motivo === 'desistida')) {
       if (timerInterval) clearInterval(timerInterval)
@@ -463,7 +540,6 @@ async function carregarDadosResgate() {
     await calibrarRelogioComServidor()
 
     const deviceFp = getDeviceFingerprint()
-
     const res = await fetch(`/api/resgate/${loteId}?device_fingerprint=${deviceFp}`, {
       headers: {
         'Accept': 'application/json',
@@ -472,6 +548,7 @@ async function carregarDadosResgate() {
     })
 
     if (!res.ok) {
+      limparRascunhoFormulario()
       const errData = await res.json().catch(() => ({}))
       const codigo = errData.codigo || errData.code || ''
       const msgTexto = (typeof errData.detail === 'object' ? errData.detail?.mensagem : errData.detail) || errData.mensagem || 'Não foi possível reservar uma vaga no lote.'
@@ -602,29 +679,25 @@ async function carregarDadosResgate() {
       // Fallback
     }
 
-    if (secretarias.value.length === 0) {
-      secretarias.value = [
-        { id: 1, nome: 'Secretaria Municipal de Administração' },
-        { id: 2, nome: 'Secretaria Municipal de Educação' },
-        { id: 3, nome: 'Secretaria Municipal de Saúde' },
-        { id: 4, nome: 'Secretaria Municipal de Obras e Serviços Públicos' },
-        { id: 5, nome: 'Secretaria Municipal de Finanças e Fazenda' },
-        { id: 6, nome: 'Secretaria Municipal de Assistência Social' },
-        { id: 7, nome: 'Gabinete do Prefeito' },
-        { id: 8, nome: 'Outra Secretaria / Geral' }
-      ]
-    }
+
 
     restaurarRascunhoFormulario()
     updateCountdown()
     timerInterval = setInterval(updateCountdown, 1000)
-    statusPollInterval = setInterval(verificarStatusReservaServidor, 1500)
+    // SSE gerencia o status da reserva em tempo real; polling mantido apenas como fallback passivo (30s)
+    statusPollInterval = setInterval(verificarStatusReservaServidor, 30000)
     loading.value = false
   } catch (err) {
-    console.error('Erro ao carregar resgate:', err)
+    // Erro tratado na UI
     errorMessage.value = 'Erro ao inicializar formulário de resgate.'
     loading.value = false
   }
+}
+
+function fecharModalFeedback() {
+  modalFeedback.value.show = false
+  limparRascunhoFormulario()
+  router.push('/')
 }
 
 // Desistir da vaga reservada
@@ -746,9 +819,14 @@ async function handleSubmit() {
 
 onMounted(() => {
   carregarDadosResgate()
+  connectResgateSSE()
 })
 
 onUnmounted(() => {
+  if (resgateEventSource) {
+    resgateEventSource.close()
+    resgateEventSource = null
+  }
   if (timerInterval) {
     clearInterval(timerInterval)
     timerInterval = null
@@ -763,6 +841,7 @@ onUnmounted(() => {
   }
 })
 </script>
+
 
 <template>
   <div class="resgate-page">
@@ -971,7 +1050,7 @@ onUnmounted(() => {
                 <div class="form-group">
                   <label class="form-label" for="vinculo">Vínculo <span class="text-danger">*</span></label>
                   <select id="vinculo" v-model="form.vinculo" class="form-select" required>
-                    <option value="Efetivo / Concursado">Efetivo / Concursado</option>
+                    <option value="Efetivo">Efetivo</option>
                     <option value="Comissionado">Comissionado</option>
                     <option value="Contrato Temporário">Contrato Temporário</option>
                     <option value="Estagiário">Estagiário</option>
@@ -1172,14 +1251,14 @@ onUnmounted(() => {
       </template>
     </Modal>
 
-    <!-- Modal Dinâmico de Feedback do Resgate (Esgotado, Em Preenchimento, Pausado, Encerrado) -->
+    <!-- Modal Dinâmico de Feedback do Resgate (Esgotado, Em Preenchimento, Pausado, Encerrado, Já Resgatado) -->
     <Modal
       :show="modalFeedback.show"
       :title="modalFeedback.titulo"
       :icon="modalFeedback.icone"
       :icon-color="modalFeedback.corIcone"
       :max-width="'480px'"
-      @close="router.push('/')"
+      @close="fecharModalFeedback"
     >
       <div class="text-center py-2">
         <p class="text-muted font-outfit" style="font-size: 0.95rem; line-height: 1.5;">
@@ -1187,9 +1266,9 @@ onUnmounted(() => {
         </p>
       </div>
       <template #footer>
-        <router-link to="/" class="btn-primary w-100">
+        <button type="button" class="btn-primary w-100" @click="fecharModalFeedback">
           <i :class="['bi', modalFeedback.btnIcone, 'me-1']"></i> {{ modalFeedback.btnTexto }}
-        </router-link>
+        </button>
       </template>
     </Modal>
 
@@ -1199,354 +1278,5 @@ onUnmounted(() => {
 <style scoped>
 .resgate-page {
   padding: 24px 0 48px;
-}
-
-.sticky-timer-bar {
-  position: fixed;
-  top: 68px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: calc(100% - 32px);
-  max-width: 860px;
-  z-index: 990;
-  background: rgba(15, 23, 42, 0.96);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(245, 158, 11, 0.45);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(245, 158, 11, 0.2);
-  border-radius: 16px;
-  padding: 10px 18px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  transition: all 0.3s ease;
-}
-
-.sticky-timer-spacer {
-  height: 64px;
-  margin-bottom: 14px;
-}
-
-/* Data de Nascimento: Grid Amigável Ano -> Mês -> Dia */
-.date-select-grid {
-  display: flex;
-  gap: 8px;
-}
-
-.col-ano {
-  flex: 1.1;
-}
-
-.col-mes {
-  flex: 1.5;
-}
-
-.col-dia {
-  flex: 0.9;
-}
-
-.date-select {
-  padding: 10px 8px;
-  background: #0f172a;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
-  color: #ffffff;
-  font-size: 0.88rem;
-  font-weight: 600;
-  cursor: pointer;
-  width: 100%;
-  transition: all 0.2s ease;
-}
-
-.date-select:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  background: rgba(15, 23, 42, 0.6);
-}
-
-.date-select:focus {
-  border-color: var(--primary-accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
-  outline: none;
-}
-
-.sticky-timer-bar.timer-critical {
-  border-color: rgba(239, 68, 68, 0.6);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5), 0 0 25px rgba(239, 68, 68, 0.3);
-}
-
-.timer-info-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.timer-pill {
-  background: rgba(245, 158, 11, 0.15);
-  border: 1px solid rgba(245, 158, 11, 0.45);
-  color: #fbbf24;
-  border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 0.95rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.timer-pill.critical {
-  background: rgba(239, 68, 68, 0.15);
-  border-color: rgba(239, 68, 68, 0.5);
-  color: #f87171;
-}
-
-.timer-text {
-  color: var(--text-main);
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.timer-actions-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.btn-timer-help {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #e2e8f0;
-  font-size: 0.78rem;
-  font-weight: 600;
-  border-radius: 999px;
-  padding: 6px 14px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-timer-help:hover {
-  background: rgba(255, 255, 255, 0.18);
-  color: #ffffff;
-}
-
-.btn-desistir-top {
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  color: #f87171;
-  font-size: 0.78rem;
-  font-weight: 700;
-  border-radius: 999px;
-  padding: 6px 14px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.btn-desistir-top:hover {
-  background: rgba(239, 68, 68, 0.25);
-  color: #ffffff;
-}
-
-.form-wrapper {
-  max-width: 680px;
-  margin: 0 auto;
-}
-
-.form-card {
-  padding: 36px 30px;
-}
-
-.form-header {
-  text-align: center;
-  margin-bottom: 28px;
-}
-
-.form-title {
-  font-size: 1.85rem;
-  font-weight: 800;
-  color: #ffffff;
-  margin-bottom: 6px;
-}
-
-.form-subtitle {
-  color: var(--text-muted);
-  font-size: 0.9rem;
-}
-
-.alert-box-danger {
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  color: #fca5a5;
-  border-radius: 12px;
-  padding: 14px 18px;
-  margin-bottom: 24px;
-  display: flex;
-  align-items: center;
-  font-size: 0.9rem;
-}
-
-.input-with-icon {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.validation-icon {
-  position: absolute;
-  right: 14px;
-  font-size: 1.1rem;
-}
-
-.form-control.is-invalid {
-  border-color: #ef4444 !important;
-  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2) !important;
-}
-
-.form-control.is-valid {
-  border-color: #10b981 !important;
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2) !important;
-}
-
-.form-section {
-  margin-bottom: 28px;
-}
-
-.section-title {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #f1f5f9;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 8px;
-  margin-bottom: 16px;
-  display: flex;
-  align-items: center;
-}
-
-.section-desc {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  margin-bottom: 16px;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.col-span-2 {
-  grid-column: span 2;
-}
-
-.submit-wrapper {
-  margin-top: 36px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-}
-
-.btn-desistir-link {
-  background: none;
-  border: none;
-  color: #94a3b8;
-  font-size: 0.86rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 0.2s ease;
-  display: inline-flex;
-  align-items: center;
-}
-
-.btn-desistir-link:hover {
-  color: #f87171;
-  text-decoration: underline;
-}
-
-.spin {
-  animation: spin 1s infinite linear;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.modal-info-box {
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  border-radius: 12px;
-  padding: 14px;
-  margin-bottom: 16px;
-}
-
-.modal-rules-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  font-size: 0.85rem;
-  color: var(--text-muted);
-}
-
-.rule-item {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-
-.rule-item i {
-  font-size: 1.1rem;
-  margin-top: 2px;
-}
-
-.w-100 { width: 100%; }
-.me-1 { margin-right: 4px; }
-.me-2 { margin-right: 8px; }
-.mb-2 { margin-bottom: 8px; }
-.fs-5 { font-size: 1.25rem; }
-.text-danger { color: var(--danger-color); }
-.text-warning { color: var(--warning-color); }
-.text-success { color: var(--success-color); }
-.text-primary { color: var(--primary-accent); }
-.text-white { color: #ffffff; }
-.flex-1 { flex: 1; }
-
-@media (max-width: 576px) {
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-  .col-span-2 {
-    grid-column: span 1;
-  }
-  .form-card {
-    padding: 24px 16px;
-  }
-}
-@media (max-width: 640px) {
-  .sticky-timer-bar {
-    top: 58px;
-    width: calc(100% - 16px);
-    padding: 8px 12px;
-    border-radius: 12px;
-  }
-  .sticky-timer-spacer {
-    height: 56px;
-    margin-bottom: 10px;
-  }
-  .timer-text {
-    display: none;
-  }
-  .btn-timer-help .help-label {
-    display: none;
-  }
-  .date-select-grid {
-    gap: 6px;
-  }
-  .date-select {
-    padding: 9px 6px;
-    font-size: 0.82rem;
-  }
 }
 </style>

@@ -4,6 +4,7 @@ const currentUser = ref(null)
 const isCheckingAuth = ref(false)
 const hasCheckedAuth = ref(false)
 const sessaoSubstituida = ref(false)
+let authPromise = null
 
 export function useAuth() {
   const isAuthenticated = computed(() => currentUser.value !== null)
@@ -29,47 +30,53 @@ export function useAuth() {
   const isAdmin = computed(() => hasRole('admin_geral', 'admin'))
   const isPortaria = computed(() => hasRole('admin_geral', 'admin', 'portaria'))
   const isEntregador = computed(() => hasRole('admin_geral', 'admin', 'entregador'))
+  const isValidador = computed(() => hasRole('admin_geral', 'admin', 'validador'))
   const isStaff = computed(() => {
     return userRoles.value.some(r => ['admin_geral', 'admin', 'portaria', 'entregador', 'validador'].includes(r))
   })
 
   async function checkAuth(force = false) {
-    if (isCheckingAuth.value) return currentUser.value
+    if (authPromise) return authPromise
     if (hasCheckedAuth.value && !force) return currentUser.value
 
-    try {
-      isCheckingAuth.value = true
-      const res = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.autenticado && data.usuario) {
-          currentUser.value = data.usuario
-          sessaoSubstituida.value = false
+    authPromise = (async () => {
+      try {
+        isCheckingAuth.value = true
+        const res = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.autenticado && data.usuario) {
+            currentUser.value = data.usuario
+            sessaoSubstituida.value = false
+          } else {
+            currentUser.value = null
+          }
         } else {
+          const errData = await res.json().catch(() => ({}))
+          if (errData.sessao_substituida) {
+            sessaoSubstituida.value = true
+          }
           currentUser.value = null
         }
-      } else {
-        const errData = await res.json().catch(() => ({}))
-        if (errData.sessao_substituida) {
-          sessaoSubstituida.value = true
-        }
+      } catch {
         currentUser.value = null
+      } finally {
+        isCheckingAuth.value = false
+        hasCheckedAuth.value = true
+        authPromise = null
       }
-    } catch (e) {
-      console.warn('Erro ao checar autenticação:', e)
-      currentUser.value = null
-    } finally {
-      isCheckingAuth.value = false
-      hasCheckedAuth.value = true
-    }
 
-    return currentUser.value
+      return currentUser.value
+    })()
+
+    return authPromise
   }
 
   function clearAuth() {
     currentUser.value = null
     hasCheckedAuth.value = false
     sessaoSubstituida.value = false
+    authPromise = null
   }
 
   return {
@@ -81,6 +88,7 @@ export function useAuth() {
     isAdmin,
     isPortaria,
     isEntregador,
+    isValidador,
     sessaoSubstituida,
     hasRole,
     checkAuth,

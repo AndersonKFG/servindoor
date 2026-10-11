@@ -1,0 +1,76 @@
+/* ==========================================================================
+   RODAPÉ E CONTROLES DE PAGINAÇÃO CANÔNICOS
+   Design System Global — Servindoor 2026
+   ========================================================================== */
+.pagination-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-glass);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.pagination-info {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.pagination-info strong {
+  color: var(--text-main);
+}
+
+.pagination-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-page-nav,
+.btn-page-number {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-glass);
+  color: var(--text-main);
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.btn-page-nav:hover:not(:disabled),
+.btn-page-number:hover:not(:disabled):not(.is-dots) {
+  background: rgba(6, 182, 212, 0.2);
+  border-color: var(--primary-accent);
+  color: #ffffff;
+}
+
+.btn-page-number.is-active,
+.btn-page-number.active {
+  background: linear-gradient(135deg, var(--primary-color) 0%, #0369a1 100%);
+  border-color: var(--primary-accent);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.4);
+}
+
+.btn-page-number.is-dots,
+.btn-page-number.dots {
+  background: none;
+  border: none;
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.btn-page-nav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
