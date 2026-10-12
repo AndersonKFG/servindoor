@@ -345,17 +345,17 @@ async function handleConcluirCancelamento() {
 
 
 <template>
-  <div class="meu-ingresso-page">
-    <div class="app-container app-container-narrow">
+  <div class="meu-ingresso-page public-query-page">
+    <div class="app-container app-container-narrow public-query-container">
 
       <!-- ============================================================== -->
       <!-- ETAPA 1: CONSULTA DE INGRESSO (PADRÃO AO ACESSAR)               -->
       <!-- ============================================================== -->
-      <div v-if="etapaAtual === 'consulta'" class="card-glass-main">
-        <div class="public-page-header text-center mb-4">
-          <div class="badge-step-tag font-outfit mb-2">CONSULTA OFICIAL</div>
-          <h1 class="page-title-center font-quattrocento">Meu Ingresso • Serv indoor</h1>
-          <p class="page-desc-center">
+      <div v-if="etapaAtual === 'consulta'" class="card-glass-main public-query-card">
+        <div class="public-page-header public-query-header">
+          <div class="badge-step-tag font-outfit public-query-badge"><i class="bi bi-ticket-perforated" aria-hidden="true"></i> CONSULTA OFICIAL</div>
+          <h1 class="page-title-center font-quattrocento public-query-title">Meu Ingresso • Serv indoor</h1>
+          <p class="page-desc-center public-query-description">
             Informe seu CPF e Data de Nascimento para visualizar seu ingresso digital com QR Code, imprimir sua 2ª via ou gerenciar sua participação.
           </p>
         </div>
@@ -365,9 +365,9 @@ async function handleConcluirCancelamento() {
           <span>{{ erroConsulta }}</span>
         </div>
 
-        <form @submit.prevent="handleConsultarIngresso" class="form-grid">
+        <form @submit.prevent="handleConsultarIngresso" class="form-grid public-query-form">
           <div class="form-group">
-            <label class="form-label" for="input-cpf">CPF do Servidor:</label>
+            <label class="form-label" for="input-cpf"><i class="bi bi-person-badge me-1 text-primary" aria-hidden="true"></i> CPF do Servidor:</label>
             <input
               id="input-cpf"
               v-model="cpf"
@@ -383,7 +383,7 @@ async function handleConcluirCancelamento() {
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="input-nascimento">Data de Nascimento:</label>
+            <label class="form-label" for="input-nascimento-dia"><i class="bi bi-calendar-event me-1 text-warning" aria-hidden="true"></i> Data de Nascimento:</label>
             <div class="date-select-grid">
               <div class="select-col col-dia">
                 <select id="input-nascimento-dia" v-model="nascimentoDia" class="form-select date-select" required aria-label="Dia de nascimento" @change="atualizarDataNascimento">
@@ -408,11 +408,11 @@ async function handleConcluirCancelamento() {
 
           <button
             type="submit"
-            class="btn btn-primary w-100 font-outfit"
+            class="btn btn-primary w-100 font-outfit public-query-submit"
             :disabled="loadingConsulta"
           >
             <span v-if="!loadingConsulta"><i class="bi bi-search me-2"></i> Consultar Ingresso</span>
-            <span v-else><i class="bi bi-hourglass-split me-2"></i> Verificando dados...</span>
+            <span v-else><i class="bi bi-hourglass-split me-2"></i> Consultando...</span>
           </button>
         </form>
       </div>
@@ -642,7 +642,7 @@ async function handleConcluirCancelamento() {
       <!-- FLUXO CANCELAMENTO: ETAPA 2FA CÓDIGO EMAIL                     -->
       <!-- ============================================================== -->
       <div v-else-if="etapaAtual === 'cancel_2fa'" class="card-glass-main cancel-2fa-card">
-        <div class="step-header cancel-2fa-header">
+        <div class="step-header cancel-2fa-header step-header--centered">
           <div class="badge-step-tag font-outfit">SEGURANÇA 2FA</div>
           <h2 class="step-title font-outfit">Confirmar Código de Segurança</h2>
           <p class="step-desc">
@@ -708,7 +708,7 @@ async function handleConcluirCancelamento() {
       <!-- FLUXO CANCELAMENTO: ETAPA SELFIE AO VIVO                       -->
       <!-- ============================================================== -->
       <div v-else-if="etapaAtual === 'cancel_selfie'" class="card-glass-main cancel-selfie-card">
-        <div class="step-header cancel-selfie-header">
+        <div class="step-header cancel-selfie-header step-header--centered">
           <div class="badge-step-tag font-outfit">CONFERÊNCIA BIOMÉTRICA</div>
           <h2 class="step-title font-outfit">Confirmação Facial ao Vivo</h2>
           <p class="step-desc">
@@ -779,84 +779,10 @@ async function handleConcluirCancelamento() {
 </template>
 
 <style scoped>
-.meu-ingresso-page {
-  padding: 36px 0 70px;
-}
-
-.app-container-narrow {
-  max-width: 680px;
-  margin: 0 auto;
-  padding: 0 16px;
-}
-
-.card-glass-main {
-  background: var(--bg-card);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-lg, 20px);
-  padding: 32px 28px;
-  backdrop-filter: blur(16px);
-  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.45);
-}
-
-.public-page-header {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-}
-
-.page-title-center {
-  font-size: clamp(1.6rem, 3.5vw, 2.1rem);
-  font-weight: 700;
-  color: var(--text-main);
-  margin: 4px 0 10px;
-  letter-spacing: -0.01em;
-}
-
-.page-desc-center {
-  font-size: 0.92rem;
-  color: var(--text-muted);
-  max-width: 540px;
-  margin: 0 auto;
-  line-height: 1.5;
-}
-
-.cancel-2fa-header,
-.cancel-selfie-header {
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  text-align: center;
-}
-
-.cancel-2fa-header .step-title,
-.cancel-selfie-header .step-title {
-  margin: 0;
-  font-size: 1.2rem;
-  line-height: 1.3;
-}
-
-.cancel-2fa-header .step-desc,
-.cancel-selfie-header .step-desc {
-  max-width: 58ch;
-  margin: 0;
-  font-size: 0.9rem;
-  line-height: 1.5;
-}
-
 @media (max-width: 520px) {
-  .cancel-2fa-card {
-    padding: 28px 20px;
-  }
-
   .cancel-2fa-card .input-code-digits {
     width: 100%;
     max-width: 320px;
-  }
-
-  .cancel-selfie-card {
-    padding: 28px 20px;
   }
 
   .cancel-selfie-card .camera-wrapper {

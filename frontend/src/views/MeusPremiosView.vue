@@ -1,11 +1,44 @@
 <script setup>
 import { useToast } from '../composables/useToast'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 const { toast } = useToast()
 
 const cpfInput = ref('')
 const dataNascInput = ref('')
+const nascimentoDia = ref('')
+const nascimentoMes = ref('')
+const nascimentoAno = ref('')
+const anoAtual = new Date().getFullYear()
+const anosNascimento = computed(() => Array.from(
+  { length: anoAtual - 1930 + 1 },
+  (_, index) => String(anoAtual - index)
+))
+const mesesNascimento = [
+  { valor: '01', nome: 'Janeiro' }, { valor: '02', nome: 'Fevereiro' },
+  { valor: '03', nome: 'Março' }, { valor: '04', nome: 'Abril' },
+  { valor: '05', nome: 'Maio' }, { valor: '06', nome: 'Junho' },
+  { valor: '07', nome: 'Julho' }, { valor: '08', nome: 'Agosto' },
+  { valor: '09', nome: 'Setembro' }, { valor: '10', nome: 'Outubro' },
+  { valor: '11', nome: 'Novembro' }, { valor: '12', nome: 'Dezembro' }
+]
+const diasNascimento = computed(() => {
+  const mes = Number(nascimentoMes.value)
+  const ano = Number(nascimentoAno.value)
+  const totalDias = mes && ano ? new Date(ano, mes, 0).getDate() : 31
+  return Array.from({ length: totalDias }, (_, index) => String(index + 1).padStart(2, '0'))
+})
+
+function atualizarDataNascimento() {
+  if (nascimentoDia.value && nascimentoMes.value && nascimentoAno.value) {
+    const ultimoDia = diasNascimento.value[diasNascimento.value.length - 1]
+    if (Number(nascimentoDia.value) > Number(ultimoDia)) nascimentoDia.value = ultimoDia
+    dataNascInput.value = `${nascimentoAno.value}-${nascimentoMes.value}-${nascimentoDia.value}`
+    return
+  }
+  dataNascInput.value = ''
+}
+
 const buscado = ref(false)
 const carregando = ref(false)
 const mensagemErro = ref('')
@@ -66,24 +99,26 @@ async function buscarPremios() {
 
 
 <template>
-  <div class="meus-premios-page">
-    <div class="app-container">
+  <div class="meus-premios-page public-query-page">
+    <div class="app-container public-query-container">
       
-      <div class="header-card text-center mb-4">
-        <span class="vip-badge bg-warning mb-2">
-          <i class="bi bi-gift-fill me-1"></i> Área do Servidor
-        </span>
-        <h1 class="page-title font-quattrocento">Consultar Meus Prêmios</h1>
-        <p class="page-subtitle">Informe seu CPF e Data de Nascimento para consultar seus prêmios sorteados.</p>
+      <div class="header-card text-center mb-4 public-query-card">
+        <div class="public-query-header">
+          <span class="vip-badge font-outfit public-query-badge">
+            <i class="bi bi-gift-fill" aria-hidden="true"></i> CONSULTA OFICIAL
+          </span>
+          <h1 class="page-title font-quattrocento public-query-title">Meus Prêmios • Serv indoor</h1>
+          <p class="page-subtitle public-query-description">Informe seu CPF e Data de Nascimento para consultar seus prêmios sorteados e acompanhar a retirada.</p>
+        </div>
 
         <!-- Formulário de Consulta com CPF e Data de Nascimento -->
-        <div class="vip-glass-card query-box-card">
-          <form class="search-form" @submit.prevent="buscarPremios">
-            <div class="inputs-grid">
+        <div class="public-query-body">
+          <form class="search-form public-query-form" @submit.prevent="buscarPremios">
+            <div class="inputs-grid public-query-fields">
               
               <div class="form-group text-start">
                 <label class="form-label" for="cpf-query">
-                  <i class="bi bi-person-badge me-1 text-primary"></i> CPF: *
+                  <i class="bi bi-person-badge me-1 text-primary" aria-hidden="true"></i> CPF do Servidor:
                 </label>
                 <input
                   id="cpf-query"
@@ -94,18 +129,40 @@ async function buscarPremios() {
                   placeholder="000.000.000-00"
                   maxlength="14"
                   required
+                  autocomplete="off"
                   @input="formatarCPF"
                 />
               </div>
 
               <div class="form-group text-start">
-                <label class="form-label" for="nasc-query">
-                  <i class="bi bi-calendar-event me-1 text-warning"></i> Data de Nascimento: *
+                <label class="form-label" for="nasc-query-dia">
+                  <i class="bi bi-calendar-event me-1 text-warning" aria-hidden="true"></i> Data de Nascimento:
                 </label>
+                <div class="date-select-grid">
+                  <div class="select-col col-dia">
+                    <select id="nasc-query-dia" v-model="nascimentoDia" class="form-select date-select" required aria-label="Dia de nascimento" @change="atualizarDataNascimento">
+                      <option value="" disabled>Dia</option>
+                      <option v-for="dia in diasNascimento" :key="dia" :value="dia">{{ dia }}</option>
+                    </select>
+                  </div>
+                  <div class="select-col col-mes">
+                    <select id="nasc-query-mes" v-model="nascimentoMes" class="form-select date-select" required aria-label="Mês de nascimento" @change="atualizarDataNascimento">
+                      <option value="" disabled>Mês</option>
+                      <option v-for="mes in mesesNascimento" :key="mes.valor" :value="mes.valor">{{ mes.nome }}</option>
+                    </select>
+                  </div>
+                  <div class="select-col col-ano">
+                    <select id="nasc-query-ano" v-model="nascimentoAno" class="form-select date-select" required aria-label="Ano de nascimento" @change="atualizarDataNascimento">
+                      <option value="" disabled>Ano</option>
+                      <option v-for="ano in anosNascimento" :key="ano" :value="ano">{{ ano }}</option>
+                    </select>
+                  </div>
+                </div>
+                <!-- Conserva o campo ISO usado pela consulta; os selects compõem seu valor. -->
                 <input
                   id="nasc-query"
                   v-model="dataNascInput"
-                  type="date"
+                  type="hidden"
                   class="form-control query-input"
                   required
                 />
@@ -113,9 +170,9 @@ async function buscarPremios() {
 
             </div>
 
-            <button type="submit" class="btn-vip-mega btn-buscar font-outfit" :disabled="carregando">
+            <button type="submit" class="btn btn-primary w-100 font-outfit public-query-submit" :disabled="carregando">
               <span v-if="carregando"><i class="bi bi-hourglass-split me-1"></i> Consultando...</span>
-              <span v-else><i class="bi bi-search me-1"></i> Consultar Meus Prêmios</span>
+              <span v-else><i class="bi bi-search me-1"></i> Consultar Prêmios</span>
             </button>
           </form>
         </div>
@@ -196,14 +253,3 @@ async function buscarPremios() {
     </div>
   </div>
 </template>
-
-<style scoped>
-.meus-premios-page {
-  padding: 32px 0 80px;
-}
-
-.header-card {
-  max-width: 620px;
-  margin: 0 auto 32px;
-}
-</style>

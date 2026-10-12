@@ -19,6 +19,7 @@
 @import './css/components/toasts.css';
 @import './css/components/faq.css';
 @import './css/components/sponsors.css';
+@import './css/components/public-query.css';
 
 * {
   box-sizing: border-box;

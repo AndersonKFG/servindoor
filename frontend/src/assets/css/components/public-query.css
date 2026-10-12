@@ -1,0 +1,144 @@
+/* Consultas públicas: apresentação compartilhada de ingresso e premiações. */
+.public-query-page {
+  padding: 36px 0 70px;
+}
+
+.app-container.public-query-container,
+.app-container.app-container-narrow {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.public-query-card,
+.card-glass-main {
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-xl);
+  padding: 32px 28px;
+  backdrop-filter: blur(16px);
+  box-shadow: var(--card-shadow);
+}
+
+.public-query-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  text-align: center;
+}
+
+.public-query-header .public-query-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--primary-accent) 35%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--primary-accent) 12%, transparent);
+  color: var(--primary-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.public-query-header .public-query-title {
+  display: block;
+  margin: 0;
+  color: var(--text-main);
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 3.5vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.public-query-header .public-query-description {
+  max-width: 540px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.public-query-form {
+  display: grid;
+  gap: 20px;
+  text-align: left;
+}
+
+.public-query-fields {
+  display: grid;
+  gap: 20px;
+}
+
+.public-query-form .form-group {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.public-query-form .date-select-grid > .select-col {
+  min-width: 0;
+}
+
+.public-query-form .date-select {
+  height: 44px;
+  padding: 10px 32px 10px 12px;
+  border-radius: var(--radius-md);
+  background-color: var(--bg-input);
+  background-position: right 12px center;
+  font-size: 0.88rem;
+}
+
+.public-query-form .public-query-submit {
+  width: 100%;
+  min-height: 44px;
+  white-space: normal;
+}
+
+.public-query-submit > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.step-header--centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.step-header--centered .step-title {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.3;
+}
+
+.step-header--centered .step-desc {
+  max-width: 58ch;
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 520px) {
+  .public-query-card,
+  .card-glass-main {
+    padding: 28px 20px;
+  }
+
+  .public-query-form .date-select {
+    padding-right: 26px;
+    padding-left: 8px;
+    background-position: right 8px center;
+    background-size: 12px 9px;
+  }
+}
