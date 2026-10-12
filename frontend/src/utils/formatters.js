@@ -40,6 +40,30 @@ export function formatarData(dataIso) {
   }
 }
 
+export function formatarDataHoraSp(dataIso) {
+  if (!dataIso) return '-'
+  const data = new Date(dataIso)
+  if (isNaN(data.getTime())) return dataIso
+  return data.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+}
+
+export function paraDatetimeLocalSp(dataIso) {
+  if (!dataIso) return ''
+  const data = new Date(dataIso)
+  if (isNaN(data.getTime())) return ''
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(data)
+  const campos = Object.fromEntries(partes.map(({ type, value }) => [type, value]))
+  return `${campos.year}-${campos.month}-${campos.day}T${campos.hour}:${campos.minute}`
+}
+
 export function formatarDataApenas(dataIso) {
   if (!dataIso) return '-'
   try {

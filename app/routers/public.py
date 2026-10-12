@@ -562,7 +562,7 @@ async def coletar_dados_live_status(
         "data_abertura_ms": para_epoch_ms_sp(lote.data_abertura),
         "data_fechamento_iso": formatar_iso_sp(lote.data_fechamento),
         "data_fechamento_ms": para_epoch_ms_sp(lote.data_fechamento),
-        "data_fechamento_formatada": lote.data_fechamento.strftime("%d/%m/%Y às %H:%M") if lote.data_fechamento else None,
+        "data_fechamento_formatada": lote.data_fechamento.astimezone(TZ_SAO_PAULO).strftime("%d/%m/%Y às %H:%M") if lote.data_fechamento else None,
         "status_slug": status_info["status_slug"],
         "status_label": status_info["status_label"],
         "badge_class": status_info["badge_class"],

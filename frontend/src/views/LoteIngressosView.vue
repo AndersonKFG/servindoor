@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { formatarDataHoraSp } from '../utils/formatters'
 
 const route = useRoute()
 const { toast } = useToast()
@@ -101,8 +102,8 @@ onMounted(() => {
               <span class="lote-id-tag">Lote #{{ loteId }}</span>
             </div>
             <p class="lote-dates">
-              <i class="bi bi-calendar-event me-1"></i> Abertura: <strong>{{ lote?.data_abertura ? new Date(lote.data_abertura).toLocaleString('pt-BR') : 'Imediato' }}</strong>
-              <span v-if="lote?.data_fechamento"> &bull; Fechamento: <strong>{{ new Date(lote.data_fechamento).toLocaleString('pt-BR') }}</strong></span>
+              <i class="bi bi-calendar-event me-1"></i> Abertura: <strong>{{ lote?.data_abertura ? formatarDataHoraSp(lote.data_abertura) : 'Imediato' }}</strong>
+              <span v-if="lote?.data_fechamento"> &bull; Fechamento: <strong>{{ formatarDataHoraSp(lote.data_fechamento) }}</strong></span>
             </p>
           </div>
 

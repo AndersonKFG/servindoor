@@ -5,6 +5,7 @@ import { useToast } from '../composables/useToast'
 import Modal from '../components/Modal.vue'
 import KpiCard from '../components/KpiCard.vue'
 import { useAuth } from '../composables/useAuth'
+import { formatarDataHoraSp, paraDatetimeLocalSp } from '../utils/formatters'
 
 const { toast } = useToast()
 
@@ -198,8 +199,8 @@ function abrirEditarLote(l) {
     id: l.model.id,
     nome: l.model.nome,
     quantidade_total: l.model.quantidade_total,
-    data_abertura: l.model.data_abertura ? l.model.data_abertura.substring(0, 16) : '',
-    data_fechamento: l.model.data_fechamento ? l.model.data_fechamento.substring(0, 16) : '',
+    data_abertura: paraDatetimeLocalSp(l.model.data_abertura),
+    data_fechamento: paraDatetimeLocalSp(l.model.data_fechamento),
     secretaria_id: l.model.secretaria_id ? String(l.model.secretaria_id) : '0',
     ativo: l.model.ativo
   }
@@ -593,8 +594,8 @@ onUnmounted(() => {
                 </td>
                 <td>
                   <div class="date-info">
-                    <span><i class="bi bi-calendar-event me-1"></i> {{ item.model.data_abertura ? new Date(item.model.data_abertura).toLocaleString('pt-BR') : 'Imediato' }}</span>
-                    <span v-if="item.model.data_fechamento" class="text-subtle"><i class="bi bi-clock-history me-1"></i> {{ new Date(item.model.data_fechamento).toLocaleString('pt-BR') }}</span>
+                    <span><i class="bi bi-calendar-event me-1"></i> {{ item.model.data_abertura ? formatarDataHoraSp(item.model.data_abertura) : 'Imediato' }}</span>
+                    <span v-if="item.model.data_fechamento" class="text-subtle"><i class="bi bi-clock-history me-1"></i> {{ formatarDataHoraSp(item.model.data_fechamento) }}</span>
                   </div>
                 </td>
                 <td>

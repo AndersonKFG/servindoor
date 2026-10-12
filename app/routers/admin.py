@@ -29,10 +29,11 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 
-def _datetime_utc(value: str) -> datetime:
+def _datetime_utc(value: str, fuso_sem_offset=timezone.utc) -> datetime:
+    """Preserva offsets explícitos; o formulário de lotes informa o fuso local."""
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=fuso_sem_offset)
     return parsed.astimezone(timezone.utc)
 VUE_INDEX_PATH = "app/static/dist/index.html"
 
@@ -240,8 +241,8 @@ async def criar_lote(
     current_user: Usuario = Depends(get_current_admin)
 ):
     agora = datetime.now(timezone.utc)
-    dt_abertura = _datetime_utc(data_abertura)
-    dt_fechamento = _datetime_utc(data_fechamento) if data_fechamento and data_fechamento.strip() else None
+    dt_abertura = _datetime_utc(data_abertura, security.TZ_SAO_PAULO)
+    dt_fechamento = _datetime_utc(data_fechamento, security.TZ_SAO_PAULO) if data_fechamento and data_fechamento.strip() else None
 
     if dt_fechamento and dt_fechamento <= dt_abertura:
         raise HTTPException(
@@ -296,8 +297,8 @@ async def editar_lote(
         raise HTTPException(status_code=404, detail="Lote não encontrado")
 
     agora = datetime.now(timezone.utc)
-    dt_abertura = _datetime_utc(data_abertura)
-    dt_fechamento = _datetime_utc(data_fechamento) if data_fechamento and data_fechamento.strip() else None
+    dt_abertura = _datetime_utc(data_abertura, security.TZ_SAO_PAULO)
+    dt_fechamento = _datetime_utc(data_fechamento, security.TZ_SAO_PAULO) if data_fechamento and data_fechamento.strip() else None
 
     if dt_fechamento and dt_fechamento <= dt_abertura:
         raise HTTPException(
