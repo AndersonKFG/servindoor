@@ -228,9 +228,14 @@ async function handleIniciarCancelamento() {
       return
     }
     codigoConfirmacao.value = ''
-    erroCodigo.value = ''
+    erroCodigo.value = data.codigo_expirado
+      ? 'O código anterior expirou. Clique em Reenviar código por e-mail para receber outro.'
+      : ''
     etapaAtual.value = 'cancel_2fa'
     iniciarCooldown(data.reenviar_em_segundos ?? 60)
+    if (data.retomado) {
+      toast.info('Você retomou o cancelamento. Para receber outro código, use o botão Reenviar código por e-mail.')
+    }
   } catch (err) {
     toast.error('Erro de conexão ao solicitar cancelamento.')
   } finally {
@@ -641,7 +646,7 @@ async function handleConcluirCancelamento() {
           <div class="badge-step-tag font-outfit">SEGURANÇA 2FA</div>
           <h2 class="step-title font-outfit">Confirmar Código de Segurança</h2>
           <p class="step-desc">
-            Enviamos um código de 6 dígitos para o e-mail:
+            Para continuar, digite o código de 6 dígitos recebido no e-mail:
             <strong class="text-white">{{ emailMascarado }}</strong>
           </p>
           <p class="step-desc cancel-code-validity">

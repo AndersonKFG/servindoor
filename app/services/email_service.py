@@ -7,6 +7,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
 from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.services.email_queue import enqueue_email
 
@@ -41,7 +42,10 @@ def _send_smtp_email_sync(
     ticket_image_bytes: Optional[bytes] = None,
     from_email: Optional[str] = None,
     from_name: Optional[str] = None,
+    *,
+    raise_on_error: bool = False,
 ) -> bool:
+    server = None
     try:
         msg = MIMEMultipart("related")
         msg["Subject"] = subject
@@ -71,12 +75,20 @@ def _send_smtp_email_sync(
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
         
         server.sendmail(from_email, [to_email], msg.as_string())
-        server.quit()
-        logger.info(f"E-mail enviado com sucesso para {to_email}")
+        try:
+            server.quit()
+        except (smtplib.SMTPException, OSError):
+            # DATA já foi aceito: falhar ao encerrar não exige outro envio.
+            logger.warning("SMTP aceitou o e-mail, mas não confirmou o encerramento da conexão")
         return True
     except Exception as e:
+        if raise_on_error:
+            raise
         logger.error(f"Erro ao enviar e-mail via Amazon SES para {to_email}: {e}")
         return False
+    finally:
+        if server is not None:
+            server.close()
 
 async def send_ticket_email_async(
     usuario_nome: str,
@@ -229,7 +241,9 @@ async def send_custom_message_email_async(
 async def send_cancellation_code_email_async(
     usuario_nome: str,
     usuario_email: str,
-    codigo: str
+    codigo: str,
+    *,
+    session: Optional[AsyncSession] = None,
 ) -> bool:
     """Envia código de verificação para confirmação de cancelamento de ingresso via Amazon SES"""
     if not usuario_email or "@" not in usuario_email:
@@ -319,7 +333,7 @@ async def send_cancellation_code_email_async(
 </html>
 """
 
-    return await enqueue_email(usuario_email, assunto, html, "security")
+    return await enqueue_email(usuario_email, assunto, html, "security", session=session)
 
 
 async def send_cancellation_result_email_async(

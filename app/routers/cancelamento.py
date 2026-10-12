@@ -5,6 +5,7 @@ import time
 import base64
 import secrets
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
@@ -24,6 +25,7 @@ from app.services.email_service import (
 )
 
 router = APIRouter(tags=["Cancelamento de Ingresso"])
+logger = logging.getLogger(__name__)
 
 _consultas_rate_limit = {}
 
@@ -421,12 +423,15 @@ async def iniciar_cancelamento(
             fluxo_ativo.status == "pendente_codigo"
             and agora > fluxo_ativo.codigo_expira_em
         )
+        logger.info("Cancelamento retomado sem novo envio; solicitação id=%s status=%s",
+                    fluxo_ativo.id, fluxo_ativo.status)
         return JSONResponse(
             status_code=200,
             content={
                 "sucesso": True,
                 "token": fluxo_ativo.token,
                 "status": fluxo_ativo.status,
+                "retomado": True,
                 "codigo_expirado": codigo_expirado,
                 "reenviar_em_segundos": segundos_reenvio,
                 "email_mascarado": mascarar_email(usuario.email),
@@ -470,17 +475,19 @@ async def iniciar_cancelamento(
         ip_origem=ip_origem
     )
     session.add(solicitacao)
+    # A solicitação e o envio persistido devem ser confirmados juntos.
+    enfileirado = await send_cancellation_code_email_async(
+        usuario_nome=usuario.nome,
+        usuario_email=usuario.email,
+        codigo=codigo_verificacao,
+        session=session,
+    )
+    if not enfileirado:
+        await session.rollback()
+        raise HTTPException(status_code=503, detail="Não foi possível solicitar o envio do código. Tente novamente.")
     await session.commit()
     await session.refresh(solicitacao)
-
-    # 7. Dispara e-mail com o código de 6 dígitos
-    asyncio.create_task(
-        send_cancellation_code_email_async(
-            usuario_nome=usuario.nome,
-            usuario_email=usuario.email,
-            codigo=codigo_verificacao
-        )
-    )
+    logger.info("Código de cancelamento solicitado; solicitação id=%s", solicitacao.id)
 
     return JSONResponse(
         status_code=200,
@@ -492,7 +499,7 @@ async def iniciar_cancelamento(
             "usuario_nome": usuario.nome,
             "lote_nome": ingresso.lote.nome if ingresso.lote else "Lote Oficial",
             "expira_em_minutos": 15,
-            "mensagem": f"Código de segurança enviado com sucesso para {mascarar_email(usuario.email)}."
+            "mensagem": f"Envio do código solicitado para {mascarar_email(usuario.email)}."
         }
     )
 
@@ -548,6 +555,9 @@ async def reenviar_codigo(
             headers={"Retry-After": str(aguardar)}
         )
 
+    if not solic.usuario or not solic.usuario.email or "@" not in solic.usuario.email:
+        raise HTTPException(status_code=400, detail="Não há um e-mail válido cadastrado para enviar o código.")
+
     novo_codigo = gerar_codigo_2fa_criptografico(6)
     solic.codigo_verificacao = novo_codigo
     solic.codigo_expira_em = agora + timedelta(minutes=15)
@@ -558,22 +568,23 @@ async def reenviar_codigo(
     solic.codigo_ultimo_envio_em = agora
 
     session.add(solic)
+    enfileirado = await send_cancellation_code_email_async(
+        usuario_nome=solic.usuario.nome,
+        usuario_email=solic.usuario.email,
+        codigo=novo_codigo,
+        session=session,
+    )
+    if not enfileirado:
+        await session.rollback()
+        raise HTTPException(status_code=503, detail="Não foi possível solicitar o reenvio do código. Tente novamente.")
     await session.commit()
-
-    if solic.usuario and solic.usuario.email:
-        asyncio.create_task(
-            send_cancellation_code_email_async(
-                usuario_nome=solic.usuario.nome,
-                usuario_email=solic.usuario.email,
-                codigo=novo_codigo
-            )
-        )
+    logger.info("Reenvio de código de cancelamento solicitado; solicitação id=%s", solic.id)
 
     return JSONResponse(
         status_code=200,
         content={
             "sucesso": True,
-            "mensagem": f"Novo código enviado para {mascarar_email(solic.usuario.email)}."
+            "mensagem": f"Envio de novo código solicitado para {mascarar_email(solic.usuario.email)}."
         }
     )
 

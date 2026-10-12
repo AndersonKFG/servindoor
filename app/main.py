@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from urllib.parse import unquote, urlsplit
@@ -17,6 +18,18 @@ from app.routers import public, resgate, admin, portaria, auth, sorteios, gateke
 from app.routers.gatekeeper import validar_token_gatekeeper
 
 _MAX_RESGATE_BODY_BYTES = 6 * 1024 * 1024
+
+# Os loggers do Gunicorn não configuram automaticamente os módulos de app.*.
+# Envia os eventos da aplicação ao stderr capturado por docker compose logs.
+app_logger = logging.getLogger("app")
+app_logger.setLevel(logging.INFO)
+app_logger.propagate = False
+if not app_logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(process)d] %(levelname)s %(name)s: %(message)s"
+    ))
+    app_logger.addHandler(console_handler)
 
 
 def validar_configuracao_producao() -> None:
