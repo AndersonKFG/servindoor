@@ -35,6 +35,18 @@ def _datetime_utc(value: str, fuso_sem_offset=timezone.utc) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=fuso_sem_offset)
     return parsed.astimezone(timezone.utc)
+
+
+def _horarios_lote_para_formulario(lote: Lote) -> dict:
+    """Entrega ISO com fuso e valores locais prontos para os campos datetime-local."""
+    return {
+        "data_abertura": security.formatar_iso_sp(lote.data_abertura),
+        "data_fechamento": security.formatar_iso_sp(lote.data_fechamento),
+        "data_abertura_input": security.formatar_data_sp(lote.data_abertura, "%Y-%m-%dT%H:%M") or "",
+        "data_fechamento_input": security.formatar_data_sp(lote.data_fechamento, "%Y-%m-%dT%H:%M") or "",
+    }
+
+
 VUE_INDEX_PATH = "app/static/dist/index.html"
 
 def calcular_status_lote(lote: Lote) -> dict:
@@ -190,8 +202,7 @@ async def api_lotes_admin(
                     "nome": item["model"].nome,
                     "quantidade_total": item["model"].quantidade_total,
                     "quantidade_resgatada": item["model"].quantidade_resgatada,
-                    "data_abertura": item["model"].data_abertura.isoformat() if item["model"].data_abertura else None,
-                    "data_fechamento": item["model"].data_fechamento.isoformat() if item["model"].data_fechamento else None,
+                    **_horarios_lote_para_formulario(item["model"]),
                     "ativo": item["model"].ativo,
                     "secretaria_id": item["model"].secretaria_id,
                     "secretaria": {"id": item["model"].secretaria.id, "nome": item["model"].secretaria.nome} if item["model"].secretaria else None
@@ -1119,8 +1130,7 @@ async def ver_ingressos_lote(
                 "nome": lote.nome,
                 "quantidade_total": lote.quantidade_total,
                 "quantidade_resgatada": lote.quantidade_resgatada,
-                "data_abertura": lote.data_abertura.isoformat() if lote.data_abertura else None,
-                "data_fechamento": lote.data_fechamento.isoformat() if lote.data_fechamento else None
+                **_horarios_lote_para_formulario(lote)
             },
             "total_ingressos": lote.quantidade_resgatada,
             "ingressos": participantes_processados

@@ -199,8 +199,8 @@ function abrirEditarLote(l) {
     id: l.model.id,
     nome: l.model.nome,
     quantidade_total: l.model.quantidade_total,
-    data_abertura: paraDatetimeLocalSp(l.model.data_abertura),
-    data_fechamento: paraDatetimeLocalSp(l.model.data_fechamento),
+    data_abertura: l.model.data_abertura_input ?? paraDatetimeLocalSp(l.model.data_abertura),
+    data_fechamento: l.model.data_fechamento_input ?? paraDatetimeLocalSp(l.model.data_fechamento),
     secretaria_id: l.model.secretaria_id ? String(l.model.secretaria_id) : '0',
     ativo: l.model.ativo
   }
