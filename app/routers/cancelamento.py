@@ -5,7 +5,7 @@ import time
 import base64
 import secrets
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -414,7 +414,7 @@ async def iniciar_cancelamento(
     res_fluxo = await session.execute(stmt_fluxo_ativo)
     fluxo_ativo = res_fluxo.scalars().first()
     if fluxo_ativo:
-        agora = datetime.now()
+        agora = datetime.now(timezone.utc)
         ultimo_envio = fluxo_ativo.codigo_ultimo_envio_em or fluxo_ativo.criado_em
         segundos_reenvio = max(0, int((ultimo_envio + timedelta(seconds=60) - agora).total_seconds()))
         codigo_expirado = (
@@ -436,10 +436,10 @@ async def iniciar_cancelamento(
         )
 
     total_envios, ultimo_envio = await contar_envios_codigo_recentes(
-        session, usuario.id, ingresso.id, datetime.now()
+        session, usuario.id, ingresso.id, datetime.now(timezone.utc)
     )
     if total_envios >= 3:
-        aguardar = max(60, int((ultimo_envio + timedelta(hours=1) - datetime.now()).total_seconds()))
+        aguardar = max(60, int((ultimo_envio + timedelta(hours=1) - datetime.now(timezone.utc)).total_seconds()))
         raise HTTPException(
             status_code=429,
             detail="Limite de códigos por e-mail atingido. Aguarde antes de iniciar outra tentativa.",
@@ -449,7 +449,7 @@ async def iniciar_cancelamento(
     # 6. Gera código de 6 dígitos criptograficamente seguro e token de sessão (SEC-12)
     codigo_verificacao = gerar_codigo_2fa_criptografico(6)
     token_sessao = secrets.token_hex(24)
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     expira_em = agora + timedelta(minutes=15)
     ip_origem = extrair_ip_cliente(request)
 
@@ -524,7 +524,7 @@ async def reenviar_codigo(
     if not solic or solic.status != "pendente_codigo":
         raise HTTPException(status_code=404, detail="Sessão de cancelamento não encontrada ou já expirada.")
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     ultimo_envio_sessao = solic.codigo_ultimo_envio_em or solic.criado_em
     if agora - ultimo_envio_sessao >= timedelta(hours=1):
         solic.codigo_envios = 0
@@ -614,7 +614,7 @@ async def validar_codigo(
     if solic.status != "pendente_codigo":
         raise HTTPException(status_code=400, detail="Esta etapa de confirmação já foi concluída ou não está mais ativa.")
 
-    if datetime.now() > solic.codigo_expira_em:
+    if datetime.now(timezone.utc) > solic.codigo_expira_em:
         raise HTTPException(
             status_code=400,
             detail="Código expirado (limite de 15 minutos). Por favor, clique em 'Reenviar Código'."
@@ -927,7 +927,7 @@ async def aprovar_cancelamento(
     if not ingresso:
         raise HTTPException(status_code=404, detail="Ingresso associado não encontrado.")
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
 
     # 1. Soft-delete do ingresso se ainda estiver ativo
     if ingresso.deleted_at is None:
@@ -1015,7 +1015,7 @@ async def rejeitar_cancelamento(
             detail=f"Esta solicitação já foi processada anteriormente com o status: {solic.status}."
         )
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     solic.status = "rejeitado"
     solic.motivo_rejeicao = motivo
     solic.analisado_por_id = admin.id

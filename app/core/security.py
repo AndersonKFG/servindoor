@@ -127,3 +127,13 @@ def para_epoch_ms_sp(dt: Optional[datetime]) -> Optional[int]:
     else:
         dt = dt.astimezone(TZ_SAO_PAULO)
     return int(dt.timestamp() * 1000)
+
+def para_epoch_ms_utc(dt: Optional[datetime]) -> Optional[int]:
+    """Converte datas persistidas em UTC para epoch sem depender do fuso do servidor."""
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return int(dt.timestamp() * 1000)

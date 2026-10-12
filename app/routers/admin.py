@@ -5,7 +5,7 @@ from app.services.email_service import send_custom_message_email_async, send_tic
 import csv
 import io
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, status, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, FileResponse, Response
@@ -23,9 +23,17 @@ from app.models.all_models import Lote, Usuario, Ingresso, Secretaria, LogAcesso
 from app.core.deps import get_current_admin, get_current_admin_geral
 from app.core.validators import normalizar_data_nascimento, formatar_telefone, validar_email
 from app.core.events import lote_event_hub
+from app.routers.public import coletar_status_lote_para_sse
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+
+
+def _datetime_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 VUE_INDEX_PATH = "app/static/dist/index.html"
 
 def calcular_status_lote(lote: Lote) -> dict:
@@ -35,7 +43,7 @@ def calcular_status_lote(lote: Lote) -> dict:
     2. Se agora < data_abertura -> Agendado (não pode toggle; período soberano)
     3. Se data_abertura <= agora <= data_fechamento -> Período de resgate ativo (pode toggle pausar/despausar)
     """
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     
     # 1. Encerrado pelo horário final
     if lote.data_fechamento and agora > lote.data_fechamento:
@@ -231,9 +239,9 @@ async def criar_lote(
     session: AsyncSession = Depends(get_session),
     current_user: Usuario = Depends(get_current_admin)
 ):
-    agora = datetime.now()
-    dt_abertura = datetime.fromisoformat(data_abertura)
-    dt_fechamento = datetime.fromisoformat(data_fechamento) if data_fechamento and data_fechamento.strip() else None
+    agora = datetime.now(timezone.utc)
+    dt_abertura = _datetime_utc(data_abertura)
+    dt_fechamento = _datetime_utc(data_fechamento) if data_fechamento and data_fechamento.strip() else None
 
     if dt_fechamento and dt_fechamento <= dt_abertura:
         raise HTTPException(
@@ -265,7 +273,8 @@ async def criar_lote(
         "data_abertura_iso": novo_lote.data_abertura.isoformat() if novo_lote.data_abertura else None,
         "data_fechamento_iso": novo_lote.data_fechamento.isoformat() if novo_lote.data_fechamento else None,
         "ativo": novo_lote.ativo,
-        **dados_status_lote_sse(novo_lote)
+        **dados_status_lote_sse(novo_lote),
+        **(await coletar_status_lote_para_sse(session, novo_lote.id))
     })
 
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
@@ -286,9 +295,9 @@ async def editar_lote(
     if not lote:
         raise HTTPException(status_code=404, detail="Lote não encontrado")
 
-    agora = datetime.now()
-    dt_abertura = datetime.fromisoformat(data_abertura)
-    dt_fechamento = datetime.fromisoformat(data_fechamento) if data_fechamento and data_fechamento.strip() else None
+    agora = datetime.now(timezone.utc)
+    dt_abertura = _datetime_utc(data_abertura)
+    dt_fechamento = _datetime_utc(data_fechamento) if data_fechamento and data_fechamento.strip() else None
 
     if dt_fechamento and dt_fechamento <= dt_abertura:
         raise HTTPException(
@@ -319,7 +328,8 @@ async def editar_lote(
         "data_abertura_iso": lote.data_abertura.isoformat() if lote.data_abertura else None,
         "data_fechamento_iso": lote.data_fechamento.isoformat() if lote.data_fechamento else None,
         "ativo": lote.ativo,
-        **dados_status_lote_sse(lote)
+        **dados_status_lote_sse(lote),
+        **(await coletar_status_lote_para_sse(session, lote.id))
     })
 
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
@@ -350,7 +360,8 @@ async def toggle_lote(
         "tipo": "LOTE_ATUALIZADO",
         "lote_id": lote.id,
         "ativo": lote.ativo,
-        **dados_status_lote_sse(lote)
+        **dados_status_lote_sse(lote),
+        **(await coletar_status_lote_para_sse(session, lote.id))
     })
 
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
@@ -365,7 +376,7 @@ async def encerrar_lote_agora(
     if not lote:
         raise HTTPException(status_code=404, detail="Lote não encontrado")
 
-    lote.data_fechamento = datetime.now()
+    lote.data_fechamento = datetime.now(timezone.utc)
     session.add(lote)
     await session.commit()
     await session.refresh(lote)
@@ -374,7 +385,8 @@ async def encerrar_lote_agora(
         "tipo": "LOTE_ATUALIZADO",
         "lote_id": lote.id,
         "data_fechamento_iso": lote.data_fechamento.isoformat(),
-        **dados_status_lote_sse(lote)
+        **dados_status_lote_sse(lote),
+        **(await coletar_status_lote_para_sse(session, lote.id))
     })
 
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
@@ -463,7 +475,7 @@ async def solicitar_codigo_exclusao_lote(
 
     codigo = gerar_codigo_2fa_criptografico(6)
     token = secrets.token_hex(24)
-    expira_em = datetime.now() + timedelta(minutes=10)
+    expira_em = datetime.now(timezone.utc) + timedelta(minutes=10)
 
     token_obj = TokenExclusaoLote(
         token=token,
@@ -575,7 +587,7 @@ async def confirmar_exclusao_lote(
         if token_obj.tentativas >= 5:
             raise HTTPException(status_code=429, detail="Limite de tentativas excedido por segurança. Solicite um novo código.")
 
-        if datetime.now() > token_obj.codigo_expira_em:
+        if datetime.now(timezone.utc) > token_obj.codigo_expira_em:
             raise HTTPException(status_code=400, detail="O código de confirmação expirou. Solicite um novo código.")
 
         if token_obj.codigo_verificacao != codigo_email:
@@ -639,7 +651,7 @@ async def confirmar_exclusao_lote(
         "ingressos": snapshot_ingressos
     }
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     expira_em = agora + timedelta(days=3)  # Retenção estrita de 3 dias
 
     backup = BackupLote(
@@ -706,7 +718,7 @@ async def listar_backups_lotes(
     res = await session.execute(stmt)
     backups = res.scalars().all()
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     lista = []
     for b in backups:
         tempo_restante_seg = max(0, (b.expira_em - agora).total_seconds())
@@ -805,8 +817,8 @@ async def restaurar_backup_lote(
                 nome=lote_data.get("nome", backup.lote_nome),
                 quantidade_total=lote_data.get("quantidade_total", 100),
                 quantidade_resgatada=lote_data.get("quantidade_resgatada", 0),
-                data_abertura=datetime.fromisoformat(lote_data["data_abertura"]) if lote_data.get("data_abertura") else None,
-                data_fechamento=datetime.fromisoformat(lote_data["data_fechamento"]) if lote_data.get("data_fechamento") else None,
+                data_abertura=_datetime_utc(lote_data["data_abertura"]) if lote_data.get("data_abertura") else None,
+                data_fechamento=_datetime_utc(lote_data["data_fechamento"]) if lote_data.get("data_fechamento") else None,
                 secretaria_id=lote_data.get("secretaria_id"),
                 ativo=True
             )
@@ -830,7 +842,7 @@ async def restaurar_backup_lote(
                             usuario_id=usr_id,
                             lote_id=novo_lote.id,
                             qr_code_token=ing_d.get("qr_code_token") or secrets.token_hex(16),
-                            data_resgate=datetime.fromisoformat(ing_d["data_resgate"]) if ing_d.get("data_resgate") else datetime.now(),
+                            data_resgate=_datetime_utc(ing_d["data_resgate"]) if ing_d.get("data_resgate") else datetime.now(timezone.utc),
                             deleted_at=None
                         )
                         session.add(novo_ing)
@@ -838,7 +850,7 @@ async def restaurar_backup_lote(
             raise HTTPException(status_code=500, detail=f"Erro ao reconstruir lote a partir do backup: {str(e)}")
 
     backup.restaurado = True
-    backup.restaurado_em = datetime.now()
+    backup.restaurado_em = datetime.now(timezone.utc)
     backup.restaurado_por_id = admin.id
     session.add(backup)
     await session.commit()
@@ -916,8 +928,8 @@ async def importar_backup_lote_json(
         nome=novo_nome,
         quantidade_total=lote_info.get("quantidade_total", max(len(ingressos_info), 100)),
         quantidade_resgatada=len(ingressos_info),
-        data_abertura=datetime.fromisoformat(lote_info["data_abertura"]) if lote_info.get("data_abertura") else None,
-        data_fechamento=datetime.fromisoformat(lote_info["data_fechamento"]) if lote_info.get("data_fechamento") else None,
+        data_abertura=_datetime_utc(lote_info["data_abertura"]) if lote_info.get("data_abertura") else None,
+        data_fechamento=_datetime_utc(lote_info["data_fechamento"]) if lote_info.get("data_fechamento") else None,
         secretaria_id=lote_info.get("secretaria_id"),
         ativo=True
     )
@@ -954,7 +966,7 @@ async def importar_backup_lote_json(
                 if res_dup.scalars().first():
                     token_qr = f"{token_qr}_imp_{secrets.token_hex(4)}"
 
-                dt_resgate = datetime.fromisoformat(ing_item["data_resgate"]) if ing_item.get("data_resgate") else datetime.now()
+                dt_resgate = _datetime_utc(ing_item["data_resgate"]) if ing_item.get("data_resgate") else datetime.now(timezone.utc)
 
                 ing_novo = Ingresso(
                     usuario_id=usuario_existente.id,
@@ -972,13 +984,13 @@ async def importar_backup_lote_json(
         lote_nome=novo_lote.nome,
         dados_json=json.dumps(dados_backup, ensure_ascii=False),
         total_ingressos=total_recuperados,
-        excluido_em=datetime.now(),
-        expira_em=datetime.now() + timedelta(days=3),
+        excluido_em=datetime.now(timezone.utc),
+        expira_em=datetime.now(timezone.utc) + timedelta(days=3),
         excluido_por_id=admin.id,
         excluido_por_nome=admin.nome,
         ip_origem=request.client.host if request.client else None,
         restaurado=True,
-        restaurado_em=datetime.now(),
+        restaurado_em=datetime.now(timezone.utc),
         restaurado_por_id=admin.id
     )
     session.add(backup_registro)
@@ -1171,7 +1183,7 @@ async def cancelar_ingresso(
     ):
         raise HTTPException(status_code=401, detail="Senha de administrador incorreta. Ação não autorizada.")
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     ingresso.deleted_at = agora
     ingresso.cancelado_por_id = admin.id
     ingresso.motivo_cancelamento = motivo
@@ -1836,7 +1848,7 @@ async def listar_usuarios_equipe_admin(
 
     equipe = [u for u in todos if u.role != UserRole.servidor and "servidor" not in u.get_roles_list()]
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     lista_equipe = []
 
     admin_geral_total, admin_geral_logados = 0, 0
@@ -2249,7 +2261,7 @@ async def excluir_usuario_admin(
         )
 
     # SOFT DELETE
-    usuario.deleted_at = datetime.now()
+    usuario.deleted_at = datetime.now(timezone.utc)
     usuario.ativo = False
     session.add(usuario)
     await session.commit()

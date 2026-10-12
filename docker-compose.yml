@@ -44,7 +44,7 @@ services:
         condition: service_healthy
     environment:
       TZ: ${TZ:-America/Sao_Paulo}
-      ENVIRONMENT: production
+      ENVIRONMENT: ${FESTA_ENVIRONMENT:-production}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}@db:5432/${POSTGRES_DB:-festa_db}
       SECRET_KEY: ${SECRET_KEY:?Defina SECRET_KEY no .env}
       ALGORITHM: ${ALGORITHM:-HS256}
@@ -68,6 +68,25 @@ services:
     volumes:
       - ./app/static/uploads:/app/app/static/uploads
       - ./.env:/app/.env
+    networks:
+      - festa_net
+
+  # --- Interface web opcional para administração do PostgreSQL ---
+  adminer:
+    image: adminer:4
+    container_name: festa_adminer
+    restart: unless-stopped
+    profiles:
+      - ferramentas
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+      ADMINER_DEFAULT_DB_DRIVER: pgsql
+    # Mantém a interface fora da rede pública. Para acesso remoto, use túnel SSH.
+    ports:
+      - "127.0.0.1:8081:8080"
     networks:
       - festa_net
 

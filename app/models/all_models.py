@@ -1,9 +1,13 @@
 import json
 from sqlalchemy import BigInteger, Column, Text
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List
 from sqlmodel import SQLModel, Field, Relationship
+
+
+def agora_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class UserRole(str, Enum):
@@ -196,7 +200,7 @@ class Ingresso(SQLModel, table=True):
     usuario_id: int = Field(foreign_key="usuarios.id", index=True)
     lote_id: int = Field(foreign_key="lotes.id", index=True)
     qr_code_token: str = Field(unique=True, index=True)
-    data_resgate: datetime = Field(default_factory=datetime.now)
+    data_resgate: datetime = Field(default_factory=agora_utc)
     deleted_at: Optional[datetime] = Field(default=None, nullable=True)
     cancelado_por_id: Optional[int] = Field(default=None, foreign_key="usuarios.id", nullable=True)
     motivo_cancelamento: Optional[str] = Field(default=None, nullable=True)
@@ -213,7 +217,7 @@ class ReservaIngresso(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     token: str = Field(unique=True, index=True)
     lote_id: int = Field(foreign_key="lotes.id", index=True)
-    criada_em: datetime = Field(default_factory=datetime.now)
+    criada_em: datetime = Field(default_factory=agora_utc)
     expira_em: datetime = Field(index=True)
     utilizada: bool = Field(default=False, index=True)
     ip_origem: Optional[str] = Field(default=None, nullable=True)
@@ -235,7 +239,7 @@ class LogAcesso(SQLModel, table=True):
     operador_id: Optional[int] = Field(default=None, foreign_key="usuarios.id", nullable=True, index=True)
     ingresso_id: Optional[int] = Field(default=None, foreign_key="ingressos.id", nullable=True, index=True)
     tipo: MovimentoTipo = Field(default=MovimentoTipo.entrada, index=True)
-    data_hora: datetime = Field(default_factory=datetime.now, index=True)
+    data_hora: datetime = Field(default_factory=agora_utc, index=True)
     device_id: Optional[str] = Field(default=None, nullable=True)
     ip_origem: Optional[str] = Field(default=None, nullable=True)
     metodo_validacao: Optional[str] = Field(default="qr_code", nullable=True)
@@ -273,7 +277,7 @@ class Ganhador(SQLModel, table=True):
     usuario_id: int = Field(foreign_key="usuarios.id", index=True)
     categoria: str = Field(default="categoria_1", index=True)
     eixo_id: Optional[int] = Field(default=None, foreign_key="eixos.id", nullable=True)
-    data_sorteio: datetime = Field(default_factory=datetime.now, index=True)
+    data_sorteio: datetime = Field(default_factory=agora_utc, index=True)
     entregue: bool = Field(default=False, index=True)
     data_entrega: Optional[datetime] = Field(default=None, nullable=True)
     foto_entrega_url: Optional[str] = Field(default=None, nullable=True)
@@ -304,7 +308,7 @@ class GatekeeperTentativa(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     ip: str = Field(index=True)
-    data_tentativa: datetime = Field(default_factory=datetime.utcnow, index=True)
+    data_tentativa: datetime = Field(default_factory=agora_utc, index=True)
     sucesso: bool = Field(default=False)
 
 
@@ -327,7 +331,7 @@ class SolicitacaoCancelamento(SQLModel, table=True):
     motivo_rejeicao: Optional[str] = Field(default=None, nullable=True)
     analisado_por_id: Optional[int] = Field(default=None, foreign_key="usuarios.id", nullable=True)
     analisado_em: Optional[datetime] = Field(default=None, nullable=True)
-    criado_em: datetime = Field(default_factory=datetime.now, index=True)
+    criado_em: datetime = Field(default_factory=agora_utc, index=True)
     ip_origem: Optional[str] = Field(default=None, nullable=True)
 
     # Relacionamentos
@@ -344,7 +348,7 @@ class BackupLote(SQLModel, table=True):
     lote_nome: str
     dados_json: str  # JSON completo com metadados do lote e lista de ingressos
     total_ingressos: int = Field(default=0)
-    excluido_em: datetime = Field(default_factory=datetime.now, index=True)
+    excluido_em: datetime = Field(default_factory=agora_utc, index=True)
     expira_em: datetime = Field(index=True)  # 3 dias de retenção obrigatória
     excluido_por_id: Optional[int] = Field(default=None, foreign_key="usuarios.id", nullable=True)
     excluido_por_nome: Optional[str] = Field(default=None, nullable=True)
@@ -373,7 +377,7 @@ class TokenExclusaoLote(SQLModel, table=True):
     codigo_expira_em: datetime = Field(index=True)
     utilizado: bool = Field(default=False)
     tentativas: int = Field(default=0)
-    criado_em: datetime = Field(default_factory=datetime.now)
+    criado_em: datetime = Field(default_factory=agora_utc)
 
     # Relacionamentos
     lote: Optional[Lote] = Relationship()
@@ -392,7 +396,7 @@ class SolicitacaoValidacao(SQLModel, table=True):
     motivo_rejeicao: Optional[str] = Field(default=None, nullable=True)
     analisado_por_id: Optional[int] = Field(default=None, foreign_key="usuarios.id", nullable=True)
     analisado_em: Optional[datetime] = Field(default=None, nullable=True)
-    criado_em: datetime = Field(default_factory=datetime.now, index=True)
+    criado_em: datetime = Field(default_factory=agora_utc, index=True)
     ip_origem: Optional[str] = Field(default=None, nullable=True)
     identificado_api: bool = Field(default=False, index=True)
     comunicado: bool = Field(default=False, index=True)
@@ -411,7 +415,7 @@ class RateLimitTentativa(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     ip: str = Field(index=True)
     acao: str = Field(default="reserva", index=True)
-    criado_em: datetime = Field(default_factory=datetime.utcnow, index=True)
+    criado_em: datetime = Field(default_factory=agora_utc, index=True)
 
 
 class LoginRateLimit(SQLModel, table=True):
@@ -422,7 +426,7 @@ class LoginRateLimit(SQLModel, table=True):
     tentativas_atuais: int = Field(default=0)
     estagio_bloqueio: int = Field(default=0)
     bloqueado_ate: Optional[datetime] = Field(default=None, index=True)
-    ultima_tentativa: datetime = Field(default_factory=datetime.utcnow, index=True)
+    ultima_tentativa: datetime = Field(default_factory=agora_utc, index=True)
 
 
 class FaqItem(SQLModel, table=True):
@@ -433,5 +437,14 @@ class FaqItem(SQLModel, table=True):
     resposta: str = Field(sa_column=Column(Text, nullable=False))
     ordem: int = Field(default=0, index=True)
     ativo: bool = Field(default=True, index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=agora_utc)
+    updated_at: datetime = Field(default_factory=agora_utc)
+
+
+class SponsorLogo(SQLModel, table=True):
+    __tablename__ = "sponsor_logos"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    filename: str = Field(index=True, unique=True)
+    ordem: int = Field(default=0, index=True)
+    created_at: datetime = Field(default_factory=agora_utc)

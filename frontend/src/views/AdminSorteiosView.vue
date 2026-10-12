@@ -119,7 +119,29 @@ const premiosRodada = ref([])
 const quantidadesAdicionar = ref({})
 const imgErrors = ref({})
 const isDisparandoMesa = ref(false)
-const filtroCategoriaMesa = ref('todos')
+const filtroCategoria = ref('todas')
+const filtroEixo = ref('todos')
+const filtroDisponibilidade = ref('todos')
+
+const premiosFiltrados = computed(() => premios.value.filter(premio => {
+  if (filtroCategoria.value !== 'todas' && premio.categoria !== filtroCategoria.value) {
+    return false
+  }
+
+  if (filtroEixo.value !== 'todos' && String(premio.eixo_id ?? 'sem_eixo') !== filtroEixo.value) {
+    return false
+  }
+
+  const disponiveis = Number(premio.disponiveis) || 0
+  if (filtroDisponibilidade.value === 'disponiveis' && disponiveis <= 0) {
+    return false
+  }
+  if (filtroDisponibilidade.value === 'esgotados' && disponiveis > 0) {
+    return false
+  }
+
+  return true
+}))
 
 const showModalNovoPremio = ref(false)
 const showModalEditarPremio = ref(false)
@@ -147,6 +169,7 @@ const premioForm = ref({
   categoria: 'categoria_1',
   eixo_id: '0',
   quantidade: 1,
+  foto_arquivo: null,
   foto_base64: '',
   foto_preview: '',
   foto_nome: ''
@@ -440,6 +463,7 @@ function abrirNovoPremio() {
     categoria: 'categoria_1',
     eixo_id: eixos.value.length > 0 ? String(eixos.value[0].id) : '0',
     quantidade: 1,
+    foto_arquivo: null,
     foto_base64: '',
     foto_preview: '',
     foto_nome: ''
@@ -458,6 +482,7 @@ function abrirEditarPremio(p) {
     categoria: p.categoria,
     eixo_id: p.eixo_id ? String(p.eixo_id) : '0',
     quantidade: p.quantidade,
+    foto_arquivo: null,
     foto_base64: '',
     foto_preview: p.foto_url || '',
     foto_nome: p.foto_url ? 'Foto Atual' : ''
@@ -468,14 +493,18 @@ function abrirEditarPremio(p) {
 function onFotoPremioChange(e) {
   const file = e.target.files?.[0]
   if (!file) return
-  if (!file.type.startsWith('image/')) {
+  const tiposPermitidos = ['image/png', 'image/jpeg', 'image/webp']
+  if (!tiposPermitidos.includes(file.type)) {
     toast.warning('Por favor, selecione um arquivo de imagem válido (PNG, JPG, WEBP).')
+    e.target.value = ''
     return
   }
-  if (file.size > 10 * 1024 * 1024) {
-    toast.warning('A imagem deve ter no máximo 10MB.')
+  if (file.size > 5 * 1024 * 1024) {
+    toast.warning('A imagem deve ter no máximo 5MB.')
+    e.target.value = ''
     return
   }
+  premioForm.value.foto_arquivo = file
   premioForm.value.foto_nome = file.name
   const reader = new FileReader()
   reader.onload = () => {
@@ -486,6 +515,7 @@ function onFotoPremioChange(e) {
 }
 
 function removerFotoPremio() {
+  premioForm.value.foto_arquivo = null
   premioForm.value.foto_base64 = ''
   premioForm.value.foto_preview = ''
   premioForm.value.foto_nome = ''
@@ -502,8 +532,8 @@ async function handleSalvarPremio(isEdit = false) {
     formData.append('categoria', premioForm.value.categoria)
     formData.append('eixo_id', premioForm.value.eixo_id || '0')
     formData.append('quantidade', premioForm.value.quantidade)
-    if (premioForm.value.foto_base64) {
-      formData.append('foto_base64', premioForm.value.foto_base64)
+    if (premioForm.value.foto_arquivo) {
+      formData.append('foto', premioForm.value.foto_arquivo)
     }
 
     const url = isEdit ? '/api/sorteios/premios/' + premioForm.value.id : '/api/sorteios/premios'
@@ -874,6 +904,16 @@ onMounted(() => {
               >
                 Cat 2 (Eixos)
               </button>
+              <label class="catalog-axis-filter">
+                <span class="text-muted small fw-bold">Eixo:</span>
+                <select v-model="filtroEixo" class="form-select" aria-label="Filtrar prêmios por eixo">
+                  <option value="todos">Todos os eixos</option>
+                  <option v-for="eixo in eixos" :key="eixo.id" :value="String(eixo.id)">
+                    {{ eixo.nome }}
+                  </option>
+                  <option value="sem_eixo">Sem eixo (Geral)</option>
+                </select>
+              </label>
             </div>
 
             <div class="d-flex align-items-center gap-1 flex-wrap">
@@ -1328,7 +1368,7 @@ onMounted(() => {
             <input
               ref="fotoPremioInput"
               type="file"
-              accept="image/*"
+              accept="image/png,image/jpeg,image/webp"
               class="d-none"
               id="inputFotoPremio"
               @change="onFotoPremioChange"
@@ -1336,7 +1376,7 @@ onMounted(() => {
             <label for="inputFotoPremio" class="upload-dropzone-label">
               <i class="bi bi-cloud-arrow-up-fill upload-icon"></i>
               <span class="upload-title">Clique para selecionar imagem</span>
-              <span class="upload-subtitle">Formatos PNG, JPG ou WEBP (máx. 10MB)</span>
+              <span class="upload-subtitle">Formatos PNG, JPG ou WEBP (máx. 5MB)</span>
             </label>
           </div>
 

@@ -7,10 +7,10 @@ import os
 import secrets
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Request, Depends, Form, Query, HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +28,7 @@ from app.core.cpf import limpar_cpf, formatar_cpf, mascarar_cpf, validar_cpf_mat
 from app.services.email_service import send_ticket_email_async, send_validation_pending_email_async
 from app.services.validacao_servidor_service import ServidorValidationService
 from app.core.events import lote_event_hub
-from app.routers.public import invalidar_cache_live_status
+from app.routers.public import invalidar_cache_live_status, coletar_status_lote_para_sse
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -38,7 +38,9 @@ os.makedirs(FOTOS_DIR, exist_ok=True)
 VUE_INDEX_PATH = "app/static/dist/index.html"
 
 COOKIE_BROWSER_ID = "festa_browser_id"
+COOKIE_RESERVA_PRAZO = "festa_reserva_prazo"
 COOKIE_DEVICE_LEGACY = "festa_device_id"
+
 
 # Rate Limit Global por IP via PostgreSQL (suporta 4 workers do Gunicorn)
 # Calibrado para até 300 requisições/min por IP público, acomodando com folga 150+ participantes
@@ -72,6 +74,38 @@ def is_conexao_segura(request: Request) -> bool:
         request.url.scheme == "https"
         or request.headers.get("x-forwarded-proto") == "https"
         or getattr(settings, "ENVIRONMENT", "") == "production"
+    )
+
+
+def definir_cookie_prazo_reserva(response: Response, expira_em_ms: int, request: Request) -> None:
+    """Persiste no navegador o prazo exato usado pelo cronômetro do resgate."""
+    restante_ms = max(0, int(expira_em_ms) - int(datetime.now(timezone.utc).timestamp() * 1000))
+    if restante_ms <= 0:
+        response.delete_cookie(
+            key=COOKIE_RESERVA_PRAZO,
+            path="/",
+            secure=is_conexao_segura(request),
+            samesite="lax"
+        )
+        return
+
+    response.set_cookie(
+        key=COOKIE_RESERVA_PRAZO,
+        value=str(int(expira_em_ms)),
+        max_age=(restante_ms + 999) // 1000,
+        httponly=False,
+        secure=is_conexao_segura(request),
+        samesite="lax",
+        path="/"
+    )
+
+
+def remover_cookie_prazo_reserva(response: Response, request: Request) -> None:
+    response.delete_cookie(
+        key=COOKIE_RESERVA_PRAZO,
+        path="/",
+        secure=is_conexao_segura(request),
+        samesite="lax"
     )
 
 
@@ -130,7 +164,7 @@ async def verificar_e_registrar_rate_limit_db(ip: str, session: Optional[AsyncSe
     Utiliza sessão dedicada independente para NUNCA comitar ou liberar prematuramente
     o lock de transação ('SELECT ... FOR UPDATE') da sessão principal do chamador.
     """
-    agora_utc = datetime.utcnow()
+    agora_utc = datetime.now(timezone.utc)
     limite_janela = agora_utc - timedelta(seconds=_RATE_LIMIT_WINDOW_SECONDS)
 
     try:
@@ -173,7 +207,7 @@ async def expirar_reservas_vencidas(session: AsyncSession) -> int:
         return 0
     _ultima_varredura_expiracao = agora_mono
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     try:
         stmt = (
             update(ReservaIngresso)
@@ -249,7 +283,7 @@ async def validar_cpf_resgate(
     _, current_browser_hash, _ = obter_ou_criar_browser_id(request)
 
     # Expiração direcionada atômica para o CPF e navegador desta chamada caso o sweeper global esteja em throttle
-    agora_val = datetime.now()
+    agora_val = datetime.now(timezone.utc)
     stmt_expirar_direcionada = (
         update(ReservaIngresso)
         .where(
@@ -277,7 +311,7 @@ async def validar_cpf_resgate(
         # Cancela SOMENTE se a reserva secundária pertencer a este navegador ou não tiver hash
         if res_sec and (res_sec.browser_token_hash == current_browser_hash or not res_sec.browser_token_hash):
             res_sec.status = "cancelada"
-            res_sec.expira_em = datetime(2000, 1, 1)
+            res_sec.expira_em = datetime(2000, 1, 1, tzinfo=timezone.utc)
             session.add(res_sec)
             try:
                 await session.commit()
@@ -286,7 +320,7 @@ async def validar_cpf_resgate(
                 stmt_cnt = select(func.count(ReservaIngresso.id)).where(
                     ReservaIngresso.lote_id == res_sec.lote_id,
                     ReservaIngresso.status == "ativa",
-                    ReservaIngresso.expira_em > datetime.now()
+                    ReservaIngresso.expira_em > datetime.now(timezone.utc)
                 )
                 cnt = (await session.execute(stmt_cnt)).scalar() or 0
                 st_lote = select(Lote).where(Lote.id == res_sec.lote_id)
@@ -299,8 +333,10 @@ async def validar_cpf_resgate(
                         "tipo": "reserva_liberada",
                         "lote_id": res_sec.lote_id,
                         "device_id": res_sec.device_id,
+                        "device_fingerprint": res_sec.device_fingerprint,
                         "token_reserva": res_sec.token,
-                        "motivo": "reserva_duplicada"
+                        "motivo": "reserva_duplicada",
+                        **(await coletar_status_lote_para_sse(session, res_sec.lote_id))
                     }
                 )
             except Exception:
@@ -316,7 +352,7 @@ async def validar_cpf_resgate(
             "mensagem": mensagem
         })
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     # Verifica se este CPF já possui outra reserva ativa R1 em andamento em QUALQUER lote
     stmt_res_ativa = select(ReservaIngresso).where(
         ReservaIngresso.cpf == cpf_limpo,
@@ -389,7 +425,6 @@ async def status_reserva(
     token_reserva: str = Query(...),
     session: AsyncSession = Depends(get_session)
 ):
-    agora = datetime.now()
     await expirar_reservas_vencidas(session)
 
     stmt = select(ReservaIngresso).where(ReservaIngresso.token == token_reserva)
@@ -402,10 +437,12 @@ async def status_reserva(
     if reserva.status == "concluida" or reserva.utilizada:
         return JSONResponse(content={"status": "utilizada", "ativa": False, "motivo": "utilizada"})
 
-    if reserva.status == "cancelada" or reserva.expira_em <= datetime(2000, 1, 2):
+    if reserva.status == "cancelada" or reserva.expira_em <= datetime(2000, 1, 2, tzinfo=timezone.utc):
         return JSONResponse(content={"status": "desistida", "ativa": False, "motivo": "desistida"})
 
-    if reserva.status == "expirada" or agora > reserva.expira_em:
+    agora_resposta = datetime.now(timezone.utc)
+    restante_ms = int((reserva.expira_em - agora_resposta).total_seconds() * 1000)
+    if reserva.status == "expirada" or restante_ms <= 0:
         if reserva.status == "ativa":
             reserva.status = "expirada"
             session.add(reserva)
@@ -413,15 +450,22 @@ async def status_reserva(
                 await session.commit()
             except Exception:
                 await session.rollback()
-        return JSONResponse(content={"status": "expirada", "ativa": False, "motivo": "tempo_esgotado"})
+        response = JSONResponse(content={"status": "expirada", "ativa": False, "motivo": "tempo_esgotado"})
+        remover_cookie_prazo_reserva(response, request)
+        return response
 
-    segundos_restantes = max(1, int((reserva.expira_em - agora).total_seconds()))
-    return JSONResponse(content={
+    segundos_restantes = (restante_ms + 999) // 1000
+    server_time_ms = int(agora_resposta.timestamp() * 1000)
+    response = JSONResponse(content={
         "status": "ativa",
         "ativa": True,
         "segundos_restantes": segundos_restantes,
-        "expira_em_ms": int(reserva.expira_em.timestamp() * 1000)
+        "milissegundos_restantes": restante_ms,
+        "server_time_ms": server_time_ms,
+        "expira_em_ms": server_time_ms + restante_ms
     })
+    definir_cookie_prazo_reserva(response, server_time_ms + restante_ms, request)
+    return response
 
 
 # ============================================================================
@@ -451,7 +495,7 @@ async def desistir_reserva(
             )
 
         reserva.status = "cancelada"
-        reserva.expira_em = datetime(2000, 1, 1)
+        reserva.expira_em = datetime(2000, 1, 1, tzinfo=timezone.utc)
         session.add(reserva)
         try:
             await session.commit()
@@ -463,7 +507,7 @@ async def desistir_reserva(
         stmt_count = select(func.count(ReservaIngresso.id)).where(
             ReservaIngresso.lote_id == reserva.lote_id,
             ReservaIngresso.status == "ativa",
-            ReservaIngresso.expira_em > datetime.now()
+            ReservaIngresso.expira_em > datetime.now(timezone.utc)
         )
         res_count = await session.execute(stmt_count)
         reservas_ativas = res_count.scalar() or 0
@@ -480,42 +524,49 @@ async def desistir_reserva(
                 "tipo": "reserva_liberada",
                 "lote_id": reserva.lote_id,
                 "device_id": reserva.device_id,
+                "device_fingerprint": reserva.device_fingerprint,
                 "token_reserva": token_reserva,
-                "motivo": "desistencia"
+                "motivo": "desistencia",
+                **(await coletar_status_lote_para_sse(session, reserva.lote_id))
             }
         )
 
-    return JSONResponse(content={
+    response = JSONResponse(content={
         "sucesso": True,
         "mensagem": "Vaga liberada com sucesso."
     })
+    remover_cookie_prazo_reserva(response, request)
+    return response
 
 
 # ============================================================================
 # 4. PÁGINA E API DE RESGATE COM RESERVA ATÔMICA & COOKIE CRIPTOGRÁFICO
 # ============================================================================
 @router.get("/resgate/{lote_id}")
-@router.get("/api/resgate/{lote_id}")
+@router.post("/api/lote/{lote_id}/reservar")
 async def pagina_resgate(
     request: Request, 
     lote_id: int, 
     device_fingerprint: Optional[str] = Query(None),
+    device_id: Optional[str] = Query(None),
     cpf: Optional[str] = Query(None),
     session: AsyncSession = Depends(get_session)
 ):
     if not request.url.path.startswith("/api/") and "text/html" in request.headers.get("accept", "") and os.path.exists(VUE_INDEX_PATH):
         return FileResponse(VUE_INDEX_PATH)
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     server_time_ms = int(agora.timestamp() * 1000)
     client_ip = extrair_ip_cliente(request)
     
     # Expirar reservas vencidas com throttle
     await expirar_reservas_vencidas(session)
 
-    # Identidade autenticada do navegador via Cookie com assinatura criptográfica HMAC-SHA256
-    browser_token, browser_token_hash, is_new_browser_cookie = obter_ou_criar_browser_id(request)
+    # Mantém o cookie legado na resposta, mas não o usa para localizar a reserva.
+    browser_token, _, _ = obter_ou_criar_browser_id(request)
     header_fp = request.headers.get("x-device-fingerprint")
+    fingerprint_reserva = device_fingerprint or header_fp
+    device_id_reserva = device_id or request.headers.get("x-device-id") or request.cookies.get(COOKIE_DEVICE_LEGACY)
 
     # CPF opcional passado no inicio do resgate
     cpf_limpo = "".join([ch for ch in cpf if ch.isdigit()]).zfill(11) if cpf else None
@@ -555,68 +606,36 @@ async def pagina_resgate(
             return FileResponse(VUE_INDEX_PATH)
         return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
 
-    # 2.5 Expiração direcionada atômica para o CPF e navegador desta requisição
-    # Garante que reservas vencidas (expira_em <= agora) deste participante/navegador não gerem
-    # falso conflito no índice único uq_reserva_*_ativa enquanto o sweeper global estiver em throttle.
-    if cpf_limpo or browser_token_hash:
-        conds_expirar = []
-        if cpf_limpo:
-            conds_expirar.append(ReservaIngresso.cpf == cpf_limpo)
-        if browser_token_hash:
-            conds_expirar.append(ReservaIngresso.browser_token_hash == browser_token_hash)
-        
-        stmt_expirar_alvo = (
-            update(ReservaIngresso)
-            .where(
-                ReservaIngresso.status == "ativa",
-                ReservaIngresso.expira_em <= agora,
-                or_(*conds_expirar)
-            )
-            .values(status="expirada")
-        )
-        await session.execute(stmt_expirar_alvo)
-
-    # 3. VERIFICA SE JÁ EXISTE RESERVA ATIVA GLOBAL (RESTRIÇÃO CROSS-LOTE)
+    # 3. Recupera a reserva nesta ordem: fingerprint e depois device_id.
+    # As duas datas são validadas contra o relógio do servidor.
     reserva_existente = None
-
-    # 3.1 Checa pelo CPF (se fornecido) em TODOS os lotes
-    if cpf_limpo:
-        stmt_cpf = select(ReservaIngresso).where(
-            ReservaIngresso.cpf == cpf_limpo,
+    agora_busca = datetime.now(timezone.utc)
+    if fingerprint_reserva:
+        stmt_fingerprint = select(ReservaIngresso).where(
+            ReservaIngresso.device_fingerprint == fingerprint_reserva,
             ReservaIngresso.status == "ativa",
-            ReservaIngresso.expira_em > agora
+            ReservaIngresso.criada_em < agora_busca,
+            ReservaIngresso.expira_em > agora_busca,
         ).order_by(desc(ReservaIngresso.expira_em))
-        res_cpf = await session.execute(stmt_cpf)
-        res_cpf_obj = res_cpf.scalars().first()
-        if res_cpf_obj:
-            if res_cpf_obj.lote_id != lote.id:
-                msg = "Você já possui uma reserva ativa em outro lote. Conclua ou desista dela para resgatar neste lote."
-                if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                    return JSONResponse(status_code=400, content={"codigo": "reserva_outro_lote", "detail": msg, "mensagem": msg})
-                raise HTTPException(status_code=400, detail=msg)
-            if res_cpf_obj.browser_token_hash and res_cpf_obj.browser_token_hash != browser_token_hash:
-                msg = "Este CPF já possui uma reserva ativa em andamento em outro navegador/dispositivo."
-                if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                    return JSONResponse(status_code=409, content={"codigo": "reserva_existente", "detail": msg, "mensagem": msg})
-                raise HTTPException(status_code=409, detail=msg)
-            reserva_existente = res_cpf_obj
+        reserva_existente = (await session.execute(stmt_fingerprint)).scalars().first()
 
-    # 3.2 Checa pelo Navegador autenticado em TODOS os lotes
-    if not reserva_existente:
-        stmt_browser = select(ReservaIngresso).where(
-            ReservaIngresso.browser_token_hash == browser_token_hash,
+    if not reserva_existente and device_id_reserva:
+        agora_busca = datetime.now(timezone.utc)
+        stmt_device_id = select(ReservaIngresso).where(
+            ReservaIngresso.device_id == device_id_reserva,
             ReservaIngresso.status == "ativa",
-            ReservaIngresso.expira_em > agora
+            ReservaIngresso.criada_em < agora_busca,
+            ReservaIngresso.expira_em > agora_busca,
         ).order_by(desc(ReservaIngresso.expira_em))
-        res_browser = await session.execute(stmt_browser)
-        res_browser_obj = res_browser.scalars().first()
-        if res_browser_obj:
-            if res_browser_obj.lote_id != lote.id:
-                msg = "Este navegador já possui uma reserva ativa em outro lote. Conclua ou desista dela antes de tentar outro lote."
-                if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                    return JSONResponse(status_code=400, content={"codigo": "reserva_outro_lote", "detail": msg, "mensagem": msg})
-                raise HTTPException(status_code=400, detail=msg)
-            reserva_existente = res_browser_obj
+        reserva_existente = (await session.execute(stmt_device_id)).scalars().first()
+
+    if reserva_existente and reserva_existente.lote_id != lote.id:
+        msg = "Este dispositivo já possui uma reserva ativa em outro lote. Conclua ou desista dela antes de tentar outro lote."
+        return JSONResponse(status_code=400, content={
+            "codigo": "reserva_outro_lote",
+            "detail": msg,
+            "mensagem": msg
+        })
 
     if reserva_existente:
         # Re-atacha à reserva ativa existente
@@ -629,8 +648,12 @@ async def pagina_resgate(
                 await session.rollback()
 
         token_reserva = reserva_existente.token
-        reserva_expira_em_ms = int(reserva_existente.expira_em.timestamp() * 1000)
-        tempo_restante_segundos = max(1, int((reserva_existente.expira_em - agora).total_seconds()))
+        # O prazo da reserva é publicado pelo snapshot SSE, que valida criada_em
+        # e expira_em no mesmo relógio. Este GET só recupera o token da sessão.
+        server_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        restante_ms = None
+        tempo_restante_segundos = None
+        reserva_expira_em_ms = None
     else:
         # 4. Verifica vagas disponíveis no lote
         stmt_reservas = (
@@ -668,20 +691,21 @@ async def pagina_resgate(
 
         # 6. Cria uma nova Reserva Ativa de 5 minutos
         token_reserva = str(uuid.uuid4())
-        expira_em = agora + timedelta(minutes=5)
+        agora_reserva = datetime.now(timezone.utc)
+        expira_em = agora_reserva + timedelta(minutes=5)
 
         nova_reserva = ReservaIngresso(
             token=token_reserva,
             lote_id=lote.id,
-            criada_em=agora,
+            criada_em=agora_reserva,
             expira_em=expira_em,
             utilizada=False,
             status="ativa",
             cpf=cpf_limpo,
-            browser_token_hash=browser_token_hash,
-            device_fingerprint=device_fingerprint or header_fp,
+            browser_token_hash=None,
+            device_fingerprint=fingerprint_reserva,
             ip_origem=client_ip,
-            device_id=browser_token
+            device_id=device_id_reserva or fingerprint_reserva
         )
         session.add(nova_reserva)
         try:
@@ -689,91 +713,35 @@ async def pagina_resgate(
         except IntegrityError:
             # Proteção contra corrida concorrente no PostgreSQL (rollback limpo sem 500)
             await session.rollback()
-            agora_atual = datetime.now()
-            # Se a colisão ocorreu com reserva que acabou de expirar, expira-a pontualmente e retenta
-            conds_limpa = []
-            if cpf_limpo:
-                conds_limpa.append(ReservaIngresso.cpf == cpf_limpo)
-            if browser_token_hash:
-                conds_limpa.append(ReservaIngresso.browser_token_hash == browser_token_hash)
-            
-            stmt_limpa = (
-                update(ReservaIngresso)
-                .where(
+            agora_atual = datetime.now(timezone.utc)
+            condicoes_dispositivo = []
+            if fingerprint_reserva:
+                condicoes_dispositivo.append(ReservaIngresso.device_fingerprint == fingerprint_reserva)
+            if device_id_reserva:
+                condicoes_dispositivo.append(ReservaIngresso.device_id == device_id_reserva)
+            if condicoes_dispositivo:
+                stmt_existente = select(ReservaIngresso).where(
                     ReservaIngresso.status == "ativa",
-                    ReservaIngresso.expira_em <= agora_atual,
-                    or_(*conds_limpa)
-                )
-                .values(status="expirada")
-            )
-            res_limpa = await session.execute(stmt_limpa)
-            if res_limpa.rowcount and res_limpa.rowcount > 0:
-                await session.commit()
-                session.add(nova_reserva)
-                try:
-                    await session.commit()
-                    tempo_rest = max(1, int((expira_em - datetime.now()).total_seconds()))
-                    if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                        return JSONResponse(content={
-                            "token_reserva": token_reserva,
-                            "tempo_restante_segundos": tempo_rest,
-                            "reserva_expira_em_ms": int(expira_em.timestamp() * 1000),
-                            "lote_id": lote.id
-                        })
-                except IntegrityError:
-                    await session.rollback()
+                    ReservaIngresso.criada_em < agora_atual,
+                    ReservaIngresso.expira_em > agora_atual,
+                    or_(*condicoes_dispositivo)
+                ).order_by(desc(ReservaIngresso.expira_em))
+                existente_concorrente = (await session.execute(stmt_existente)).scalars().first()
+                if existente_concorrente and existente_concorrente.lote_id == lote.id:
+                    token_reserva = existente_concorrente.token
+                    return JSONResponse(content={"token_reserva": token_reserva, "lote_id": lote.id})
 
-            if cpf_limpo:
-                stmt_c = select(ReservaIngresso).where(
-                    ReservaIngresso.cpf == cpf_limpo,
-                    ReservaIngresso.status == "ativa",
-                    ReservaIngresso.expira_em > datetime.now()
-                )
-                r_c = (await session.execute(stmt_c)).scalars().first()
-                if r_c and r_c.browser_token_hash == browser_token_hash and r_c.lote_id == lote.id:
-                    token_reserva = r_c.token
-                    reserva_expira_em_ms = int(r_c.expira_em.timestamp() * 1000)
-                    tempo_restante_segundos = max(1, int((r_c.expira_em - datetime.now()).total_seconds()))
-                    if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                        return JSONResponse(content={
-                            "token_reserva": token_reserva,
-                            "tempo_restante_segundos": tempo_restante_segundos,
-                            "reserva_expira_em_ms": reserva_expira_em_ms,
-                            "lote_id": lote.id
-                        })
-                else:
-                    return JSONResponse(status_code=409, content={
-                        "codigo": "reserva_concorrente",
-                        "detail": "Este participante já possui uma reserva ativa em andamento.",
-                        "mensagem": "Este participante já possui uma reserva ativa em andamento."
-                    })
-            else:
-                stmt_b = select(ReservaIngresso).where(
-                    ReservaIngresso.browser_token_hash == browser_token_hash,
-                    ReservaIngresso.status == "ativa",
-                    ReservaIngresso.expira_em > datetime.now()
-                )
-                r_b = (await session.execute(stmt_b)).scalars().first()
-                if r_b and r_b.lote_id == lote.id:
-                    token_reserva = r_b.token
-                    reserva_expira_em_ms = int(r_b.expira_em.timestamp() * 1000)
-                    tempo_restante_segundos = max(1, int((r_b.expira_em - datetime.now()).total_seconds()))
-                    if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                        return JSONResponse(content={
-                            "token_reserva": token_reserva,
-                            "tempo_restante_segundos": tempo_restante_segundos,
-                            "reserva_expira_em_ms": reserva_expira_em_ms,
-                            "lote_id": lote.id
-                        })
-                else:
-                    return JSONResponse(status_code=409, content={
-                        "codigo": "conflito_concorrencia",
-                        "detail": "Conflito durante a reserva simultânea. Tente novamente.",
-                        "mensagem": "Conflito durante a reserva simultânea. Tente novamente."
-                    })
+            return JSONResponse(status_code=409, content={
+                "codigo": "conflito_concorrencia",
+                "detail": "Conflito durante a reserva simultânea. Tente novamente.",
+                "mensagem": "Conflito durante a reserva simultânea. Tente novamente."
+            })
 
-        reserva_expira_em_ms = int(expira_em.timestamp() * 1000)
-        tempo_restante_segundos = 300
+        agora_resposta = datetime.now(timezone.utc)
+        server_time_ms = int(agora_resposta.timestamp() * 1000)
+        restante_ms = max(0, int((expira_em - agora_resposta).total_seconds() * 1000))
+        tempo_restante_segundos = (restante_ms + 999) // 1000
+        reserva_expira_em_ms = server_time_ms + restante_ms
 
         # Transmite via SSE com contadores consistentes pós-commit
         invalidar_cache_live_status()
@@ -783,9 +751,13 @@ async def pagina_resgate(
                 "tipo": "reserva_criada",
                 "lote_id": lote.id,
                 "device_id": nova_reserva.device_id,
+                "device_fingerprint": nova_reserva.device_fingerprint,
                 "token_reserva": token_reserva,
+                "server_time_ms": server_time_ms,
                 "expira_em_ms": reserva_expira_em_ms,
-                "segundos_restantes": tempo_restante_segundos
+                "segundos_restantes": tempo_restante_segundos,
+                "milissegundos_restantes": restante_ms,
+                **(await coletar_status_lote_para_sse(session, lote.id))
             }
         )
 
@@ -794,9 +766,7 @@ async def pagina_resgate(
     if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
         json_resp = JSONResponse(content={
             "token_reserva": token_reserva,
-            "server_time_ms": server_time_ms,
-            "reserva_expira_em_ms": reserva_expira_em_ms,
-            "tempo_restante_segundos": tempo_restante_segundos
+            "lote_id": lote.id
         })
         json_resp.set_cookie(
             key=COOKIE_BROWSER_ID,
@@ -836,6 +806,8 @@ async def pagina_resgate(
         secure=secure_flag,
         samesite="lax"
     )
+    if reserva_expira_em_ms is not None:
+        definir_cookie_prazo_reserva(response, reserva_expira_em_ms, request)
     return response
 
 
@@ -843,7 +815,7 @@ async def pagina_resgate(
 # 5. PROCESSAMENTO DO RESGATE COM VALIDAÇÃO RIGOROSA E ROLLBACK LIMPO
 # ============================================================================
 @router.post("/resgate/{lote_id}")
-@router.post("/api/resgate/{lote_id}")
+@router.post("/api/lote/{lote_id}/resgatar")
 async def processar_resgate(
     request: Request, 
     lote_id: int,
@@ -859,7 +831,7 @@ async def processar_resgate(
     foto_base64: str = Form(...),
     session: AsyncSession = Depends(get_session)
 ):
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     cpf_limpo = "".join([ch for ch in cpf if ch.isdigit()]).zfill(11)
     _, current_browser_hash, _ = obter_ou_criar_browser_id(request)
 
@@ -884,7 +856,7 @@ async def processar_resgate(
     if reserva.status == "concluida" or reserva.utilizada:
         raise HTTPException(status_code=400, detail="Esta reserva já foi utilizada para emitir um ingresso.")
 
-    if reserva.status == "cancelada" or reserva.expira_em <= datetime(2000, 1, 2):
+    if reserva.status == "cancelada" or reserva.expira_em <= datetime(2000, 1, 2, tzinfo=timezone.utc):
         raise HTTPException(status_code=400, detail="Você desistiu desta vaga por outro navegador.")
 
     if reserva.status == "expirada" or agora > reserva.expira_em:
@@ -903,7 +875,7 @@ async def processar_resgate(
     # Cancelamento imediato da reserva em falhas definitivas
     async def _cancelar_reserva_definitiva(detalhe_erro: str):
         reserva.status = "cancelada"
-        reserva.expira_em = datetime(2000, 1, 1)
+        reserva.expira_em = datetime(2000, 1, 1, tzinfo=timezone.utc)
         session.add(reserva)
         try:
             await session.commit()
@@ -912,7 +884,7 @@ async def processar_resgate(
             stmt_count = select(func.count(ReservaIngresso.id)).where(
                 ReservaIngresso.lote_id == lote_id,
                 ReservaIngresso.status == "ativa",
-                ReservaIngresso.expira_em > datetime.now()
+                ReservaIngresso.expira_em > datetime.now(timezone.utc)
             )
             res_cnt = await session.execute(stmt_count)
             res_ativas = res_cnt.scalar() or 0
@@ -928,7 +900,9 @@ async def processar_resgate(
                     "tipo": "reserva_liberada",
                     "lote_id": lote_id,
                     "device_id": reserva.device_id,
-                    "token_reserva": token_reserva
+                    "device_fingerprint": reserva.device_fingerprint,
+                    "token_reserva": token_reserva,
+                    **(await coletar_status_lote_para_sse(session, lote_id))
                 }
             )
         except Exception:
@@ -1092,7 +1066,9 @@ async def processar_resgate(
             "tipo": "resgate_concluido",
             "lote_id": lote.id,
             "device_id": reserva.device_id,
-            "token_reserva": reserva.token
+            "device_fingerprint": reserva.device_fingerprint,
+            "token_reserva": reserva.token,
+            **(await coletar_status_lote_para_sse(session, lote.id))
         }
     )
 
@@ -1126,6 +1102,7 @@ async def processar_resgate(
         secure=is_conexao_segura(request),
         samesite="lax"
     )
+    remover_cookie_prazo_reserva(response, request)
     return response
 
 

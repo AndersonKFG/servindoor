@@ -6,6 +6,7 @@ import { useServerTime } from '../composables/useServerTime'
 import { useLoteStatus } from '../composables/useLoteStatus'
 import Modal from '../components/Modal.vue'
 import FaqModal from '../components/FaqModal.vue'
+import SponsorLogos from '../components/SponsorLogos.vue'
 import { useAuth } from '../composables/useAuth'
 
 const router = useRouter()
@@ -27,9 +28,9 @@ const {
   lotePrevisaoId,
   lotePrevisaoAberturaIso,
   loteEncerradoRecente,
-  fetchLiveStatus,
-  startPolling,
-  stopPolling,
+  startSSE,
+  stopSSE,
+  sseConnectionError,
   parseSaoPauloTimeToMs
 } = useLoteStatus()
 
@@ -119,15 +120,10 @@ function formatarTempoDecorrido(segundosTotais) {
   return `O lote mais recente aberto encerrou há ${meses} ${unidade} atrás.`
 }
 
-// Controle de Patrocinador Master (Alternância a cada 15 segundos)
-const sponsorIndex = ref(0) // 0 = Servindoor Oficial, 1 = Bradesco
-const isSpinning = ref(false)
-const isBradescoTheme = computed(() => sponsorIndex.value === 1)
-let sponsorTimer = null
+// O tema de patrocínio master foi removido.
+const isBradescoTheme = computed(() => false)
 
-// ============================================================================
-// CONTINUOUS RIBBON COMET ENGINE (TRAJETÓRIA COMPLETA DE FORA A FORA DA TELA)
-// ============================================================================
+// Efeitos visuais legados, mantidos inativos após a remoção do tema de patrocinador.
 const cometsCanvasRef = ref(null)
 let canvasCtx = null
 let animFrameId = null
@@ -396,16 +392,6 @@ watch(isBradescoTheme, (val) => {
   }
 })
 
-function alternarSponsor() {
-  isSpinning.value = true
-  setTimeout(() => {
-    sponsorIndex.value = sponsorIndex.value === 0 ? 1 : 0
-  }, 400)
-  setTimeout(() => {
-    isSpinning.value = false
-  }, 800)
-}
-
 let renderInterval = null
 const checkpointsExecutados = { 30: false, 10: false, 5: false, 3: false }
 
@@ -437,12 +423,15 @@ function tickMotorRelogio() {
 
   // 1. Cronômetro da minha reserva ativa (se houver)
   if (minhaReservaExpiraEmMs.value) {
-    const distReserva = minhaReservaExpiraEmMs.value - agora
+    const distReserva = minhaReservaExpiraEmMs.value - Date.now()
     if (distReserva > 0) {
       const segRestantes = Math.floor(distReserva / 1000)
       tempoReservaFormatado.value = formatarTempoReserva(segRestantes)
     } else {
       tempoReservaFormatado.value = ''
+      minhaReservaExpiraEmMs.value = null
+      minhaReservaToken.value = null
+      minhaReservaSegundos.value = 0
     }
   } else {
     tempoReservaFormatado.value = ''
@@ -522,7 +511,6 @@ function tickMotorRelogio() {
       statusInfo.value.segundos_para_abrir = 0
       if (!aberturaNotificada.value) {
         aberturaNotificada.value = true
-        fetchLiveStatus()
       }
     }
 
@@ -628,14 +616,8 @@ function handleVisibilityHome() {
 }
 
 onMounted(() => {
-  startPolling()
+  startSSE()
   renderInterval = setInterval(tickMotorRelogio, 100)
-
-  sponsorTimer = setInterval(() => {
-    if (!document.hidden) {
-      alternarSponsor()
-    }
-  }, 15000)
 
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', handleVisibilityHome)
@@ -650,14 +632,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  stopPolling()
+  stopSSE()
   if (renderInterval) {
     clearInterval(renderInterval)
     renderInterval = null
-  }
-  if (sponsorTimer) {
-    clearInterval(sponsorTimer)
-    sponsorTimer = null
   }
   if (spawnTimeout) {
     clearTimeout(spawnTimeout)
@@ -674,9 +652,9 @@ onUnmounted(() => {
 })
 
 const temReservaAtiva = computed(() => {
-  return (
-    (minhaReservaExpiraEmMs.value && minhaReservaExpiraEmMs.value > getSynchronizedServerTime()) ||
-    (minhaReservaToken.value && minhaReservaSegundos.value && minhaReservaSegundos.value > 0)
+  return Boolean(
+    minhaReservaExpiraEmMs.value &&
+    minhaReservaExpiraEmMs.value > Date.now()
   )
 })
 
@@ -730,37 +708,30 @@ const cardClass = computed(() => {
 
 
 <template>
-  <div :class="['hero-section', { 'theme-bradesco': isBradescoTheme }]">
+  <div class="hero-section">
     
     <!-- 1. LUZES AMBIENTES DINÂMICAS EM MOVIMENTO (MODO SERVINDOOR) -->
-    <div class="servindoor-orbs-container" :class="{ 'hidden-orbs': isBradescoTheme }">
+    <div class="servindoor-orbs-container">
       <div class="ambient-glow glow-magenta"></div>
       <div class="ambient-glow glow-cyan"></div>
       <div class="ambient-glow glow-gold"></div>
     </div>
 
-    <!-- 2. CANVAS ENGINE DE COMETAS FLUIDOS E LISOS (MODO BRADESCO MASTER) -->
-    <canvas
-      ref="cometsCanvasRef"
-      class="bradesco-comets-canvas"
-      :class="{ 'active-canvas': isBradescoTheme }"
-    ></canvas>
-
     <div class="app-container">
       <div class="hero-center">
         <div :class="[cardClass, 'hero-card-clean']">
 
-          <!-- Badge Superior do Status / Patrocinador Master -->
+          <!-- Badge superior do status -->
           <div class="badge-wrapper">
-            <span v-if="loading" class="vip-badge badge-loading">
+            <span v-if="sseConnectionError" class="vip-badge bg-danger">
+              <i class="bi bi-wifi-off me-1"></i> NÃO FOI POSSÍVEL CONECTAR AO SSE
+            </span>
+            <span v-else-if="loading" class="vip-badge badge-loading">
               <span class="dot-pulse-subtle"></span> SINCRONIZANDO...
             </span>
             <!-- SE O USUÁRIO ESTIVER COM RESERVA ATIVA, DESTACA IMEDIATAMENTE -->
             <span v-else-if="temReservaAtiva" class="vip-badge badge-reserva-ativa">
               <i class="bi bi-hourglass-split me-1 dot-pulse"></i> SUA VAGA ESTÁ RESERVADA ({{ tempoReservaFormatado }})
-            </span>
-            <span v-else-if="isBradescoTheme" class="vip-badge badge-bradesco-master">
-              <i class="bi bi-star-fill text-gold me-1"></i> PATROCINADOR MASTER • BRADESCO
             </span>
             <span v-else-if="statusInfo.status_slug === 'aberto'" class="vip-badge bg-success">
               <i class="bi bi-circle-fill dot-pulse"></i> {{ statusInfo.status_label || 'RESGATE LIBERADO' }}
@@ -782,28 +753,13 @@ const cardClass = computed(() => {
             </span>
           </div>
 
-          <!-- Container 3D Flip da Logo (Servindoor / Bradesco Master) -->
-          <div
-            class="hero-logo-perspective"
-            title="Clique para alternar o patrocinador master"
-            @click="alternarSponsor"
-          >
-            <div class="hero-logo-card" :class="{ 'spinning': isSpinning }">
-              <!-- Logo 1: Servindoor -->
-              <img
-                v-show="sponsorIndex === 0"
-                src="/images/logo_servindoor_sem-fundo.png?v=2026"
-                alt="Serv indoor • A Festa do Servidor 2026"
-                class="hero-logo-img logo-servindoor"
-              />
-              <!-- Logo 2: Bradesco -->
-              <img
-                v-show="sponsorIndex === 1"
-                src="/images/logo_bradesco_sem-fundo.png?v=2026"
-                alt="Bradesco • Patrocinador Master"
-                class="hero-logo-img logo-bradesco"
-              />
-            </div>
+          <!-- Marca principal da festa -->
+          <div class="hero-logo-perspective">
+            <img
+              src="/images/logo_servindoor_sem-fundo.png?v=2026"
+              alt="Serv indoor • A Festa do Servidor 2026"
+              class="hero-logo-img logo-servindoor"
+            />
           </div>
 
           <!-- Título Principal -->
@@ -995,7 +951,9 @@ const cardClass = computed(() => {
             </span>
           </div>
 
-          <!-- Botão de Dúvidas Frequentes (FAQ) no local da antiga contagem de ingressos -->
+          <SponsorLogos />
+
+          <!-- Botão de Dúvidas Frequentes -->
           <div class="faq-home-trigger-wrap">
             <button
               type="button"

@@ -62,6 +62,26 @@ export function getDeviceFingerprint() {
   return fp
 }
 
+export function getDeviceId() {
+  const storageKey = 'servindoor_device_id'
+  try {
+    const cached = localStorage.getItem(storageKey)
+    if (cached) return cached
+  } catch {}
+
+  let deviceId = ''
+  try {
+    deviceId = crypto.randomUUID()
+  } catch {
+    deviceId = `device-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+  }
+
+  try {
+    localStorage.setItem(storageKey, deviceId)
+  } catch {}
+  return deviceId
+}
+
 export function useLoteStatus(loteIdParam = null) {
   const { calibrarComResposta, getSynchronizedServerTime } = useServerTime()
 
@@ -92,10 +112,7 @@ export function useLoteStatus(loteIdParam = null) {
   const loteEncerradoRecente = ref(null)
 
   const lastStateVersion = ref(null)
-  let pollingTimer = null
-  let isPollingActive = false
-  let isFetching = false
-  let pendingFetch = false
+  let isSSEActive = false
 
   function aplicarDadosCompletos(data) {
     if (!data) return
@@ -167,78 +184,32 @@ export function useLoteStatus(loteIdParam = null) {
     if (data.data_festa_formatada) dataFestaFormatada.value = data.data_festa_formatada
 
     minhaReservaSegundos.value = data.minha_reserva_segundos
-    minhaReservaExpiraEmMs.value = data.minha_reserva_expira_em_ms
+    const restanteReservaMs = data.minha_reserva_milissegundos == null
+      ? NaN
+      : Number(data.minha_reserva_milissegundos)
+    const restantePeloServidorMs = data.minha_reserva_expira_em_ms == null || data.server_time_ms == null
+      ? NaN
+      : Number(data.minha_reserva_expira_em_ms) - Number(data.server_time_ms)
+    minhaReservaExpiraEmMs.value = Number.isFinite(restanteReservaMs) && restanteReservaMs >= 0
+      ? Date.now() + restanteReservaMs
+      : Number.isFinite(restantePeloServidorMs) && restantePeloServidorMs >= 0
+        ? Date.now() + restantePeloServidorMs
+        : data.minha_reserva_expira_em_ms
     minhaReservaToken.value = data.minha_reserva_token
     loading.value = false
   }
 
-  async function fetchLiveStatus() {
-    if (isFetching) {
-      pendingFetch = true
-      return
-    }
-    isFetching = true
-    try {
-      const deviceFp = getDeviceFingerprint()
-      const base = loteIdParam ? `/api/lote/live-status?lote_id=${loteIdParam}&device_fingerprint=${deviceFp}` : `/api/lote/live-status?device_fingerprint=${deviceFp}`
-      const t0 = Date.now()
-      const res = await fetch(base, { 
-        cache: 'no-store',
-        credentials: 'same-origin',
-        headers: { 'X-Device-Fingerprint': deviceFp }
-      })
-      const t1 = Date.now()
-      if (!res.ok) return
-      const data = await res.json()
-
-      if (data.state_version) {
-        lastStateVersion.value = data.state_version
-      }
-
-      // Calibração de altíssima precisão NTP de relógio com tempo de ida e volta (RTT)
-      if (data.server_time_ms) {
-        calibrarComResposta(data.server_time_ms, t0, t1)
-      }
-      aplicarDadosCompletos(data)
-    } catch (e) {
-      console.warn('Erro ao atualizar live status:', e)
-    } finally {
-      isFetching = false
-      if (pendingFetch) {
-        pendingFetch = false
-        fetchLiveStatus()
-      }
-    }
-  }
-
-  async function scheduleNextPoll() {
-    if (!isPollingActive) return
-    if (typeof document !== 'undefined' && document.hidden) {
-      return
-    }
-
-    // Se o canal SSE estiver conectado e ativo, NÃO FAZ POLLING PERIÓDICO (Zero HTTP requests)
-    if (sseConnected.value) {
-      if (pollingTimer) {
-        clearTimeout(pollingTimer)
-        pollingTimer = null
-      }
-      return
-    }
-
-    // Fallback passivo somente se SSE estiver desconectado
-    await fetchLiveStatus()
-    if (!isPollingActive || sseConnected.value) return
-
-    if (pollingTimer) clearTimeout(pollingTimer)
-    pollingTimer = setTimeout(scheduleNextPoll, 45000)
-  }
-
   let eventSource = null
   const sseConnected = ref(false)
+  const sseConnectionError = ref(false)
 
   function connectSSE() {
-    if (typeof window === 'undefined' || !window.EventSource) return
+    if (typeof window === 'undefined' || !window.EventSource) {
+      sseConnected.value = false
+      sseConnectionError.value = true
+      loading.value = false
+      return
+    }
     if (eventSource) {
       eventSource.close()
       eventSource = null
@@ -254,11 +225,7 @@ export function useLoteStatus(loteIdParam = null) {
 
       eventSource.addEventListener('conectado', (event) => {
         sseConnected.value = true
-        // SSE ativo e saudável: cancela qualquer polling pendente
-        if (pollingTimer) {
-          clearTimeout(pollingTimer)
-          pollingTimer = null
-        }
+        sseConnectionError.value = false
       })
 
       // Reconclia o estado consolidado lido no servidor no momento da conexão
@@ -278,21 +245,44 @@ export function useLoteStatus(loteIdParam = null) {
         try {
           const data = JSON.parse(event.data)
           const myFp = getDeviceFingerprint()
+          const tipoReserva = ['reserva_criada', 'reserva_liberada', 'resgate_concluido'].includes(data.tipo)
+          const loteAtualId = lote.value?.id || lotePrevisaoId.value
+
+          const eventVersion = Number(event.lastEventId || data.state_version || 0)
+          if (eventVersion) {
+            if (lastStateVersion.value && eventVersion <= Number(lastStateVersion.value)) return
+            lastStateVersion.value = eventVersion
+          }
+
+          // Mudanças administrativas podem alterar qual lote a Home deve exibir.
+          // Reabre o stream para receber um novo snapshot consolidado via SSE.
+          if (!loteIdParam && data.tipo === 'LOTE_ATUALIZADO' &&
+            (data.nome || data.deletado || data.importado || data.restaurado)) {
+            connectSSE()
+            return
+          }
 
           // O stream entrega eventos de todos os lotes. Em uma tela vinculada a
           // um lote específico, ignora eventos de outros lotes.
           if (loteIdParam && data.lote_id && String(data.lote_id) !== String(loteIdParam)) return
 
-          if (data.state_version) {
-            lastStateVersion.value = data.state_version
+          // Na home, alterações de reserva em lotes que não estão sendo exibidos
+          // não afetam o estado atual.
+          if (!loteIdParam && data.lote_id && loteAtualId && String(data.lote_id) !== String(loteAtualId)) {
+            return
           }
-
           // 1. Sincronização direta de reserva para o próprio dispositivo em tempo real (<5ms)
-          if ((data.device_id && data.device_id === myFp) || (data.token_reserva && data.token_reserva === minhaReservaToken.value)) {
+          const correspondeAoNavegador = (data.device_id && data.device_id === myFp) ||
+            (data.token_reserva && data.token_reserva === minhaReservaToken.value)
+          const correspondeAoFingerprint = data.device_fingerprint && data.device_fingerprint === myFp
+          if (correspondeAoNavegador || correspondeAoFingerprint) {
             if (data.tipo === 'reserva_criada') {
-              minhaReservaToken.value = data.token_reserva
-              minhaReservaExpiraEmMs.value = data.expira_em_ms
+              if (correspondeAoNavegador) minhaReservaToken.value = data.token_reserva
               minhaReservaSegundos.value = data.segundos_restantes
+              const restanteReservaMs = Number(data.milissegundos_restantes)
+              minhaReservaExpiraEmMs.value = Number.isFinite(restanteReservaMs) && restanteReservaMs >= 0
+                ? Date.now() + restanteReservaMs
+                : data.expira_em_ms
             } else if (data.tipo === 'reserva_liberada' || data.tipo === 'resgate_concluido') {
               minhaReservaToken.value = null
               minhaReservaExpiraEmMs.value = null
@@ -318,15 +308,15 @@ export function useLoteStatus(loteIdParam = null) {
               status_slug: data.status_slug,
               status_label: data.status_label || statusInfo.value.status_label,
               badge_class: data.badge_class || statusInfo.value.badge_class,
+              pode_resgatar: data.pode_resgatar ?? statusInfo.value.pode_resgatar,
               segundos_para_abrir: data.segundos_para_abrir || 0
             }
           }
 
-          // Muitos produtores publicam somente o fato ocorrido (ex.: reserva
-          // concluída), sem incluir o status recalculado. Reconsulta o snapshot
-          // para atualizar esgotamento, pausa e encerramento em todas as abas.
-          if (data.lote_id || !loteIdParam) {
-            fetchLiveStatus().catch(() => {})
+          // As alterações de reserva carregam o status público recalculado no
+          // próprio evento SSE.
+          if (tipoReserva && data.status_slug) {
+            statusInfo.value.segundos_para_abrir = data.segundos_para_abrir || 0
           }
         } catch (e) {
           console.warn('Erro ao processar stream event:', e)
@@ -338,13 +328,15 @@ export function useLoteStatus(loteIdParam = null) {
 
       eventSource.onerror = () => {
         sseConnected.value = false
-        // Se a conexão SSE cair, agenda fallback de checagem passiva (a cada 45s) enquanto o navegador reconecta
-        if (isPollingActive && !pollingTimer && typeof document !== 'undefined' && !document.hidden) {
-          pollingTimer = setTimeout(scheduleNextPoll, 45000)
-        }
+        sseConnectionError.value = true
+        loading.value = false
+        // EventSource faz a reconexão automaticamente. Não iniciar polling HTTP.
       }
     } catch (e) {
       console.warn('Erro ao inicializar SSE:', e)
+      sseConnected.value = false
+      sseConnectionError.value = true
+      loading.value = false
     }
   }
 
@@ -359,47 +351,30 @@ export function useLoteStatus(loteIdParam = null) {
   function handleVisibilityChange() {
     if (typeof document === 'undefined') return
     if (document.hidden) {
-      // Aba em segundo plano: cancela o timer de polling e fecha conexão SSE para economizar rede/bateria
-      if (pollingTimer) {
-        clearTimeout(pollingTimer)
-        pollingTimer = null
-      }
+      // Aba em segundo plano: fecha a conexão SSE para economizar rede/bateria.
       disconnectSSE()
     } else {
       // Aba voltou a ficar ativa/visível: reconecta SSE e sincroniza
-      if (isPollingActive) {
+      if (isSSEActive) {
         connectSSE()
-        if (pollingTimer) {
-          clearTimeout(pollingTimer)
-          pollingTimer = null
-        }
-        fetchLiveStatus().catch(() => {})
       }
     }
   }
 
-  async function startPolling() {
-    stopPolling()
-    isPollingActive = true
+  function startSSE() {
+    stopSSE()
+    isSSEActive = true
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', handleVisibilityChange)
     }
-    
-    // 1. O navegador faz a requisição inicial buscando os dados necessários e sincronizando o relógio
-    await fetchLiveStatus()
-    
-    // 2. Após isso, a conexão para conhecimento e atualização contínua vem a partir do SSE
-    // (com envio de last_version para garantir que nenhum adiamento ocorrido durante a transição seja perdido)
+
+    // A Home recebe o snapshot inicial e todas as atualizações pelo próprio SSE.
     connectSSE()
   }
 
-  function stopPolling() {
-    isPollingActive = false
+  function stopSSE() {
+    isSSEActive = false
     disconnectSSE()
-    if (pollingTimer) {
-      clearTimeout(pollingTimer)
-      pollingTimer = null
-    }
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
@@ -423,9 +398,9 @@ export function useLoteStatus(loteIdParam = null) {
     lotePrevisaoAberturaIso,
     loteEncerradoRecente,
     parseSaoPauloTimeToMs,
-    fetchLiveStatus,
-    startPolling,
-    stopPolling,
-    sseConnected
+    startSSE,
+    stopSSE,
+    sseConnected,
+    sseConnectionError
   }
 }

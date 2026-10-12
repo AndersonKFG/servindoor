@@ -1,7 +1,7 @@
 import os
 import uuid
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
@@ -161,7 +161,7 @@ async def aprovar_solicitacao_validacao(
     if not is_superadmin and (not allowed_ids or sec_id not in allowed_ids):
         raise HTTPException(status_code=403, detail="Você não tem permissão para validar servidores desta secretaria.")
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     solic.status = "aprovado"
     solic.analisado_em = agora
     solic.analisado_por_id = validador.id
@@ -251,7 +251,7 @@ async def aprovar_todos_verificados_api(
             "mensagem": "Nenhuma solicitação confirmada pela API pendente de homologação."
         })
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     aprovados_count = 0
     usuarios_processados = set()
 
@@ -331,7 +331,7 @@ async def rejeitar_solicitacao_validacao(
         raise HTTPException(status_code=403, detail="Você não tem permissão para validar servidores desta secretaria.")
 
     motivo = body.get("motivo", "Vínculo de servidor público municipal não confirmado pela secretaria.")
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
 
     solic.status = "rejeitado"
     solic.motivo_rejeicao = motivo
@@ -395,7 +395,7 @@ async def comunicar_solicitacao_validacao(
     l = solic.lote
     sec = solic.secretaria or (u.secretaria if u else None)
     cpf_fmt = formatar_cpf(u.cpf)
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
 
     if solic.status == "aprovado":
         stmt_ing = select(Ingresso).where(
@@ -485,7 +485,7 @@ async def comunicar_em_lote_admin(
             "mensagem": "Nenhuma solicitação pendente de comunicação encontrada."
         })
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     total_enfileirados = 0
     total_falhas = 0
 

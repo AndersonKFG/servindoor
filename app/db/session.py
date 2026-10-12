@@ -1,5 +1,5 @@
 from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
 from sqlmodel import SQLModel
@@ -36,16 +36,56 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session() as session:
         yield session
 
+
+async def migrar_fuso_reservas(conn: AsyncConnection) -> None:
+    """Converte o horário local legado para instantes com fuso, uma única vez."""
+    if conn.dialect.name != "postgresql":
+        return
+
+    # UTCDateTime (SQLModel) espera timestamptz. Nas colunas antigas, o
+    # PostgreSQL gravava o horário de São Paulo sem o offset; a leitura pelo
+    # ORM o rotulava como UTC, antecipando a expiração em três horas.
+    await conn.execute(text("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'reservas_ingressos'
+                  AND column_name = 'criada_em'
+                  AND data_type = 'timestamp without time zone'
+            ) THEN
+                ALTER TABLE reservas_ingressos
+                ALTER COLUMN criada_em TYPE TIMESTAMPTZ
+                USING criada_em AT TIME ZONE 'America/Sao_Paulo';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'reservas_ingressos'
+                  AND column_name = 'expira_em'
+                  AND data_type = 'timestamp without time zone'
+            ) THEN
+                ALTER TABLE reservas_ingressos
+                ALTER COLUMN expira_em TYPE TIMESTAMPTZ
+                USING expira_em AT TIME ZONE 'America/Sao_Paulo';
+            END IF;
+        END $$;
+    """))
+
+
 async def init_db():
     """Inicializa automaticamente todas as tabelas oficiais do sistema"""
     from app.models.all_models import (
         Usuario, Lote, Ingresso, Secretaria, ReservaIngresso, LogAcesso,
-        Eixo, Premio, Ganhador, EstadoSorteio, GatekeeperTentativa, SolicitacaoCancelamento, BackupLote, TokenExclusaoLote, SolicitacaoValidacao, RateLimitTentativa, FaqItem
+        Eixo, Premio, Ganhador, EstadoSorteio, GatekeeperTentativa, SolicitacaoCancelamento, BackupLote, TokenExclusaoLote, SolicitacaoValidacao, RateLimitTentativa, FaqItem, SponsorLogo
     )
     async with engine.begin() as conn:
         if "postgresql" in str(engine.url):
             await conn.execute(text("SELECT pg_advisory_xact_lock(7429184);"))
         await conn.run_sync(SQLModel.metadata.create_all)
+        # Executa sob o mesmo lock de inicialização e antes de expirar reservas.
+        await migrar_fuso_reservas(conn)
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS email_queue (
                 id BIGSERIAL PRIMARY KEY,

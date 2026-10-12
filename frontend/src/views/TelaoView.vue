@@ -16,6 +16,9 @@ const candidatosSorteando = ref({})
 const imgErrors = ref({})
 const avatarErrors = ref({})
 const focoIndex = ref(0)
+const progressoTransicao = ref(0)
+const exibindoHistoricoCompleto = ref(false)
+const transicaoPausada = ref(false)
 const sidebarOculta = ref(false)
 const painelRecentesOculto = computed(() => sidebarOculta.value || status.value === 'sorteando')
 
@@ -26,12 +29,30 @@ let autoScrollAnimId = null
 let pollingInterval = null
 let animationFrameId = null
 let spotlightInterval = null
+let spotlightStartTime = 0
 let roletaStartTime = null
+const DURACAO_TRANSICAO_MS = 5000
 
 const focoItem = computed(() => {
-  if (premiosRodada.value.length === 0) return null
-  const idx = Math.max(0, Math.min(premiosRodada.value.length - 1, focoIndex.value))
-  return premiosRodada.value[idx]
+  const lista = exibindoHistoricoCompleto.value
+    ? ultimosGanhadores.value.map((item) => ({
+        item_id: item.ganhador_id,
+        categoria: item.categoria?.startsWith('Categoria 1') ? 'categoria_1' : 'categoria_2',
+        eixo_nome: item.secretaria_nome,
+        premio_nome: item.premio_nome,
+        premio_foto: item.premio_foto,
+        ganhador: {
+          ganhador_id: item.ganhador_id,
+          nome: item.servidor_nome,
+          cpf: item.servidor_cpf,
+          foto_url: item.servidor_foto,
+          secretaria: item.secretaria_nome
+        }
+      }))
+    : premiosRodada.value
+  if (lista.length === 0) return null
+  const idx = Math.max(0, Math.min(lista.length - 1, focoIndex.value))
+  return lista[idx]
 })
 
 async function fetchLiveTelao() {
@@ -71,10 +92,10 @@ async function fetchLiveTelao() {
       } else {
         status.value = 'finalizado'
         ultimosGanhadores.value = ultimosGanhadoresStaged.value
-        iniciarSpotlight()
+        if (statusAnterior !== 'finalizado') iniciarSpotlight()
       }
     } else if (novoStatus === 'idle') {
-      pararAnimacao()
+      if (statusAnterior !== 'idle' || isAnimando.value) pararAnimacao()
       ultimaRodadaConcluidaTs.value = 0
       status.value = 'idle'
       ultimosGanhadores.value = ultimosGanhadoresStaged.value
@@ -154,16 +175,50 @@ function pararAnimacao() {
 }
 
 function iniciarSpotlight() {
+  iniciarSpotlightComProgresso(false)
+}
+
+function iniciarSpotlightComProgresso(retomar) {
   pararSpotlight()
-  if (premiosRodada.value.length > 1) {
+  const quantidade = exibindoHistoricoCompleto.value ? ultimosGanhadores.value.length : premiosRodada.value.length
+  if (!transicaoPausada.value && quantidade > 1) {
+    if (!retomar) progressoTransicao.value = 0
+    spotlightStartTime = Date.now() - (progressoTransicao.value / 100) * DURACAO_TRANSICAO_MS
     spotlightInterval = setInterval(() => {
-      focoIndex.value = (focoIndex.value + 1) % premiosRodada.value.length
-    }, 5500)
+      const decorrido = Date.now() - spotlightStartTime
+      progressoTransicao.value = Math.min(100, (decorrido / DURACAO_TRANSICAO_MS) * 100)
+      if (decorrido >= DURACAO_TRANSICAO_MS) {
+        focoIndex.value = (focoIndex.value + 1) % quantidade
+        progressoTransicao.value = 0
+        spotlightStartTime = Date.now()
+      }
+    }, 50)
   }
 }
 
+function alternarPausaTransicao() {
+  transicaoPausada.value = !transicaoPausada.value
+  if (transicaoPausada.value) pararSpotlight()
+  else iniciarSpotlightComProgresso(true)
+}
+
 function selecionarFoco(idx) {
+  exibindoHistoricoCompleto.value = false
   focoIndex.value = idx
+  iniciarSpotlight()
+}
+
+function alternarReproducaoHistorico() {
+  if (exibindoHistoricoCompleto.value) {
+    exibindoHistoricoCompleto.value = false
+    focoIndex.value = 0
+    iniciarSpotlight()
+    return
+  }
+  if (ultimosGanhadores.value.length === 0) return
+  pararSpotlight()
+  exibindoHistoricoCompleto.value = true
+  focoIndex.value = 0
   iniciarSpotlight()
 }
 
@@ -260,10 +315,32 @@ onUnmounted(() => {
             <h1 class="brand-title font-outfit">SERVINDOOR</h1>
           </div>
 
-          <div class="status-banner font-outfit d-flex align-items-center">
+          <div class="status-banner font-outfit">
+            <div class="telao-header-actions">
+            <button
+              v-if="status !== 'sorteando' && ultimosGanhadores.length > 0"
+              type="button"
+              class="btn-history-playback"
+              :aria-pressed="exibindoHistoricoCompleto"
+              @click="alternarReproducaoHistorico"
+            >
+              <i :class="['bi', exibindoHistoricoCompleto ? 'bi-stop-fill' : 'bi-play-fill']"></i>
+              <span>{{ exibindoHistoricoCompleto ? 'Parar exibição' : 'Exibir últimos sorteados' }}</span>
+            </button>
+            <button
+              v-if="status !== 'sorteando' && (exibindoHistoricoCompleto ? ultimosGanhadores.length : (status === 'finalizado' ? premiosRodada.length : 0)) > 1"
+              type="button"
+              class="btn-history-playback btn-history-pause"
+              :aria-pressed="transicaoPausada"
+              :title="transicaoPausada ? 'Retomar transição automática' : 'Pausar transição automática'"
+              @click="alternarPausaTransicao"
+            >
+              <i :class="['bi', transicaoPausada ? 'bi-play-fill' : 'bi-pause-fill']"></i>
+              <span>{{ transicaoPausada ? 'Retomar' : 'Pausar' }}</span>
+            </button>
             <button
               type="button"
-              class="btn-toggle-sidebar me-2"
+              class="btn-toggle-sidebar"
               :aria-expanded="!painelRecentesOculto"
               aria-controls="recent-drawers-panel"
               :disabled="status === 'sorteando'"
@@ -273,6 +350,7 @@ onUnmounted(() => {
               <i :class="['bi', painelRecentesOculto ? 'bi-layout-sidebar-inset' : 'bi-layout-sidebar-inset-reverse']"></i>
               <span>{{ status === 'sorteando' ? 'Últimos sorteados' : painelRecentesOculto ? 'Últimos sorteados' : 'Recolher histórico' }}</span>
             </button>
+            </div>
             <span v-if="status === 'sorteando'" class="banner-sorteando pulse-banner">
               <i class="bi bi-stars me-2"></i> SORTEIO AO VIVO NO TELÃO • 10s
             </span>
@@ -293,9 +371,10 @@ onUnmounted(() => {
         </div>
 
         <!-- MODO 1: SPOTLIGHT / FOCO (CONFORME DESENHO DO USUÁRIO) -->
-        <div v-if="status === 'finalizado' && focoItem" class="spotlight-stage">
+        <div v-if="status !== 'sorteando' && (status === 'finalizado' || exibindoHistoricoCompleto) && focoItem" class="spotlight-stage">
           <!-- QUADRADO VERMELHO: GRANDE FOCO -->
-          <div class="spotlight-card-focus">
+          <Transition name="winner-slide" mode="out-in">
+          <div :key="`${exibindoHistoricoCompleto ? 'history' : 'round'}-${focoItem.item_id}`" class="spotlight-card-focus">
             <div class="spotlight-top-bar font-outfit">
               <span class="spotlight-badge-cat">
                 {{ focoItem.categoria === 'categoria_1' ? 'CATEGORIA GERAL' : 'EIXO SETORIAL' }}
@@ -303,8 +382,18 @@ onUnmounted(() => {
               <span class="spotlight-badge-eixo">
                 {{ focoItem.eixo_nome || 'TODOS OS PRESENTES' }}
               </span>
-              <span class="spotlight-step-tag" v-if="premiosRodada.length > 1">
-                {{ focoIndex + 1 }} de {{ premiosRodada.length }}
+              <span class="spotlight-step-tag" v-if="(exibindoHistoricoCompleto ? ultimosGanhadores.length : premiosRodada.length) > 1">
+                <span>{{ focoIndex + 1 }} de {{ exibindoHistoricoCompleto ? ultimosGanhadores.length : premiosRodada.length }}</span>
+                <span
+                  class="spotlight-transition-track"
+                  role="progressbar"
+                  :aria-valuenow="Math.round(progressoTransicao)"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-label="Tempo até o próximo ganhador"
+                >
+                  <span class="spotlight-transition-fill" :style="{ width: progressoTransicao + '%' }"></span>
+                </span>
               </span>
             </div>
 
@@ -333,10 +422,14 @@ onUnmounted(() => {
                   </h2>
                   <div class="spotlight-pills-servidor">
                     <span class="spotlight-cpf font-outfit">
-                      <i class="bi bi-shield-lock me-1"></i> {{ focoItem.ganhador?.cpf }}
+                      <i class="bi bi-shield-lock" aria-hidden="true"></i>
+                      <strong>CPF</strong>
+                      <span>{{ focoItem.ganhador?.cpf }}</span>
                     </span>
                     <span class="spotlight-sec font-outfit">
-                      <i class="bi bi-building me-1"></i> {{ focoItem.ganhador?.secretaria }}
+                      <i class="bi bi-building" aria-hidden="true"></i>
+                      <strong>Secretaria</strong>
+                      <span>{{ focoItem.ganhador?.secretaria }}</span>
                     </span>
                   </div>
                 </div>
@@ -382,9 +475,10 @@ onUnmounted(() => {
               <i class="bi bi-x-octagon-fill me-1"></i> SORTEIO ANULADO (REABERTO)
             </div>
           </div>
+          </Transition>
 
           <!-- MINIATURAS ABAIXO (LARANJA, AZUL, VERDE...) -->
-          <div v-if="premiosRodada.length > 1" class="spotlight-thumbnails-tray">
+          <div v-if="!exibindoHistoricoCompleto && premiosRodada.length > 1" class="spotlight-thumbnails-tray">
             <button
               v-for="(item, idx) in premiosRodada"
               :key="item.item_id"

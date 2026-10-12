@@ -1,6 +1,6 @@
 import logging
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -166,8 +166,8 @@ async def criar_faq(
         resposta=resposta_clean,
         ordem=dados.ordem or 0,
         ativo=True if dados.ativo is None else dados.ativo,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc)
     )
     session.add(novo_item)
     await session.commit()
@@ -219,7 +219,7 @@ async def atualizar_faq(
     if dados.ativo is not None:
         item.ativo = dados.ativo
 
-    item.updated_at = datetime.utcnow()
+    item.updated_at = datetime.now(timezone.utc)
     session.add(item)
     await session.commit()
     await session.refresh(item)

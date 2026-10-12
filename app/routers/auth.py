@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 from typing import Optional, Tuple
 from fastapi import APIRouter, Request, Depends, Form, status, HTTPException
 from pydantic import BaseModel
@@ -174,7 +174,7 @@ async def verificar_rate_limit_login(ip: str) -> Tuple[bool, Optional[str], int]
     Verifica se o IP está sob bloqueio temporário devido a excesso de tentativas falhas.
     Retorna (permitido, mensagem_bloqueio, segundos_restantes).
     """
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
 
     try:
         async with async_session() as db:
@@ -204,7 +204,7 @@ async def registrar_falha_login(ip: str) -> Tuple[bool, str, int]:
     Registra tentativa inválida e aplica bloqueio progressivo caso atinja o limite do estágio.
     Retorna (bloqueado_agora, mensagem, segundos_bloqueio).
     """
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
 
     try:
         async with async_session() as db:
@@ -366,7 +366,7 @@ async def login_action(
     await limpar_rate_limit_login(ip_cliente)
 
     # Verificação de Sessão Única por Conta (Single Device Enforcement)
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     cookie_token = request.cookies.get('access_token')
     sid_atual = None
     if cookie_token:

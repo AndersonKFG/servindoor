@@ -50,7 +50,7 @@ def validar_token_gatekeeper(token: Optional[str]) -> bool:
 
 async def contar_tentativas_falhas(ip: str, session: Optional[AsyncSession] = None) -> int:
     """Conta tentativas incorretas nas últimas 24 horas para este IP"""
-    limite_tempo = datetime.utcnow() - timedelta(hours=24)
+    limite_tempo = datetime.now(timezone.utc) - timedelta(hours=24)
 
     if session:
         try:
@@ -65,7 +65,7 @@ async def contar_tentativas_falhas(ip: str, session: Optional[AsyncSession] = No
             print(f"⚠️ Aviso ao consultar banco para rate limit: {e}")
 
     # Fallback em memória
-    agora = datetime.utcnow()
+    agora = datetime.now(timezone.utc)
     historico = _fallback_tentativas.get(ip, [])
     historico = [t for t in historico if agora - t < timedelta(hours=24)]
     _fallback_tentativas[ip] = historico
@@ -79,7 +79,7 @@ async def registrar_tentativa(ip: str, sucesso: bool, session: Optional[AsyncSes
             tentativa = GatekeeperTentativa(
                 ip=ip,
                 sucesso=sucesso,
-                data_tentativa=datetime.utcnow()
+                data_tentativa=datetime.now(timezone.utc)
             )
             session.add(tentativa)
             await session.commit()
@@ -89,7 +89,7 @@ async def registrar_tentativa(ip: str, sucesso: bool, session: Optional[AsyncSes
 
     if not sucesso:
         historico = _fallback_tentativas.setdefault(ip, [])
-        historico.append(datetime.utcnow())
+        historico.append(datetime.now(timezone.utc))
 
 
 @router.get("/status")

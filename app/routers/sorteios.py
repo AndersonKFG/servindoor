@@ -4,9 +4,9 @@ import time
 import base64
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
-from fastapi import APIRouter, Request, Depends, Form, HTTPException, status, Query, Body
+from fastapi import APIRouter, Request, Depends, Form, File, UploadFile, HTTPException, status, Query, Body
 from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, func, or_, and_, desc
@@ -24,10 +24,35 @@ router = APIRouter()
 
 PREMIOS_DIR = "app/static/uploads/premios"
 ENTREGAS_DIR = "app/static/uploads/entregas"
+PREMIO_FOTO_MAX_BYTES = 5 * 1024 * 1024
+PREMIO_FOTO_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
 os.makedirs(PREMIOS_DIR, exist_ok=True)
 os.makedirs(ENTREGAS_DIR, exist_ok=True)
 
 _rate_limit_meus_premios = {}
+
+
+async def salvar_foto_premio(foto: Optional[UploadFile], prefixo: str) -> Optional[str]:
+    if not foto or not foto.filename:
+        return None
+
+    extensao = PREMIO_FOTO_EXTENSIONS.get(foto.content_type or "")
+    if not extensao:
+        raise HTTPException(status_code=400, detail="Envie uma imagem PNG, JPG ou WEBP.")
+
+    foto_bytes = await foto.read(PREMIO_FOTO_MAX_BYTES + 1)
+    if len(foto_bytes) > PREMIO_FOTO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="A foto do prêmio deve ter no máximo 5MB.")
+
+    nome_arquivo = f"{prefixo}_{int(datetime.now().timestamp())}_{secrets.token_hex(4)}{extensao}"
+    caminho = os.path.join(PREMIOS_DIR, nome_arquivo)
+    with open(caminho, "wb") as arquivo:
+        arquivo.write(foto_bytes)
+    return f"/static/uploads/premios/{nome_arquivo}"
 
 class ItemMesaPreparar(BaseModel):
     premio_id: int
@@ -76,7 +101,6 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
             selectinload(Ganhador.eixo)
         )
         .order_by(desc(Ganhador.data_sorteio))
-        .limit(100)
     )
 
     # NÃO DÁ SPOILER: se ainda estiver sorteando, exclui os ganhadores da rodada atual da barra lateral
@@ -274,7 +298,7 @@ async def iniciar_sorteio_mesa(
 
     # 2. Rastreia quem já ganhou nesta rodada para evitar duplicações
     ganhadores_nesta_rodada_ids = set()
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
 
     for item in premios_rodada:
         premio = await session.get(Premio, item["premio_id"])
@@ -561,7 +585,7 @@ async def executar_sorteio(
         usuario_id=vencedor.id,
         categoria=categoria_alvo,
         eixo_id=premio.eixo_id,
-        data_sorteio=datetime.now(),
+        data_sorteio=datetime.now(timezone.utc),
         entregue=False,
         anulado=False
     )
@@ -768,25 +792,12 @@ async def criar_premio(
     categoria: str = Form("categoria_1"),
     eixo_id: Optional[str] = Form(None),
     quantidade: int = Form(1),
-    foto_base64: Optional[str] = Form(None),
+    foto: Optional[UploadFile] = File(None),
     session: AsyncSession = Depends(get_session),
     current_user: Usuario = Depends(get_current_admin)
 ):
     """Cria um novo prêmio para sorteio"""
-    foto_url = None
-    if foto_base64 and foto_base64.startswith("data:image"):
-        try:
-            _, encoded = foto_base64.split(",", 1)
-            foto_bytes = base64.b64decode(encoded)
-            if len(foto_bytes) > 10 * 1024 * 1024:
-                raise HTTPException(status_code=400, detail="A foto do prêmio deve ter no máximo 10MB.")
-            nome_arquivo = f"premio_{int(datetime.now().timestamp())}_{secrets.token_hex(4)}.jpg"
-            caminho = os.path.join(PREMIOS_DIR, nome_arquivo)
-            with open(caminho, "wb") as f:
-                f.write(foto_bytes)
-            foto_url = f"/static/uploads/premios/{nome_arquivo}"
-        except Exception as e:
-            print("Erro salvando foto do premio:", e)
+    foto_url = await salvar_foto_premio(foto, "premio")
 
     eixo_id_val = int(eixo_id) if eixo_id and str(eixo_id).strip() and str(eixo_id).strip() != "0" else None
     cat_str = "categoria_2" if str(categoria) in ["categoria_2", PremioCategoria.categoria_2, getattr(PremioCategoria.categoria_2, "value", "categoria_2")] else "categoria_1"
@@ -825,7 +836,7 @@ async def editar_premio(
     categoria: str = Form("categoria_1"),
     eixo_id: Optional[str] = Form(None),
     quantidade: int = Form(1),
-    foto_base64: Optional[str] = Form(None),
+    foto: Optional[UploadFile] = File(None),
     ativo: Optional[bool] = Form(True),
     session: AsyncSession = Depends(get_session),
     current_user: Usuario = Depends(get_current_admin)
@@ -835,19 +846,9 @@ async def editar_premio(
     if not premio:
         raise HTTPException(status_code=404, detail="Prêmio não encontrado.")
 
-    if foto_base64 and foto_base64.startswith("data:image"):
-        try:
-            _, encoded = foto_base64.split(",", 1)
-            foto_bytes = base64.b64decode(encoded)
-            if len(foto_bytes) > 10 * 1024 * 1024:
-                raise HTTPException(status_code=400, detail="A foto do prêmio deve ter no máximo 10MB.")
-            nome_arquivo = f"premio_{premio.id}_{int(datetime.now().timestamp())}.jpg"
-            caminho = os.path.join(PREMIOS_DIR, nome_arquivo)
-            with open(caminho, "wb") as f:
-                f.write(foto_bytes)
-            premio.foto_url = f"/static/uploads/premios/{nome_arquivo}"
-        except Exception as e:
-            print("Erro atualizando foto do premio:", e)
+    nova_foto_url = await salvar_foto_premio(foto, f"premio_{premio.id}")
+    if nova_foto_url:
+        premio.foto_url = nova_foto_url
 
     eixo_id_val = int(eixo_id) if eixo_id and str(eixo_id).strip() and str(eixo_id).strip() != "0" else None
     cat_str = "categoria_2" if str(categoria) in ["categoria_2", PremioCategoria.categoria_2, getattr(PremioCategoria.categoria_2, "value", "categoria_2")] else "categoria_1"
@@ -1073,7 +1074,7 @@ async def registrar_entrega(
         raise HTTPException(status_code=400, detail="Erro ao processar e salvar a foto de comprovação.")
 
     ganhador.entregue = True
-    ganhador.data_entrega = datetime.now()
+    ganhador.data_entrega = datetime.now(timezone.utc)
     ganhador.foto_entrega_url = foto_url
     ganhador.responsavel_entrega_id = current_user.id
 

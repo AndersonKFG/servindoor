@@ -13,7 +13,7 @@ from app.db.session import async_session, init_db
 from app.models.all_models import Ingresso, SolicitacaoCancelamento, SolicitacaoValidacao, Usuario
 
 # Importando as rotas separadas
-from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq
+from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq, sponsor_logos
 from app.routers.gatekeeper import validar_token_gatekeeper
 
 _MAX_RESGATE_BODY_BYTES = 6 * 1024 * 1024
@@ -149,6 +149,7 @@ async def gatekeeper_api_protection(request: Request, call_next):
         or path.startswith("/api/lote/live-status")
         or path.startswith("/api/lote/stream")
         or path.startswith("/api/faq")
+        or path.startswith("/api/sponsor-logos")
         or path.startswith("/static/")
         or path.startswith("/assets/")
         or path.startswith("/images/")
@@ -289,6 +290,7 @@ app.include_router(sorteios.router)
 app.include_router(cancelamento.router)
 app.include_router(validacoes.router)
 app.include_router(faq.router)
+app.include_router(sponsor_logos.router)
 
 # Fallback Catch-all para SPA Vue Router (Evita 404 em recarregamento F5)
 VUE_INDEX_PATH = 'app/static/dist/index.html'

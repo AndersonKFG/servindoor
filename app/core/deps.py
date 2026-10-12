@@ -1,4 +1,5 @@
 from typing import Optional
+from datetime import datetime, timezone
 from fastapi import Request, HTTPException, status, Depends
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,8 +78,7 @@ async def get_current_user(
         )
 
     # Atualiza o timestamp de último acesso com throttle (apenas se > 300 segundos desde o último registro)
-    from datetime import datetime
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     if not user.ultimo_acesso or (agora - user.ultimo_acesso).total_seconds() > 300:
         user.ultimo_acesso = agora
         session.add(user)

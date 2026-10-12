@@ -4,7 +4,7 @@ import json
 import asyncio
 import time
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict
 from fastapi import APIRouter, Request, Depends, HTTPException, status, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
@@ -102,6 +102,26 @@ def calcular_status_publico(lote: Optional[Lote], vagas_disponiveis: int, agora:
         "segundos_para_abrir": 0
     }
 
+
+async def coletar_status_lote_para_sse(session: AsyncSession, lote_id: int) -> dict:
+    """Calcula o status público atualizado para anexar aos eventos de reserva SSE."""
+    agora = datetime.now(timezone.utc)
+    lote = (await session.execute(
+        select(Lote).where(Lote.id == lote_id, Lote.deleted_at.is_(None))
+    )).scalars().first()
+    if not lote:
+        return {}
+
+    reservas_ativas = (await session.execute(
+        select(func.count(ReservaIngresso.id)).where(
+            ReservaIngresso.lote_id == lote_id,
+            ReservaIngresso.status == "ativa",
+            ReservaIngresso.expira_em > agora
+        )
+    )).scalar() or 0
+    vagas_disponiveis = max(0, lote.quantidade_total - (lote.quantidade_resgatada + reservas_ativas))
+    return calcular_status_publico(lote, vagas_disponiveis, agora)
+
 async def obter_lote_relevante(session: AsyncSession, agora: datetime, lote_id: Optional[int] = None) -> Optional[Lote]:
     if lote_id:
         stmt = (
@@ -175,7 +195,7 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
     if os.path.exists(VUE_INDEX_PATH):
         return FileResponse(VUE_INDEX_PATH)
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     client_ip = extrair_ip_cliente(request)
     device_id = request.cookies.get("festa_device_id")
 
@@ -213,6 +233,7 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
     status_info = calcular_status_publico(lote, vagas_disponiveis, agora)
 
     minha_reserva_segundos = None
+    minha_reserva_milissegundos = None
     minha_reserva_expira_em_ms = None
     minha_reserva_token = None
 
@@ -239,9 +260,12 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
         res_minha = await session.execute(stmt_minha)
         minha_res = res_minha.scalars().first()
         if minha_res:
-            minha_reserva_segundos = max(1, int((minha_res.expira_em - agora).total_seconds()))
-            minha_reserva_expira_em_ms = int(minha_res.expira_em.timestamp() * 1000)
-            minha_reserva_token = minha_res.token
+            restante_ms = max(0, int((minha_res.expira_em - agora).total_seconds() * 1000))
+            if restante_ms > 0:
+                minha_reserva_milissegundos = restante_ms
+                minha_reserva_segundos = (restante_ms + 999) // 1000
+                minha_reserva_expira_em_ms = int(agora.timestamp() * 1000) + restante_ms
+                minha_reserva_token = minha_res.token
 
     response = templates.TemplateResponse(
         request=request,
@@ -251,6 +275,7 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
             "lote": lote,
             "status_info": status_info,
             "minha_reserva_segundos": minha_reserva_segundos,
+            "minha_reserva_milissegundos": minha_reserva_milissegundos,
             "minha_reserva_expira_em_ms": minha_reserva_expira_em_ms,
             "minha_reserva_token": minha_reserva_token,
             "server_time_ms": int(agora.timestamp() * 1000)
@@ -263,7 +288,7 @@ async def home(request: Request, session: AsyncSession = Depends(get_session)):
 @router.get("/api/time")
 async def get_server_time(t: Optional[str] = None):
     """Endpoint de altíssima precisão NTP para sincronização de relógios dos clientes"""
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     now_ms = int(agora.timestamp() * 1000)
     return JSONResponse(
         content={
@@ -286,6 +311,93 @@ def _obter_browser_token_hash_public(request: Request) -> Optional[str]:
     return None
 
 
+def _reserva_datetime_utc(valor: Optional[datetime]) -> Optional[datetime]:
+    """Interpreta timestamps sem fuso como horário local de São Paulo e normaliza para UTC."""
+    if valor is None:
+        return None
+    if valor.tzinfo is None:
+        return valor.replace(tzinfo=TZ_SAO_PAULO).astimezone(timezone.utc)
+    return valor.astimezone(timezone.utc)
+
+
+async def _obter_prazo_reserva_sse(
+    session: AsyncSession,
+    request: Request,
+    lote_id: Optional[int],
+    device_id: Optional[str],
+    agora_utc: datetime,
+) -> dict:
+    """Resolve a reserva deste navegador e calcula o prazo uma única vez para o SSE."""
+    resultado = {
+        "minha_reserva_segundos": None,
+        "minha_reserva_milissegundos": None,
+        "minha_reserva_expira_em_ms": None,
+        "minha_reserva_token": None,
+    }
+    if not lote_id:
+        return resultado
+
+    browser_hash = _obter_browser_token_hash_public(request)
+    legacy_device_id = request.cookies.get("festa_device_id")
+    condicoes = []
+    if browser_hash:
+        condicoes.append(ReservaIngresso.browser_token_hash == browser_hash)
+    if device_id:
+        condicoes.extend((
+            ReservaIngresso.device_id == device_id,
+            ReservaIngresso.device_fingerprint == device_id,
+        ))
+    if legacy_device_id:
+        condicoes.append(ReservaIngresso.device_id == legacy_device_id)
+    if not condicoes:
+        return resultado
+
+    stmt = (
+        select(ReservaIngresso)
+        .where(
+            ReservaIngresso.lote_id == lote_id,
+            ReservaIngresso.status == "ativa",
+            ReservaIngresso.utilizada == False,
+            or_(*condicoes),
+        )
+    )
+    encontrados = (await session.execute(stmt)).scalars().all()
+
+    # Filtra em UTC depois de normalizar os valores retornados pelo banco. Isso
+    # evita comparar um timestamp local sem fuso com o relógio UTC do servidor.
+    reservas_validas = []
+    for reserva in encontrados:
+        criada_em_utc = _reserva_datetime_utc(reserva.criada_em)
+        expira_em_utc = _reserva_datetime_utc(reserva.expira_em)
+        if criada_em_utc and expira_em_utc and criada_em_utc <= agora_utc < expira_em_utc:
+            reservas_validas.append((reserva, criada_em_utc, expira_em_utc))
+
+    if not reservas_validas:
+        return resultado
+
+    reserva_forte = next((item for item in reservas_validas if (
+        (browser_hash and item[0].browser_token_hash == browser_hash) or
+        (legacy_device_id and item[0].device_id == legacy_device_id)
+    )), None)
+    reserva, _criada_em_utc, expira_em_utc = reserva_forte or max(
+        reservas_validas,
+        key=lambda item: item[2],
+    )
+
+    restante_ms = max(0, int((expira_em_utc - agora_utc).total_seconds() * 1000))
+    if restante_ms <= 0:
+        return resultado
+
+    resultado.update({
+        "minha_reserva_segundos": (restante_ms + 999) // 1000,
+        "minha_reserva_milissegundos": restante_ms,
+        "minha_reserva_expira_em_ms": int(expira_em_utc.timestamp() * 1000),
+    })
+    if reserva_forte:
+        resultado["minha_reserva_token"] = reserva.token
+    return resultado
+
+
 async def coletar_dados_live_status(
     session: AsyncSession,
     request: Request,
@@ -293,7 +405,7 @@ async def coletar_dados_live_status(
     device_id: Optional[str] = None
 ) -> dict:
     """Coleta o estado completo consolidado de lote, contagem e reserva ativa deste dispositivo"""
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     dev_id = device_id or request.headers.get("x-device-fingerprint") or request.cookies.get("festa_device_id")
 
     server_time_ms = int(agora.timestamp() * 1000)
@@ -306,42 +418,11 @@ async def coletar_dados_live_status(
         base_content["server_time_ms"] = server_time_ms
         base_content["server_time_iso"] = agora.isoformat()
 
-        # Adiciona dados da reserva pessoal do dispositivo se fornecido
-        minha_reserva_segundos = None
-        minha_reserva_expira_em_ms = None
-        minha_reserva_token = None
-
         target_lote_id = base_content.get("id")
-        b_hash = _obter_browser_token_hash_public(request)
-        conds_c = []
-        if b_hash:
-            conds_c.append(ReservaIngresso.browser_token_hash == b_hash)
-        if dev_id:
-            conds_c.append(ReservaIngresso.device_id == dev_id)
-        if request.cookies.get("festa_device_id"):
-            conds_c.append(ReservaIngresso.device_id == request.cookies.get("festa_device_id"))
-
-        if target_lote_id and conds_c:
-            stmt_minha = (
-                select(ReservaIngresso)
-                .where(
-                    ReservaIngresso.lote_id == target_lote_id,
-                    ReservaIngresso.status == "ativa",
-                    ReservaIngresso.expira_em > agora,
-                    or_(*conds_c)
-                )
-                .order_by(desc(ReservaIngresso.expira_em))
-            )
-            res_minha = await session.execute(stmt_minha)
-            minha_res = res_minha.scalars().first()
-            if minha_res:
-                minha_reserva_segundos = max(1, int((minha_res.expira_em - agora).total_seconds()))
-                minha_reserva_expira_em_ms = int(minha_res.expira_em.timestamp() * 1000)
-                minha_reserva_token = minha_res.token
-
-        base_content["minha_reserva_segundos"] = minha_reserva_segundos
-        base_content["minha_reserva_expira_em_ms"] = minha_reserva_expira_em_ms
-        base_content["minha_reserva_token"] = minha_reserva_token
+        prazo_reserva = await _obter_prazo_reserva_sse(
+            session, request, target_lote_id, dev_id, agora
+        )
+        base_content.update(prazo_reserva)
         base_content["state_version"] = lote_event_hub.state_version
 
         return base_content
@@ -467,36 +548,9 @@ async def coletar_dados_live_status(
             "status_info": status_info
         }
 
-    minha_reserva_segundos = None
-    minha_reserva_expira_em_ms = None
-    minha_reserva_token = None
-
-    b_hash_f = _obter_browser_token_hash_public(request)
-    conds_f = []
-    if b_hash_f:
-        conds_f.append(ReservaIngresso.browser_token_hash == b_hash_f)
-    if dev_id:
-        conds_f.append(ReservaIngresso.device_id == dev_id)
-    if request.cookies.get("festa_device_id"):
-        conds_f.append(ReservaIngresso.device_id == request.cookies.get("festa_device_id"))
-
-    if conds_f:
-        stmt_minha = (
-            select(ReservaIngresso)
-            .where(
-                ReservaIngresso.lote_id == lote.id,
-                ReservaIngresso.status == "ativa",
-                ReservaIngresso.expira_em > agora,
-                or_(*conds_f)
-            )
-            .order_by(desc(ReservaIngresso.expira_em))
-        )
-        res_minha = await session.execute(stmt_minha)
-        minha_res = res_minha.scalars().first()
-        if minha_res:
-            minha_reserva_segundos = max(1, int((minha_res.expira_em - agora).total_seconds()))
-            minha_reserva_expira_em_ms = int(minha_res.expira_em.timestamp() * 1000)
-            minha_reserva_token = minha_res.token
+    prazo_reserva = await _obter_prazo_reserva_sse(
+        session, request, lote.id, dev_id, agora
+    )
 
     final_content = {
         "has_lote": True,
@@ -525,14 +579,13 @@ async def coletar_dados_live_status(
         "lote_encerrado_recente": lote_encerrado_info,
         "data_festa_iso": DATA_FESTA_ISO,
         "data_festa_formatada": "30/10/2026 às 12:00",
-        "minha_reserva_segundos": minha_reserva_segundos,
-        "minha_reserva_expira_em_ms": minha_reserva_expira_em_ms,
-        "minha_reserva_token": minha_reserva_token
+        **prazo_reserva
     }
 
     # Salva no cache global
     base_cached = dict(final_content)
     base_cached["minha_reserva_segundos"] = None
+    base_cached["minha_reserva_milissegundos"] = None
     base_cached["minha_reserva_expira_em_ms"] = None
     base_cached["minha_reserva_token"] = None
     _live_status_cache[cache_global_key] = {

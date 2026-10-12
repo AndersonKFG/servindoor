@@ -18,6 +18,7 @@
 @import './css/components/navbar.css';
 @import './css/components/toasts.css';
 @import './css/components/faq.css';
+@import './css/components/sponsors.css';
 
 * {
   box-sizing: border-box;

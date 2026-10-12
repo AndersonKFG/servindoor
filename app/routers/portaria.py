@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, status, Body
 from fastapi.responses import JSONResponse, FileResponse
@@ -196,7 +196,7 @@ async def alterar_status_portaria(
         )
 
     tipo_movimento = MovimentoTipo.entrada if novo_status == "entrada" else MovimentoTipo.saida
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
 
     # SEC-09: Validação de transição de estado na portaria
     stmt_last_log = (

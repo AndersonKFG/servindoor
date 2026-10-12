@@ -1,7 +1,7 @@
 """Popula dados de demonstração de forma aditiva e idempotente."""
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select, text
 from app.core.security import get_password_hash
 from app.db.session import async_session
@@ -36,7 +36,7 @@ async def seed():
                     s.add(Usuario(cpf=cpf,nome=f"Usuário Teste {role.value} {i+1:02d}",senha_hash=get_password_hash("Festa@2026"),role=role,roles=role.value,secretaria_id=secs[i%len(secs)],setor="Equipe de teste",vinculo="Efetivo",validado=True,ativo=True,email=f"teste.{role.value}.{i+1}@servindoor.com.br"))
         await s.flush()
         lots=(await s.execute(select(Lote).where(Lote.ativo.is_(True),Lote.deleted_at.is_(None)).order_by(Lote.id))).scalars().all()
-        now=datetime.now()
+        now=datetime.now(timezone.utc)
         while len(lots)<3:
             lot=Lote(nome=f"Lote {len(lots)+1:02d} - Participantes",quantidade_total=1000,quantidade_resgatada=0,data_abertura=now-timedelta(days=1),data_fechamento=now+timedelta(days=30),ativo=True)
             s.add(lot); await s.flush(); lots.append(lot)

@@ -25,10 +25,6 @@
   opacity: 1;
 }
 
-.servindoor-orbs-container.hidden-orbs {
-  opacity: 0;
-}
-
 .ambient-glow {
   position: absolute;
   border-radius: 50%;
@@ -84,42 +80,6 @@
   0% { transform: translate(-50%, -50%) scale(0.9); }
   50% { transform: translate(-30%, -60%) scale(1.2); }
   100% { transform: translate(-60%, -40%) scale(1); }
-}
-
-/* CANVAS DE COMETAS FLUIDOS A 60FPS (MODO BRADESCO MASTER) */
-.bradesco-comets-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 1s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 1;
-}
-
-.bradesco-comets-canvas.active-canvas {
-  opacity: 1;
-}
-
-.theme-bradesco .hero-title {
-  background: linear-gradient(135deg, #ffffff 0%, #ff8095 50%, #ff1744 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.badge-bradesco-master {
-  background: linear-gradient(135deg, rgba(204, 9, 47, 0.5) 0%, rgba(255, 23, 68, 0.3) 100%);
-  border: 1px solid rgba(255, 23, 68, 0.75);
-  color: #ffffff;
-  box-shadow: 0 0 18px rgba(255, 23, 68, 0.5);
-  animation: pulseGlowBradesco 2s infinite ease-in-out;
-}
-
-@keyframes pulseGlowBradesco {
-  0% { transform: scale(1); box-shadow: 0 0 14px rgba(255, 23, 68, 0.4); }
-  50% { transform: scale(1.04); box-shadow: 0 0 24px rgba(255, 23, 68, 0.75); }
-  100% { transform: scale(1); box-shadow: 0 0 14px rgba(255, 23, 68, 0.4); }
 }
 
 .badge-reserva-ativa {
@@ -212,10 +172,6 @@
 
 .logo-servindoor {
   filter: drop-shadow(0 8px 25px rgba(217, 70, 239, 0.45));
-}
-
-.logo-bradesco {
-  filter: drop-shadow(0 8px 25px rgba(255, 23, 68, 0.65));
 }
 
 .hero-logo-card:hover .hero-logo-img {

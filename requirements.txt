@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 gunicorn
-sqlmodel
+sqlmodel==0.0.48
 greenlet
 asyncpg
 python-dotenv

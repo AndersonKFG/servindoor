@@ -2,21 +2,44 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useServerTime } from '../composables/useServerTime'
-import { getDeviceFingerprint } from '../composables/useLoteStatus'
+import { getDeviceFingerprint, getDeviceId } from '../composables/useLoteStatus'
 import WebcamCapture from '../components/WebcamCapture.vue'
 import Modal from '../components/Modal.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { calibrarRelogioComServidor, getSynchronizedServerTime } = useServerTime()
+const { calibrarComResposta, getSynchronizedServerTime } = useServerTime()
 
 const loteId = route.params.loteId
 const loading = ref(true)
 const lote = ref(null)
 const secretarias = ref([])
+const buscaSecretaria = ref('')
+const showModalSecretaria = ref(false)
 const tokenReserva = ref('')
 const reservaExpiraEmMs = ref(null)
-const tempoRestanteSegundos = ref(300)
+const tempoRestanteSegundos = ref(0)
+const COOKIE_PRAZO_RESERVA = 'festa_reserva_prazo'
+
+function apagarCookiePrazoReserva() {
+  if (typeof document === 'undefined') return
+  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `${COOKIE_PRAZO_RESERVA}=; Max-Age=0; Path=/; SameSite=Lax${secure}`
+}
+
+function aplicarPrazoReservaDaStream(data) {
+  const expiraEmMs = Number(data?.minha_reserva_expira_em_ms ?? data?.expira_em_ms)
+  const serverTimeMs = Number(data?.server_time_ms)
+  if (!Number.isFinite(expiraEmMs) || !Number.isFinite(serverTimeMs) || expiraEmMs <= 0) return false
+
+  const recebidoEmMs = Date.now()
+  calibrarComResposta(serverTimeMs, recebidoEmMs, recebidoEmMs)
+  const restanteMs = expiraEmMs - serverTimeMs
+  const prazoLocalMs = getSynchronizedServerTime() + Math.max(0, restanteMs)
+  reservaExpiraEmMs.value = prazoLocalMs
+  tempoRestanteSegundos.value = Math.max(0, Math.ceil(restanteMs / 1000))
+  return true
+}
 
 const form = ref({
   cpf: '',
@@ -29,6 +52,38 @@ const form = ref({
   email: '',
   foto_base64: ''
 })
+
+function normalizarBuscaSecretaria(valor) {
+  return String(valor || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('pt-BR')
+    .trim()
+}
+
+const secretariasSelecionaveis = computed(() => secretarias.value.filter(sec => {
+  const nome = normalizarBuscaSecretaria(sec.nome)
+  return !/(^|\s)eixos?(\s|$)/.test(nome) && !/(^|\s)consultorias?(\s|$)/.test(nome)
+}))
+
+const secretariasFiltradas = computed(() => {
+  const consulta = normalizarBuscaSecretaria(buscaSecretaria.value)
+  if (!consulta) return secretariasSelecionaveis.value
+  return secretariasSelecionaveis.value.filter(sec =>
+    normalizarBuscaSecretaria(sec.nome).includes(consulta) ||
+    normalizarBuscaSecretaria(sec.sigla).includes(consulta)
+  )
+})
+
+const secretariaSelecionada = computed(() =>
+  secretariasSelecionaveis.value.find(sec => String(sec.id) === String(form.value.secretaria_id)) || null
+)
+
+function selecionarSecretaria(sec) {
+  form.value.secretaria_id = String(sec.id)
+  buscaSecretaria.value = ''
+  showModalSecretaria.value = false
+}
 
 
 
@@ -260,7 +315,6 @@ const idadeInvalida = computed(() => {
 })
 
 let timerInterval = null
-let statusPollInterval = null
 let debounceCpfTimer = null
 
 let resgateEventSource = null
@@ -318,15 +372,13 @@ function atualizarStatusLote(data) {
   modalSseStatus = true
 }
 
-async function sincronizarStatusLote(data) {
-  if (data?.lote_id && String(data.lote_id) !== String(loteId)) return
-  try {
-    const res = await fetch(`/api/lote/live-status?lote_id=${loteId}`, { cache: 'no-store' })
-    if (res.ok) atualizarStatusLote(await res.json())
-  } catch {
-    // O backend continua validando o lote no POST; mantém o formulário ativo
-    // se a sincronização em tempo real falhar.
+function aplicarEstadoConsolidadoDaStream(data) {
+  if (!data || (data.id && String(data.id) !== String(loteId))) return
+  if (data.has_lote && data.id) {
+    lote.value = { id: data.id, nome: data.nome, secretaria_nome: data.secretaria_nome }
   }
+  atualizarStatusLote(data)
+  aplicarPrazoReservaDaStream(data)
 }
 
 function connectResgateSSE() {
@@ -340,22 +392,23 @@ function connectResgateSSE() {
     resgateEventSource = new EventSource(`/api/lote/stream?device_fingerprint=${myFp}&lote_id=${loteId}`)
     resgateEventSource.addEventListener('ESTADO_CONSOLIDADO', (event) => {
       try {
-        atualizarStatusLote(JSON.parse(event.data))
+        aplicarEstadoConsolidadoDaStream(JSON.parse(event.data))
       } catch {}
     })
     resgateEventSource.addEventListener('ESTADO_INICIAL', (event) => {
       try {
-        atualizarStatusLote(JSON.parse(event.data))
+        aplicarEstadoConsolidadoDaStream(JSON.parse(event.data))
       } catch {}
     })
     const handleEvent = (event) => {
       try {
         const data = JSON.parse(event.data)
         if (data.lote_id && String(data.lote_id) !== String(loteId)) return
-        // Payloads de alteração nem sempre trazem status_slug; consulta o
-        // estado consolidado para refletir mudanças administrativas e resgates.
         atualizarStatusLote(data)
-        sincronizarStatusLote(data)
+        if (data.tipo === 'reserva_criada' && data.device_fingerprint === myFp) {
+          if (data.token_reserva) tokenReserva.value = data.token_reserva
+          aplicarPrazoReservaDaStream(data)
+        }
         // Se a reserva deste token específico for liberada ou concluída em outra aba/janela:
         if (
           (data.tipo === 'reserva_liberada' || data.tipo === 'resgate_concluido') &&
@@ -371,7 +424,6 @@ function connectResgateSSE() {
           }
           if (data.motivo === 'desistencia') {
             if (timerInterval) clearInterval(timerInterval)
-            if (statusPollInterval) clearInterval(statusPollInterval)
             showModalDesistir.value = false
             showModalDesistidaOutroNavegador.value = true
           }
@@ -440,7 +492,6 @@ async function validarCpfNoServidor(digits) {
         (data.mensagem && data.mensagem.includes('Já foi realizado um resgate'))
       ) {
         if (timerInterval) clearInterval(timerInterval)
-        if (statusPollInterval) clearInterval(statusPollInterval)
         limparRascunhoFormulario()
         form.value.cpf = ''
 
@@ -470,7 +521,6 @@ async function validarCpfNoServidor(digits) {
       // Caso o CPF já possua reserva ativa em andamento:
       if (data.tipo_erro === 'reserva_existente') {
         if (timerInterval) clearInterval(timerInterval)
-        if (statusPollInterval) clearInterval(statusPollInterval)
         limparRascunhoFormulario()
         form.value.cpf = ''
 
@@ -556,6 +606,7 @@ function updateCountdown() {
 
   if (dist <= 0) {
     tempoRestanteSegundos.value = 0
+    apagarCookiePrazoReserva()
     limparRascunhoFormulario()
     showModalExpirado.value = true
     if (timerInterval) clearInterval(timerInterval)
@@ -563,40 +614,6 @@ function updateCountdown() {
   }
 
   tempoRestanteSegundos.value = Math.max(0, Math.floor(dist / 1000))
-}
-
-// Polling do status da reserva (sincronização cross-browser)
-async function verificarStatusReservaServidor() {
-  if (!tokenReserva.value || submitting.value || modalFeedback.value.show) return
-  try {
-    const res = await fetch(`/api/resgate/status-reserva?token_reserva=${tokenReserva.value}`)
-    if (!res.ok) return
-    const data = await res.json()
-
-    if (modalFeedback.value.show) return
-
-    if (data.status === 'desistida' || (!data.ativa && data.motivo === 'desistida')) {
-      if (timerInterval) clearInterval(timerInterval)
-      if (statusPollInterval) clearInterval(statusPollInterval)
-      showModalDesistir.value = false
-      showModalDesistidaOutroNavegador.value = true
-      return
-    }
-
-    if (data.status === 'expirada' && data.motivo === 'tempo_esgotado') {
-      if (timerInterval) clearInterval(timerInterval)
-      if (statusPollInterval) clearInterval(statusPollInterval)
-      limparRascunhoFormulario()
-    showModalExpirado.value = true
-      return
-    }
-
-    if (data.expira_em_ms) {
-      reservaExpiraEmMs.value = data.expira_em_ms
-    }
-  } catch (err) {
-    console.warn('Polling status reserva erro:', err)
-  }
 }
 
 const displayTimer = computed(() => {
@@ -616,13 +633,15 @@ const isTimerCritical = computed(() => tempoRestanteSegundos.value <= 60)
 async function carregarDadosResgate() {
   try {
     loading.value = true
-    await calibrarRelogioComServidor()
 
     const deviceFp = getDeviceFingerprint()
-    const res = await fetch(`/api/resgate/${loteId}?device_fingerprint=${deviceFp}`, {
+    const deviceId = getDeviceId()
+    const res = await fetch(`/api/lote/${loteId}/reservar?device_fingerprint=${encodeURIComponent(deviceFp)}&device_id=${encodeURIComponent(deviceId)}`, {
+      method: 'POST',
       headers: {
         'Accept': 'application/json',
-        'X-Device-Fingerprint': deviceFp
+        'X-Device-Fingerprint': deviceFp,
+        'X-Device-ID': deviceId
       }
     })
 
@@ -693,62 +712,6 @@ async function carregarDadosResgate() {
     if (dataRes.token_reserva) {
       tokenReserva.value = dataRes.token_reserva
     }
-    if (dataRes.reserva_expira_em_ms) {
-      reservaExpiraEmMs.value = dataRes.reserva_expira_em_ms
-    }
-    if (dataRes.tempo_restante_segundos) {
-      tempoRestanteSegundos.value = dataRes.tempo_restante_segundos
-    }
-
-    const statusRes = await fetch("/api/lote/live-status?lote_id=" + loteId, { cache: 'no-store' })
-    if (statusRes.ok) {
-      const st = await statusRes.json()
-      if (!st.has_lote || st.status_slug === 'esgotado') {
-        modalFeedback.value = {
-          show: true,
-          titulo: 'Ingressos Esgotados!',
-          subtitulo: 'Todos os ingressos deste lote já foram resgatados por outros participantes.',
-          icone: 'bi-ticket-detailed-fill',
-          corIcone: 'text-danger',
-          btnTexto: 'Voltar à Página Inicial',
-          btnIcone: 'bi-house-door'
-        }
-        loading.value = false
-        return
-      }
-      if (st.status_slug === 'pausado') {
-        modalFeedback.value = {
-          show: true,
-          titulo: 'Lote Pausado',
-          subtitulo: 'Este lote foi temporariamente pausado pela administração do evento.',
-          icone: 'bi-pause-circle-fill',
-          corIcone: 'text-warning',
-          btnTexto: 'Voltar à Página Inicial',
-          btnIcone: 'bi-house-door'
-        }
-        loading.value = false
-        return
-      }
-      if (st.status_slug === 'encerrado') {
-        modalFeedback.value = {
-          show: true,
-          titulo: 'Lote Encerrado',
-          subtitulo: 'O período de resgate deste lote já foi encerrado.',
-          icone: 'bi-archive-fill',
-          corIcone: 'text-secondary',
-          btnTexto: 'Voltar à Página Inicial',
-          btnIcone: 'bi-house-door'
-        }
-        loading.value = false
-        return
-      }
-      lote.value = {
-        id: st.id,
-        nome: st.nome,
-        secretaria_nome: st.secretaria_nome
-      }
-    }
-
     try {
       const secRes = await fetch('/api/secretarias')
       if (secRes.ok) {
@@ -763,8 +726,6 @@ async function carregarDadosResgate() {
     restaurarRascunhoFormulario()
     updateCountdown()
     timerInterval = setInterval(updateCountdown, 1000)
-    // SSE gerencia o status da reserva em tempo real; polling mantido apenas como fallback passivo (30s)
-    statusPollInterval = setInterval(verificarStatusReservaServidor, 30000)
     loading.value = false
   } catch (err) {
     // Erro tratado na UI
@@ -790,10 +751,11 @@ async function executarDesistencia() {
     desistindo.value = true
     const formData = new FormData()
     formData.append('token_reserva', tokenReserva.value)
-    await fetch('/api/resgate/desistir', {
+    const res = await fetch('/api/resgate/desistir', {
       method: 'POST',
       body: formData
     })
+    if (res.ok) apagarCookiePrazoReserva()
     showModalDesistir.value = false
     router.push('/')
   } catch (e) {
@@ -804,6 +766,12 @@ async function executarDesistencia() {
 }
 
 async function handleSubmit() {
+  if (!form.value.secretaria_id) {
+    errorMessage.value = 'Selecione sua secretaria ou órgão para continuar.'
+    document.getElementById('secretaria-selector-button')?.focus()
+    return
+  }
+
   const digits = form.value.cpf.replace(/\D/g, '')
   if (!validarCpfMatematico(digits)) {
     errorMessage.value = 'CPF inválido. Verifique os números digitados.'
@@ -846,7 +814,7 @@ async function handleSubmit() {
     formData.append('email', form.value.email)
     formData.append('foto_base64', form.value.foto_base64)
 
-    const res = await fetch("/api/resgate/" + loteId, {
+    const res = await fetch(`/api/lote/${loteId}/resgatar`, {
       method: 'POST',
       headers: { 'Accept': 'application/json, text/html' },
       body: formData
@@ -879,6 +847,7 @@ async function handleSubmit() {
     }
 
     const data = await res.json()
+    apagarCookiePrazoReserva()
     if (data.ingresso_id) {
       limparRascunhoFormulario()
       router.push('/sucesso/' + data.ingresso_id)
@@ -897,8 +866,8 @@ async function handleSubmit() {
 }
 
 onMounted(() => {
-  carregarDadosResgate()
   connectResgateSSE()
+  carregarDadosResgate()
 })
 
 onUnmounted(() => {
@@ -909,10 +878,6 @@ onUnmounted(() => {
   if (timerInterval) {
     clearInterval(timerInterval)
     timerInterval = null
-  }
-  if (statusPollInterval) {
-    clearInterval(statusPollInterval)
-    statusPollInterval = null
   }
   if (debounceCpfTimer) {
     clearTimeout(debounceCpfTimer)
@@ -1105,13 +1070,27 @@ onUnmounted(() => {
 
               <div class="form-grid">
                 <div class="form-group col-span-2">
-                  <label class="form-label" for="secretaria">Secretaria / Órgão <span class="text-danger">*</span></label>
-                  <select id="secretaria" v-model="form.secretaria_id" class="form-select" required>
-                    <option value="" disabled>Selecione sua secretaria oficial</option>
-                    <option v-for="sec in secretarias" :key="sec.id" :value="sec.id">
-                      {{ sec.nome }}{{ sec.sigla ? ' (' + sec.sigla + ')' : '' }}
-                    </option>
-                  </select>
+                  <label class="form-label" for="secretaria-selector-button">Secretaria / Órgão <span class="text-danger">*</span></label>
+                  <button
+                    id="secretaria-selector-button"
+                    type="button"
+                    class="secretaria-select-trigger"
+                    aria-haspopup="dialog"
+                    :aria-expanded="showModalSecretaria"
+                    @click="showModalSecretaria = true"
+                  >
+                    <i class="bi bi-building" aria-hidden="true"></i>
+                    <span class="secretaria-trigger-copy">
+                      <strong>{{ secretariaSelecionada?.nome || 'Selecionar secretaria' }}</strong>
+                      <small v-if="secretariaSelecionada?.sigla">{{ secretariaSelecionada.sigla }}</small>
+                      <small v-else-if="!secretariaSelecionada">Toque aqui para escolher seu órgão</small>
+                    </span>
+                    <i class="bi bi-chevron-down secretaria-trigger-chevron" aria-hidden="true"></i>
+                  </button>
+                  <div v-if="secretariaSelecionada" class="secretaria-selected-summary" aria-live="polite">
+                    <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                    <span>Órgão selecionado</span>
+                  </div>
                 </div>
 
                 <div class="form-group">
@@ -1133,6 +1112,7 @@ onUnmounted(() => {
                     <option value="Comissionado">Comissionado</option>
                     <option value="Contrato Temporário">Contrato Temporário</option>
                     <option value="Estagiário">Estagiário</option>
+                    <option value="Terceirizado">Terceirizado</option>
                     <option value="Prestador de Serviço">Prestador de Serviço</option>
                     <option value="Aposentado">Aposentado</option>
                   </select>
@@ -1328,6 +1308,53 @@ onUnmounted(() => {
           <i class="bi bi-arrow-repeat me-1"></i> Tentar Novamente na Página Inicial
         </router-link>
       </template>
+    </Modal>
+
+    <!-- Modal de seleção de Secretaria / Órgão -->
+    <Modal
+      :show="showModalSecretaria"
+      title="Selecionar Secretaria / Órgão"
+      icon="bi-building"
+      icon-color="text-primary"
+      :max-width="'720px'"
+      @close="showModalSecretaria = false"
+    >
+      <div class="secretaria-modal-picker">
+        <div class="secretaria-picker-search secretaria-modal-search">
+          <i class="bi bi-search" aria-hidden="true"></i>
+          <input
+            id="secretaria-busca"
+            v-model="buscaSecretaria"
+            type="search"
+            class="form-control secretaria-search-input"
+            placeholder="Pesquise pelo nome ou pela sigla"
+            autocomplete="off"
+            aria-label="Pesquisar secretaria ou órgão"
+          />
+        </div>
+
+        <div v-if="secretariasFiltradas.length" class="secretaria-results" role="listbox" aria-label="Secretarias e órgãos disponíveis">
+          <button
+            v-for="sec in secretariasFiltradas"
+            :key="sec.id"
+            type="button"
+            class="secretaria-result-option"
+            :class="{ 'is-selected': String(form.secretaria_id) === String(sec.id) }"
+            role="option"
+            :aria-selected="String(form.secretaria_id) === String(sec.id)"
+            @click="selecionarSecretaria(sec)"
+          >
+            <span class="secretaria-result-copy">
+              <strong>{{ sec.nome }}</strong>
+              <small v-if="sec.sigla">{{ sec.sigla }}</small>
+            </span>
+            <i v-if="String(form.secretaria_id) === String(sec.id)" class="bi bi-check-circle-fill" aria-hidden="true"></i>
+          </button>
+        </div>
+        <p v-else class="secretaria-no-results" role="status">
+          Nenhum órgão encontrado. Confira a escrita ou tente pela sigla.
+        </p>
+      </div>
     </Modal>
 
     <!-- Modal Dinâmico de Feedback do Resgate (Esgotado, Em Preenchimento, Pausado, Encerrado, Já Resgatado) -->
