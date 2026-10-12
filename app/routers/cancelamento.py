@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 from app.db.session import get_session
 from app.models.all_models import Usuario, Ingresso, Lote, SolicitacaoCancelamento, SolicitacaoValidacao, LogAcesso
 from app.core.deps import get_current_admin
-from app.core.security import extrair_ip_cliente, gerar_codigo_2fa_criptografico
+from app.core.security import extrair_ip_cliente, gerar_codigo_2fa_criptografico, formatar_data_sp
 from app.services.email_service import (
     send_cancellation_code_email_async,
     send_cancellation_result_email_async
@@ -210,7 +210,7 @@ async def consultar_meu_ingresso(
                     "qr_code_token": ingresso.qr_code_token,
                     "lote_nome": ingresso.lote.nome if ingresso.lote else "Lote Oficial",
                     "presente": presente,
-                    "data_resgate": ingresso.data_resgate.strftime("%d/%m/%Y às %H:%M") if ingresso.data_resgate else "-"
+                    "data_resgate": formatar_data_sp(ingresso.data_resgate) if ingresso.data_resgate else "-"
                 }
             }
         )
@@ -757,8 +757,8 @@ async def consultar_status_cancelamento(
             "protocolo": f"CAN-{solic.id:06d}",
             "status": solic.status,
             "motivo_rejeicao": solic.motivo_rejeicao,
-            "criado_em": solic.criado_em.strftime("%d/%m/%Y às %H:%M"),
-            "analisado_em": solic.analisado_em.strftime("%d/%m/%Y às %H:%M") if solic.analisado_em else None
+            "criado_em": formatar_data_sp(solic.criado_em),
+            "analisado_em": formatar_data_sp(solic.analisado_em)
         }
     )
 
@@ -827,8 +827,8 @@ async def listar_solicitacoes_cancelamento(
             "id": s.id,
             "protocolo": f"CAN-{s.id:06d}",
             "status": s.status,
-            "criado_em": s.criado_em.strftime("%d/%m/%Y às %H:%M") if s.criado_em else "-",
-            "analisado_em": s.analisado_em.strftime("%d/%m/%Y às %H:%M") if s.analisado_em else None,
+            "criado_em": formatar_data_sp(s.criado_em) if s.criado_em else "-",
+            "analisado_em": formatar_data_sp(s.analisado_em),
             "motivo_rejeicao": s.motivo_rejeicao,
             "analisado_por_nome": s.analisado_por.nome if s.analisado_por else None,
             "foto_ao_vivo_url": s.foto_ao_vivo_url,
@@ -849,8 +849,8 @@ async def listar_solicitacoes_cancelamento(
                 "id": ing.id if ing else None,
                 "lote_nome": lote.nome if lote else "Lote",
                 "qr_code_token": ing.qr_code_token if ing else "",
-                "data_resgate": ing.data_resgate.strftime("%d/%m/%Y às %H:%M") if ing and ing.data_resgate else "-",
-                "deleted_at": ing.deleted_at.strftime("%d/%m/%Y às %H:%M") if ing and ing.deleted_at else None
+                "data_resgate": formatar_data_sp(ing.data_resgate) if ing and ing.data_resgate else "-",
+                "deleted_at": formatar_data_sp(ing.deleted_at) if ing else None
             }
         })
 

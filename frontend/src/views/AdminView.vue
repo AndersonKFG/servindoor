@@ -425,7 +425,7 @@ function onArquivoSelecionado(e) {
       previewBackup.value = {
         nome: parsed.lote.nome,
         total_ingressos: parsed.total_ingressos || (parsed.ingressos ? parsed.ingressos.length : 0),
-        criado_em: parsed.criado_em ? new Date(parsed.criado_em).toLocaleString('pt-BR') : 'Desconhecido',
+        criado_em: parsed.criado_em ? formatarDataHoraSp(parsed.criado_em) : 'Desconhecido',
         excluido_por: parsed.excluido_por?.nome || 'Administrador'
       }
     } catch (err) {

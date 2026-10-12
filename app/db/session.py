@@ -114,7 +114,7 @@ async def init_db():
         await conn.execute(text("ALTER TABLE ingressos ADD COLUMN IF NOT EXISTS motivo_cancelamento VARCHAR;"))
         await conn.execute(text("ALTER TABLE solicitacoes_cancelamento ADD COLUMN IF NOT EXISTS motivo VARCHAR;"))
         await conn.execute(text("ALTER TABLE solicitacoes_cancelamento ADD COLUMN IF NOT EXISTS codigo_envios INTEGER NOT NULL DEFAULT 1;"))
-        await conn.execute(text("ALTER TABLE solicitacoes_cancelamento ADD COLUMN IF NOT EXISTS codigo_ultimo_envio_em TIMESTAMP;"))
+        await conn.execute(text("ALTER TABLE solicitacoes_cancelamento ADD COLUMN IF NOT EXISTS codigo_ultimo_envio_em TIMESTAMPTZ;"))
         await conn.execute(text("UPDATE solicitacoes_cancelamento SET codigo_ultimo_envio_em = criado_em WHERE codigo_ultimo_envio_em IS NULL;"))
         await conn.execute(text("ALTER TABLE solicitacoes_validacao ADD COLUMN IF NOT EXISTS token VARCHAR;"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reservas_ativas ON reservas_ingressos (lote_id, utilizada, expira_em);"))

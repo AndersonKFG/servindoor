@@ -18,7 +18,7 @@ from app.models.all_models import (
     MovimentoTipo, PremioCategoria, UserRole
 )
 from app.core.deps import get_current_admin, get_current_staff, get_current_entregador
-from app.core.security import extrair_ip_cliente
+from app.core.security import extrair_ip_cliente, formatar_data_sp
 
 router = APIRouter()
 
@@ -48,7 +48,7 @@ async def salvar_foto_premio(foto: Optional[UploadFile], prefixo: str) -> Option
     if len(foto_bytes) > PREMIO_FOTO_MAX_BYTES:
         raise HTTPException(status_code=400, detail="A foto do prêmio deve ter no máximo 5MB.")
 
-    nome_arquivo = f"{prefixo}_{int(datetime.now().timestamp())}_{secrets.token_hex(4)}{extensao}"
+    nome_arquivo = f"{prefixo}_{int(datetime.now(timezone.utc).timestamp())}_{secrets.token_hex(4)}{extensao}"
     caminho = os.path.join(PREMIOS_DIR, nome_arquivo)
     with open(caminho, "wb") as arquivo:
         arquivo.write(foto_bytes)
@@ -74,7 +74,7 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
         await session.commit()
         await session.refresh(estado_atual)
 
-    agora_ms = int(datetime.now().timestamp() * 1000)
+    agora_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     # Autotransição alinhada aos 10s da roleta
     if estado_atual.status == "sorteando" and estado_atual.timestamp_inicio > 0:
@@ -131,7 +131,7 @@ async def live_telao(session: AsyncSession = Depends(get_session)):
             "premio_nome": p.nome if p else "Prêmio",
             "premio_foto": p.foto_url if p else None,
             "categoria": "Categoria 1 (Geral)" if str(g.categoria) == "categoria_1" else "Categoria 2 (Eixo)",
-            "data_sorteio": g.data_sorteio.strftime("%d/%m/%Y às %H:%M:%S")
+            "data_sorteio": formatar_data_sp(g.data_sorteio, "%d/%m/%Y às %H:%M:%S")
         })
 
     # 4. Busca amostra ampla de servidores presentes para a roleta (sem o limite fixo de 25)
@@ -414,7 +414,7 @@ async def iniciar_sorteio_mesa(
             "foto_url": sorteado.foto_rosto_url or sorteado.foto_url
         }
 
-    now_ms = int(datetime.now().timestamp() * 1000)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     estado.status = "sorteando"
     estado.sorteando = True
     estado.timestamp_inicio = now_ms
@@ -599,7 +599,7 @@ async def executar_sorteio(
     await session.refresh(novo_ganhador)
 
     # Atualiza estado no banco para sincronização multi-worker e Telão
-    agora_ts = int(datetime.now().timestamp() * 1000)
+    agora_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     cpf_raw = vencedor.cpf or ""
     cpf_mascarado = f"{cpf_raw[:3]}.***.***-{cpf_raw[-2:]}" if len(cpf_raw) == 11 else cpf_raw
     categoria_str = premio.categoria.value if hasattr(premio.categoria, "value") else str(premio.categoria)
@@ -1029,9 +1029,9 @@ async def listar_entregas_pendentes(
             "premio_nome": p.nome if p else "Prêmio",
             "premio_foto": p.foto_url if p else None,
             "categoria": g.categoria.value if hasattr(g.categoria, "value") else str(g.categoria),
-            "data_sorteio": g.data_sorteio.strftime("%d/%m/%Y às %H:%M"),
+            "data_sorteio": formatar_data_sp(g.data_sorteio),
             "entregue": g.entregue,
-            "data_entrega": g.data_entrega.strftime("%d/%m/%Y às %H:%M") if g.data_entrega else None,
+            "data_entrega": formatar_data_sp(g.data_entrega),
             "foto_entrega_url": g.foto_entrega_url,
             "responsavel_entrega": resp.nome if resp else None
         })
@@ -1155,9 +1155,9 @@ async def consultar_meus_premios(
             "premio_descricao": p.descricao if p else "",
             "premio_foto": p.foto_url if p else None,
             "categoria": "Categoria 1 (Geral)" if str(g.categoria) == "categoria_1" else "Categoria 2 (Eixo)",
-            "data_sorteio": g.data_sorteio.strftime("%d/%m/%Y às %H:%M"),
+            "data_sorteio": formatar_data_sp(g.data_sorteio),
             "entregue": g.entregue,
-            "data_entrega": g.data_entrega.strftime("%d/%m/%Y às %H:%M") if g.data_entrega else None,
+            "data_entrega": formatar_data_sp(g.data_entrega),
             "foto_entrega_url": g.foto_entrega_url
         })
 
@@ -1393,7 +1393,7 @@ async def validar_ganhador_entrega(
                 "descricao": p.descricao if p else "",
                 "foto": p.foto_url if p else None,
                 "categoria": "Categoria 1 (Geral)" if str(ganhador_alvo.categoria) == "categoria_1" else "Categoria 2 (Eixo)",
-                "data_sorteio": ganhador_alvo.data_sorteio.strftime("%d/%m/%Y às %H:%M")
+                "data_sorteio": formatar_data_sp(ganhador_alvo.data_sorteio)
             },
             "total_premios_pendentes": len(pendentes)
         })
@@ -1403,7 +1403,7 @@ async def validar_ganhador_entrega(
     for g in sorteios:
         historico_entregas.append({
             "premio_nome": g.premio.nome if g.premio else "Prêmio",
-            "data_entrega": g.data_entrega.strftime("%d/%m/%Y às %H:%M") if g.data_entrega else "-",
+            "data_entrega": formatar_data_sp(g.data_entrega) if g.data_entrega else "-",
             "foto_entrega_url": g.foto_entrega_url,
             "responsavel": g.responsavel_entrega.nome if g.responsavel_entrega else "Equipe"
         })

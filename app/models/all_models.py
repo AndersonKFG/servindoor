@@ -105,7 +105,7 @@ class Usuario(SQLModel, table=True):
             return [{
                 "sid": self.session_id,
                 "device": self.session_device_info or "Dispositivo",
-                "ts": datetime.now().isoformat()
+                "ts": agora_utc().isoformat()
             }]
         return []
 
@@ -124,7 +124,7 @@ class Usuario(SQLModel, table=True):
         sessions.append({
             "sid": sid,
             "device": device,
-            "ts": datetime.now().isoformat()
+            "ts": agora_utc().isoformat()
         })
         self.set_active_sessions(sessions)
 

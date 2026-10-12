@@ -23,7 +23,7 @@ from app.models.all_models import (
     Lote, Usuario, Ingresso, Secretaria, ReservaIngresso, UserRole,
     SolicitacaoValidacao, RateLimitTentativa
 )
-from app.core.security import extrair_ip_cliente
+from app.core.security import extrair_ip_cliente, formatar_data_sp
 from app.core.cpf import limpar_cpf, formatar_cpf, mascarar_cpf, validar_cpf_matematico
 from app.services.email_service import send_ticket_email_async, send_validation_pending_email_async
 from app.services.validacao_servidor_service import ServidorValidationService
@@ -591,7 +591,7 @@ async def pagina_resgate(
 
     # 2. Regra Soberana de Horário
     if lote.data_abertura and agora < lote.data_abertura:
-        msg = f"O período de resgate deste lote ainda não iniciou. Abertura prevista para {lote.data_abertura.strftime('%d/%m/%Y às %H:%M')}."
+        msg = f"O período de resgate deste lote ainda não iniciou. Abertura prevista para {formatar_data_sp(lote.data_abertura)}."
         if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
             return JSONResponse(status_code=400, content={"codigo": "nao_iniciado", "detail": msg, "mensagem": msg})
         if os.path.exists(VUE_INDEX_PATH):
@@ -1160,7 +1160,7 @@ async def status_analise_solicitacao(
         "sucesso": True,
         "id": solic.id,
         "status": solic.status,
-        "criado_em": solic.criado_em.strftime("%d/%m/%Y às %H:%M") if solic.criado_em else "-",
+        "criado_em": formatar_data_sp(solic.criado_em) if solic.criado_em else "-",
         "prazo_horas": 72,
         "prazo_dias": 3,
         "identificado_api": bool(getattr(solic, "identificado_api", False)),
@@ -1263,7 +1263,7 @@ async def pagina_sucesso(
             "id": ingresso.id,
             "qr_code_token": ingresso.qr_code_token,
             "data_resgate": ingresso.data_resgate.isoformat() if ingresso.data_resgate else None,
-            "data_resgate_formatada": ingresso.data_resgate.strftime("%d/%m/%Y às %H:%M") if ingresso.data_resgate else None,
+            "data_resgate_formatada": formatar_data_sp(ingresso.data_resgate),
             "lote_nome": lote_nome_val,
             "cpf": cpf_mascarado,
             "usuario": {

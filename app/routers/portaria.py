@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.core.deps import get_current_staff, get_current_portaria
 from app.db.session import get_session
 from app.models.all_models import Usuario, Ingresso, LogAcesso, MovimentoTipo, Secretaria
-from app.core.security import extrair_ip_cliente
+from app.core.security import extrair_ip_cliente, formatar_data_sp
 from app.core.cpf import limpar_cpf
 
 router = APIRouter()
@@ -143,10 +143,10 @@ async def buscar_participante_portaria(
     if ultimo_log:
         if ultimo_log.tipo == MovimentoTipo.entrada:
             status_atual = "dentro"
-            ultimo_registro_texto = f"Última ENTRADA às {ultimo_log.data_hora.strftime('%H:%M:%S (%d/%m)')}"
+            ultimo_registro_texto = f"Última ENTRADA às {formatar_data_sp(ultimo_log.data_hora, '%H:%M:%S (%d/%m)')}"
         else:
             status_atual = "fora"
-            ultimo_registro_texto = f"Última SAÍDA às {ultimo_log.data_hora.strftime('%H:%M:%S (%d/%m)')}"
+            ultimo_registro_texto = f"Última SAÍDA às {formatar_data_sp(ultimo_log.data_hora, '%H:%M:%S (%d/%m)')}"
 
     secretaria_nome = usuario.secretaria.nome if usuario.secretaria else "Geral"
 
@@ -234,7 +234,7 @@ async def alterar_status_portaria(
         "sucesso": True,
         "status": "dentro" if tipo_movimento == MovimentoTipo.entrada else "fora",
         "mensagem": f"{'ENTRADA' if tipo_movimento == MovimentoTipo.entrada else 'SAÍDA'} registrada com sucesso!",
-        "hora_registro": agora.strftime("%H:%M:%S")
+        "hora_registro": formatar_data_sp(agora, "%H:%M:%S")
     })
 
 

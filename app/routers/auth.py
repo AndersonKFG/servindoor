@@ -391,7 +391,7 @@ async def login_action(
                 'dispositivo_anterior': f'{len(sessions)} dispositivos conectados',
                 'dispositivos_ativos': len(sessions),
                 'limite_maximo': 3,
-                'ultimo_acesso': usuario.ultimo_acesso.strftime('%d/%m/%Y às %H:%M') if usuario.ultimo_acesso else 'Recentemente'
+                'ultimo_acesso': security.formatar_data_sp(usuario.ultimo_acesso) if usuario.ultimo_acesso else 'Recentemente'
             }
         )
 

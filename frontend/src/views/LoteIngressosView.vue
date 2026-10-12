@@ -194,7 +194,7 @@ onMounted(() => {
                   <span v-if="item.motivo_rejeicao" class="d-block small text-danger mt-1">{{ item.motivo_rejeicao }}</span>
                 </td>
                 <td>
-                  <span class="small text-light">{{ new Date(item.model.data_resgate).toLocaleString('pt-BR') }}</span>
+                  <span class="small text-light">{{ formatarDataHoraSp(item.model.data_resgate) }}</span>
                 </td>
                 <td>
                   <span v-if="item.ja_entrou" class="badge-portaria bg-success">

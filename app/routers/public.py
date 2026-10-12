@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.session import get_session
 from app.models.all_models import Lote, Usuario, Ingresso, ReservaIngresso, UserRole
-from app.core.security import extrair_ip_cliente, formatar_iso_sp, para_epoch_ms_sp, TZ_SAO_PAULO
+from app.core.security import extrair_ip_cliente, formatar_iso_sp, formatar_data_sp, para_epoch_ms_sp, TZ_SAO_PAULO
 from app.core.events import lote_event_hub
 
 router = APIRouter()
@@ -562,7 +562,7 @@ async def coletar_dados_live_status(
         "data_abertura_ms": para_epoch_ms_sp(lote.data_abertura),
         "data_fechamento_iso": formatar_iso_sp(lote.data_fechamento),
         "data_fechamento_ms": para_epoch_ms_sp(lote.data_fechamento),
-        "data_fechamento_formatada": lote.data_fechamento.astimezone(TZ_SAO_PAULO).strftime("%d/%m/%Y às %H:%M") if lote.data_fechamento else None,
+        "data_fechamento_formatada": formatar_data_sp(lote.data_fechamento),
         "status_slug": status_info["status_slug"],
         "status_label": status_info["status_label"],
         "badge_class": status_info["badge_class"],

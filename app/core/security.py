@@ -108,25 +108,32 @@ def gerar_codigo_2fa_criptografico(digitos: int = 6) -> str:
 
 TZ_SAO_PAULO = ZoneInfo("America/Sao_Paulo")
 
-def formatar_iso_sp(dt: Optional[datetime]) -> Optional[str]:
-    """Formata datetime garantindo estritamente o timezone America/Sao_Paulo (-03:00)"""
+def para_datetime_sp(dt: Optional[datetime]) -> Optional[datetime]:
+    """Converte instantes para São Paulo; datas locais legadas recebem esse fuso."""
     if not dt:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TZ_SAO_PAULO)
-    else:
-        dt = dt.astimezone(TZ_SAO_PAULO)
-    return dt.isoformat()
+        return dt.replace(tzinfo=TZ_SAO_PAULO)
+    return dt.astimezone(TZ_SAO_PAULO)
+
+
+def formatar_iso_sp(dt: Optional[datetime]) -> Optional[str]:
+    """Formata datetime com o offset de America/Sao_Paulo."""
+    localizado = para_datetime_sp(dt)
+    return localizado.isoformat() if localizado else None
+
+
+def formatar_data_sp(
+    dt: Optional[datetime], formato: str = "%d/%m/%Y às %H:%M"
+) -> Optional[str]:
+    """Formata horários para pessoas sem alterar o instante persistido em UTC."""
+    localizado = para_datetime_sp(dt)
+    return localizado.strftime(formato) if localizado else None
 
 def para_epoch_ms_sp(dt: Optional[datetime]) -> Optional[int]:
     """Converte datetime para timestamp Unix epoch em milissegundos referenciado a America/Sao_Paulo"""
-    if not dt:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=TZ_SAO_PAULO)
-    else:
-        dt = dt.astimezone(TZ_SAO_PAULO)
-    return int(dt.timestamp() * 1000)
+    localizado = para_datetime_sp(dt)
+    return int(localizado.timestamp() * 1000) if localizado else None
 
 def para_epoch_ms_utc(dt: Optional[datetime]) -> Optional[int]:
     """Converte datas persistidas em UTC para epoch sem depender do fuso do servidor."""

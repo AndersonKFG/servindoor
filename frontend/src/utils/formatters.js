@@ -27,30 +27,37 @@ export function formatarTelefone(telefone) {
 export function formatarData(dataIso) {
   if (!dataIso) return '-'
   try {
-    const d = new Date(dataIso)
-    if (isNaN(d.getTime())) return dataIso
-    const dia = String(d.getDate()).padStart(2, '0')
-    const mes = String(d.getMonth() + 1).padStart(2, '0')
-    const ano = d.getFullYear()
-    const hora = String(d.getHours()).padStart(2, '0')
-    const min = String(d.getMinutes()).padStart(2, '0')
-    return `${dia}/${mes}/${ano} às ${hora}:${min}`
+    const localizado = paraDatetimeLocalSp(dataIso)
+    if (!localizado) return dataIso
+    const [data, hora] = localizado.split('T')
+    const [ano, mes, dia] = data.split('-')
+    return `${dia}/${mes}/${ano} às ${hora}`
   } catch {
     return dataIso
   }
 }
 
+function lerInstanteSp(valor) {
+  if (valor instanceof Date || typeof valor === 'number') return new Date(valor)
+  const iso = String(valor).trim().replace(' ', 'T')
+  // Textos já formatados e datas de calendário não devem ser reinterpretados.
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso)) return null
+  // Compatibilidade com metadados locais antigos que não incluíam o offset.
+  const temFuso = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso)
+  return new Date(temFuso ? iso : `${iso}-03:00`)
+}
+
 export function formatarDataHoraSp(dataIso) {
   if (!dataIso) return '-'
-  const data = new Date(dataIso)
-  if (isNaN(data.getTime())) return dataIso
+  const data = lerInstanteSp(dataIso)
+  if (!data || isNaN(data.getTime())) return dataIso
   return data.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
 }
 
 export function paraDatetimeLocalSp(dataIso) {
   if (!dataIso) return ''
-  const data = new Date(dataIso)
-  if (isNaN(data.getTime())) return ''
+  const data = lerInstanteSp(dataIso)
+  if (!data || isNaN(data.getTime())) return ''
   const partes = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
@@ -67,11 +74,11 @@ export function paraDatetimeLocalSp(dataIso) {
 export function formatarDataApenas(dataIso) {
   if (!dataIso) return '-'
   try {
-    const d = new Date(dataIso)
-    if (isNaN(d.getTime())) return dataIso
-    const dia = String(d.getDate()).padStart(2, '0')
-    const mes = String(d.getMonth() + 1).padStart(2, '0')
-    const ano = d.getFullYear()
+    const calendario = String(dataIso).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (calendario) return `${calendario[3]}/${calendario[2]}/${calendario[1]}`
+    const localizado = paraDatetimeLocalSp(dataIso)
+    if (!localizado) return dataIso
+    const [ano, mes, dia] = localizado.split('T')[0].split('-')
     return `${dia}/${mes}/${ano}`
   } catch {
     return dataIso

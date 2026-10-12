@@ -631,7 +631,7 @@ async def confirmar_exclusao_lote(
 
     snapshot_completo = {
         "versao_backup": "1.0",
-        "criado_em": datetime.now().isoformat(),
+        "criado_em": datetime.now(timezone.utc).isoformat(),
         "excluido_por": {
             "id": admin.id,
             "nome": admin.nome,
@@ -701,7 +701,7 @@ async def confirmar_exclusao_lote(
             "sucesso": True,
             "mensagem": f"Lote '{lote.nome}' excluído com sucesso. Backup completo salvo com retenção garantida de 3 dias.",
             "backup_id": backup.id,
-            "expira_em": expira_em.strftime("%d/%m/%Y às %H:%M")
+            "expira_em": security.formatar_data_sp(expira_em)
         })
 
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
@@ -731,11 +731,11 @@ async def listar_backups_lotes(
             "lote_id": b.lote_id,
             "lote_nome": b.lote_nome,
             "total_ingressos": b.total_ingressos,
-            "excluido_em": b.excluido_em.strftime("%d/%m/%Y às %H:%M"),
-            "expira_em": b.expira_em.strftime("%d/%m/%Y às %H:%M"),
+            "excluido_em": security.formatar_data_sp(b.excluido_em),
+            "expira_em": security.formatar_data_sp(b.expira_em),
             "excluido_por_nome": b.excluido_por_nome or "Administrador",
             "restaurado": b.restaurado,
-            "restaurado_em": b.restaurado_em.strftime("%d/%m/%Y às %H:%M") if b.restaurado_em else None,
+            "restaurado_em": security.formatar_data_sp(b.restaurado_em),
             "horas_restantes": horas_restantes,
             "dias_restantes": dias_restantes,
             "pode_restaurar": not b.restaurado,
@@ -882,7 +882,7 @@ async def exportar_backup_lote_json(
         raise HTTPException(status_code=404, detail="Backup não encontrado.")
 
     nome_seguro = re.sub(r'[^a-zA-Z0-9_\-]', '_', backup.lote_nome)
-    data_str = backup.excluido_em.strftime("%Y%m%d_%H%M")
+    data_str = security.formatar_data_sp(backup.excluido_em, "%Y%m%d_%H%M")
     filename = f"backup_lote_{backup.lote_id}_{nome_seguro}_{data_str}.json"
 
     return Response(
@@ -1264,7 +1264,7 @@ async def exportar_ingressos_csv(
             u.vinculo if u else "",
             u.telefone if u else "",
             u.email if u else "",
-            ing.data_resgate.strftime("%d/%m/%Y %H:%M:%S") if ing.data_resgate else "",
+            security.formatar_data_sp(ing.data_resgate, "%d/%m/%Y %H:%M:%S") if ing.data_resgate else "",
             ing.qr_code_token or "",
             ""
         ])
@@ -1299,13 +1299,13 @@ async def exportar_ingressos_csv(
                 u.vinculo if u else "",
                 u.telefone if u else "",
                 u.email if u else "",
-                s.criado_em.strftime("%d/%m/%Y %H:%M:%S") if s.criado_em else "",
+                security.formatar_data_sp(s.criado_em, "%d/%m/%Y %H:%M:%S") if s.criado_em else "",
                 "",
                 s.motivo_rejeicao or ""
             ])
 
     output.seek(0)
-    nome_arquivo = f"ingressos_lote_{lote.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    nome_arquivo = f"ingressos_lote_{lote.id}_{security.formatar_data_sp(datetime.now(timezone.utc), '%Y%m%d_%H%M%S')}.csv"
     
     return StreamingResponse(
         iter([output.getvalue().encode('utf-8-sig')]),
@@ -1364,12 +1364,12 @@ async def exportar_todos_ingressos_csv(
             u.vinculo if u else "",
             u.telefone if u else "",
             u.email if u else "",
-            ing.data_resgate.strftime("%d/%m/%Y %H:%M:%S"),
+            security.formatar_data_sp(ing.data_resgate, "%d/%m/%Y %H:%M:%S"),
             ing.qr_code_token or ""
         ])
 
     output.seek(0)
-    nome_arquivo = f"ingressos_festa_servidor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    nome_arquivo = f"ingressos_festa_servidor_{security.formatar_data_sp(datetime.now(timezone.utc), '%Y%m%d_%H%M%S')}.csv"
     
     return StreamingResponse(
         iter([output.getvalue().encode('utf-8-sig')]),
@@ -1453,7 +1453,7 @@ async def listar_participantes_admin(
                 "lote_id": ultimo_ing.lote_id,
                 "lote_nome": ultimo_ing.lote.nome if ultimo_ing.lote else f"Lote #{ultimo_ing.lote_id}",
                 "qr_code_token": ultimo_ing.qr_code_token,
-                "data_resgate": ultimo_ing.data_resgate.strftime("%d/%m/%Y %H:%M:%S"),
+                "data_resgate": security.formatar_data_sp(ultimo_ing.data_resgate, "%d/%m/%Y %H:%M:%S"),
                 "cancelado": False
             }
             total_ingressos_resgatados += 1
@@ -1464,7 +1464,7 @@ async def listar_participantes_admin(
                 "lote_id": ultimo_ing_canc.lote_id,
                 "lote_nome": ultimo_ing_canc.lote.nome if ultimo_ing_canc.lote else f"Lote #{ultimo_ing_canc.lote_id}",
                 "qr_code_token": ultimo_ing_canc.qr_code_token,
-                "data_resgate": ultimo_ing_canc.data_resgate.strftime("%d/%m/%Y %H:%M:%S"),
+                "data_resgate": security.formatar_data_sp(ultimo_ing_canc.data_resgate, "%d/%m/%Y %H:%M:%S"),
                 "cancelado": True
             }
 
@@ -1478,7 +1478,7 @@ async def listar_participantes_admin(
         if ingressos_ativos:
             ultimo_log = sorted(u.logs_acesso, key=lambda x: x.data_hora, reverse=True)[0] if u.logs_acesso else None
             tipo_str = (ultimo_log.tipo.value if hasattr(ultimo_log.tipo, "value") else str(ultimo_log.tipo)) if ultimo_log else None
-            data_fmt = ultimo_log.data_hora.strftime("%d/%m às %H:%M:%S") if ultimo_log else None
+            data_fmt = security.formatar_data_sp(ultimo_log.data_hora, "%d/%m às %H:%M:%S") if ultimo_log else None
 
             if tipo_str == "entrada":
                 total_presentes += 1
@@ -1505,7 +1505,7 @@ async def listar_participantes_admin(
         # 6: Ingresso Extraviado (Cancelado por Administrador)
         elif ingressos_cancelados and any(i.cancelado_por_id is not None for i in ingressos_cancelados):
             ing_ext = sorted([i for i in ingressos_cancelados if i.cancelado_por_id is not None], key=lambda x: x.deleted_at or x.data_resgate, reverse=True)[0]
-            data_ext = ing_ext.deleted_at.strftime("%d/%m/%Y às %H:%M:%S") if ing_ext.deleted_at else "Data não informada"
+            data_ext = security.formatar_data_sp(ing_ext.deleted_at, "%d/%m/%Y às %H:%M:%S") if ing_ext.deleted_at else "Data não informada"
             por_ext = ing_ext.cancelado_por.nome if ing_ext.cancelado_por else "Administrador"
             situacao_evento = {
                 "status_slug": "extraviado",
@@ -1526,9 +1526,9 @@ async def listar_participantes_admin(
         elif (ultima_canc and ultima_canc.status == "aprovado") or (ingressos_cancelados and any(i.cancelado_por_id is None for i in ingressos_cancelados)):
             data_canc = None
             if ultima_canc and ultima_canc.analisado_em:
-                data_canc = ultima_canc.analisado_em.strftime("%d/%m/%Y às %H:%M:%S")
+                data_canc = security.formatar_data_sp(ultima_canc.analisado_em, "%d/%m/%Y às %H:%M:%S")
             elif ingressos_cancelados and ingressos_cancelados[0].deleted_at:
-                data_canc = ingressos_cancelados[0].deleted_at.strftime("%d/%m/%Y às %H:%M:%S")
+                data_canc = security.formatar_data_sp(ingressos_cancelados[0].deleted_at, "%d/%m/%Y às %H:%M:%S")
             else:
                 data_canc = "Data não informada"
 
@@ -1550,7 +1550,7 @@ async def listar_participantes_admin(
 
         # 2: Validação Recusada (Validador informou que não é servidor)
         elif ultima_validacao and ultima_validacao.status == "rejeitado":
-            data_rec = ultima_validacao.analisado_em.strftime("%d/%m/%Y às %H:%M:%S") if ultima_validacao.analisado_em else "Data não informada"
+            data_rec = security.formatar_data_sp(ultima_validacao.analisado_em, "%d/%m/%Y às %H:%M:%S") if ultima_validacao.analisado_em else "Data não informada"
             por_rec = ultima_validacao.analisado_por.nome if ultima_validacao.analisado_por else "Comissão de Validação"
             sec_rec = ultima_validacao.secretaria.nome if ultima_validacao.secretaria else (u.secretaria.nome if u.secretaria else "Geral")
             situacao_evento = {
@@ -1571,7 +1571,7 @@ async def listar_participantes_admin(
 
         # 1: Em validação (Resgate realizado, vínculo pendente de análise)
         elif ultima_validacao and ultima_validacao.status == "pendente_analise":
-            data_val = ultima_validacao.criado_em.strftime("%d/%m/%Y às %H:%M:%S") if ultima_validacao.criado_em else "Recentemente"
+            data_val = security.formatar_data_sp(ultima_validacao.criado_em, "%d/%m/%Y às %H:%M:%S") if ultima_validacao.criado_em else "Recentemente"
             situacao_evento = {
                 "status_slug": "em_validacao",
                 "label": "Em validação",
@@ -1618,7 +1618,7 @@ async def listar_participantes_admin(
                 {
                     "id": log.id,
                     "tipo": log.tipo.value if hasattr(log.tipo, "value") else str(log.tipo),
-                    "data_hora": log.data_hora.strftime("%d/%m/%Y %H:%M:%S"),
+                    "data_hora": security.formatar_data_sp(log.data_hora, "%d/%m/%Y %H:%M:%S"),
                     "operador_nome": log.operador.nome if log.operador else ("Portaria" if log.operador_id else "Sistema")
                 }
                 for log in sorted(u.logs_acesso, key=lambda x: x.data_hora, reverse=True)[:10]
@@ -1867,7 +1867,7 @@ async def listar_usuarios_equipe_admin(
             delta_segundos = (agora - u.ultimo_acesso).total_seconds()
             if delta_segundos < 7200:  # 2 horas
                 is_logado = True
-            ultimo_acesso_fmt = u.ultimo_acesso.strftime("%d/%m/%Y às %H:%M")
+            ultimo_acesso_fmt = security.formatar_data_sp(u.ultimo_acesso)
 
         if "admin_geral" in roles_list:
             admin_geral_total += 1

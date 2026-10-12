@@ -14,6 +14,7 @@ from app.db.session import get_session
 from app.models.all_models import Usuario, Lote, Ingresso, Secretaria, SolicitacaoValidacao, UserRole
 from app.core.deps import get_current_validador
 from app.core.cpf import formatar_cpf
+from app.core.security import formatar_data_sp
 from app.services.email_service import (
     send_ticket_email_async,
     send_validation_rejection_email_async
@@ -91,12 +92,12 @@ async def listar_solicitacoes_validacao(
             "id": s.id,
             "status": s.status,
             "identificado_api": bool(getattr(s, "identificado_api", False)),
-            "criado_em": s.criado_em.strftime("%d/%m/%Y às %H:%M") if s.criado_em else "-",
-            "analisado_em": s.analisado_em.strftime("%d/%m/%Y às %H:%M") if s.analisado_em else None,
+            "criado_em": formatar_data_sp(s.criado_em) if s.criado_em else "-",
+            "analisado_em": formatar_data_sp(s.analisado_em),
             "analisado_por_nome": s.analisado_por.nome if s.analisado_por else None,
             "motivo_rejeicao": s.motivo_rejeicao,
             "comunicado": bool(getattr(s, "comunicado", False)),
-            "comunicado_em": s.comunicado_em.strftime("%d/%m/%Y às %H:%M") if getattr(s, "comunicado_em", None) else None,
+            "comunicado_em": formatar_data_sp(getattr(s, "comunicado_em", None)),
             "lote_nome": l.nome if l else "Lote Geral",
             "secretaria_nome": sec.nome if sec else "Não informada",
             "secretaria_id": sec.id if sec else None,
@@ -439,7 +440,7 @@ async def comunicar_solicitacao_validacao(
         "sucesso": True,
         "mensagem": msg,
         "comunicado": True,
-        "comunicado_em": agora.strftime("%d/%m/%Y às %H:%M")
+        "comunicado_em": formatar_data_sp(agora)
     })
 
 
