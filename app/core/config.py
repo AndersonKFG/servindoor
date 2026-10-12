@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote
 try:
     from pydantic_settings import BaseSettings, SettingsConfigDict
 except ImportError:
@@ -16,6 +17,12 @@ class Settings(BaseSettings):
     
     # Banco de Dados (Padrão para container Docker local)
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@db:5432/festa_db"
+    # Quando POSTGRES_HOST estiver definido, monta a URL com as credenciais separadas.
+    POSTGRES_HOST: str | None = None
+    POSTGRES_PORT: int = 5432
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str | None = None
+    POSTGRES_DB: str = "festa_db"
     DB_ECHO: bool = False
     DB_POOL_SIZE: int = 15
     DB_MAX_OVERFLOW: int = 5
@@ -58,6 +65,17 @@ class Settings(BaseSettings):
     VALIDACAO_EXTERNA_TOKEN: str = ""
     VALIDACAO_EXTERNA_MOCK: bool = False
     VALIDACAO_EXTERNA_MOCK_NEGATIVOS: str = "99999999999,11111111111,12345678901"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if self.POSTGRES_HOST:
+            usuario = quote(self.POSTGRES_USER, safe="")
+            senha = quote(self.POSTGRES_PASSWORD or "", safe="")
+            banco = quote(self.POSTGRES_DB, safe="")
+            self.DATABASE_URL = (
+                f"postgresql+asyncpg://{usuario}:{senha}"
+                f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{banco}"
+            )
 
     model_config = SettingsConfigDict(
         env_file=".env",
