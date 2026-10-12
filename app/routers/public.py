@@ -627,8 +627,19 @@ async def stream_lote_eventos(
     # 2. Busca eventos perdidos no buffer caso o cliente tenha recebido versão anterior no fetch inicial
     missed_events = lote_event_hub.get_events_since(eff_version)
 
-    # 3. Coleta estado atômico mais recente do banco de dados no momento exato desta conexão
-    estado_atual = await coletar_dados_live_status(session, request, lote_id=lote_id, device_id=dev_id)
+    # 3. O banco é necessário apenas para o snapshot inicial. A dependência
+    # padrão do FastAPI só fecha a sessão quando a StreamingResponse termina;
+    # mantê-la aberta aqui prende uma conexão do pool por visitante SSE.
+    try:
+        try:
+            estado_atual = await coletar_dados_live_status(session, request, lote_id=lote_id, device_id=dev_id)
+        finally:
+            await session.close()
+    except BaseException:
+        # O gerador ainda não começou: seu finally não limparia a inscrição
+        # se a consulta falhasse ou o cliente cancelasse durante o snapshot.
+        await lote_event_hub.unsubscribe(queue)
+        raise
     version_snap = estado_atual.get("state_version", lote_event_hub.state_version)
 
     async def event_generator():
