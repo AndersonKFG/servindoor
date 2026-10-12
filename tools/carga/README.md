@@ -113,6 +113,9 @@ credenciais, e não altera limites do sistema.
 | `sse_estado_p95_ms` | 95% dos snapshots chegaram em até esse tempo |
 | `verificacoes_ok` | Proporção das verificações que passaram |
 | `continuidade_reserva` | No modo reservas, deve ser 1: mesmo token e expiração após F5 |
+| `token_preservado_apos_f5` | O POST repetido retorna o mesmo token; deve ser 1 |
+| `prazo_preservado_no_sse` | O SSE entrega prazo válido e mantém a expiração após F5; deve ser 1 |
+| `desistencia_confirmada` | A desistência confirma sucesso e o SSE fica sem token e prazo; deve ser 1 |
 | `reservas_aceitas_acumuladas` | Visitas que conseguiram criar ou recuperar uma reserva; não é ocupação simultânea |
 | `sem_vaga_em_preenchimento_acumuladas` | Recusas esperadas porque as vagas estão reservadas |
 | `sem_vaga_esgotado_acumuladas` | Recusas esperadas porque os ingressos já foram resgatados |
@@ -186,6 +189,15 @@ Esta etapa altera o banco: cria reservas sintéticas, recupera-as simulando F5,
 verifica o prazo pelo SSE e desiste delas ao fim da visita. **Não cadastra pessoas,
 não envia fotos, não emite ingresso e não envia e-mails.** Esses fluxos precisam
 de um roteiro posterior com dados fictícios e destino de e-mail controlado.
+
+O token é conferido na resposta do POST de reserva. O SSE por fingerprint pode
+retornar `minha_reserva_token: null`, pois a publicação desse token exige um
+vínculo adicional no aplicativo. Isso não reprova o prazo: o teste continua
+exigindo expiração numérica, tempo restante entre zero e cinco minutos e a mesma
+expiração após F5. Se o SSE publicar um token, ele deve coincidir com o POST.
+As linhas `[diagnostico_reserva]` identificam a etapa que falhou sem registrar
+tokens ou cookies. A desistência só passa quando o prazo também desaparece;
+um token nulo sozinho não comprova a liberação.
 
 Antes, publique os ajustes do aplicativo na VPS, pois o limite temporário depende
 do código novo:

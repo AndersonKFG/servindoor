@@ -38,12 +38,16 @@ const openTime = new Trend('sse_abertura_ms', true);
 const snapshotTime = new Trend('sse_estado_ms', true);
 const reservationTime = new Trend('reserva_resposta_ms', true);
 const resumeOK = new Rate('reserva_continuidade_ok');
+const tokenF5OK = new Rate('reserva_token_f5_ok');
+const deadlineSSEOK = new Rate('reserva_prazo_sse_ok');
+const quitOK = new Rate('reserva_desistencia_ok');
 const accepted = new Counter('reservas_aceitas');
 const filling = new Counter('reservas_sem_vaga_em_preenchimento');
 const soldOut = new Counter('reservas_sem_vaga_esgotado');
 const reservationFailures = new Rate('reserva_falhas_tecnicas');
 const homeFailures = new Rate('home_falhas');
 const homeTime = new Trend('home_total_ms', true);
+let reservationDiagnostics = 0;
 
 export const options = {
   scenarios: { visitantes: { executor: 'ramping-vus', startVUs: 0, stages, gracefulRampDown: '0s', gracefulStop: '0s' } },
@@ -57,6 +61,8 @@ export const options = {
     sse_estado_ms: ['p(95)<3000'],
     ...(mode === 'reservas' ? {
       reserva_continuidade_ok: ['rate==1'], reserva_resposta_ms: ['p(95)<3000'],
+      reserva_token_f5_ok: ['rate==1'], reserva_prazo_sse_ok: ['rate==1'],
+      reserva_desistencia_ok: ['rate==1'],
       reserva_falhas_tecnicas: [{ threshold: 'rate<0.01', abortOnFail: true, delayAbortEval: '30s' }],
     } : {}),
   },
@@ -87,6 +93,15 @@ export function setup() {
   return { gateToken };
 }
 
+function diagnosticReservation(stage, details) {
+  // Limita a saída por VU; não imprime tokens, cookies ou a chave temporária.
+  if (reservationDiagnostics >= 3) return;
+  reservationDiagnostics += 1;
+  console.warn('[diagnostico_reserva] ' + JSON.stringify({
+    teste: run, utc: new Date().toISOString(), vu: exec.vu.idInTest, etapa: stage, ...details,
+  }));
+}
+
 function stream(fingerprint, gateToken, config = {}) {
   const start = Date.now();
   const until = start + 90000;
@@ -110,13 +125,36 @@ function stream(fingerprint, gateToken, config = {}) {
           snapshotTime.add(Date.now() - start);
           if (!check(state, { 'SSE entrega estado e hora do servidor': () => ready })) { failed = true; client.close(); return; }
           if (config.expectedToken) {
-            const remaining = Number(state.minha_reserva_expira_em_ms) - Number(state.server_time_ms);
-            const correct = state.minha_reserva_token === config.expectedToken && remaining > 0 && remaining <= 300000
-              && (!config.expectedExpiry || state.minha_reserva_expira_em_ms === config.expectedExpiry);
+            const expiry = state.minha_reserva_expira_em_ms;
+            const remaining = expiry - state.server_time_ms;
+            // O POST fornece o token. O SSE por fingerprint pode omiti-lo;
+            // continua obrigatório entregar o prazo válido e preservar sua data.
+            const tokenConsistent = state.minha_reserva_token == null || state.minha_reserva_token === config.expectedToken;
+            const correct = typeof expiry === 'number' && Number.isFinite(expiry)
+              && remaining > 0 && remaining <= 300000 && tokenConsistent
+              && (config.expectedExpiry === undefined || expiry === config.expectedExpiry);
+            deadlineSSEOK.add(correct);
             resumeOK.add(correct);
-            check(correct, { 'F5 preserva token e expiração da reserva': value => value });
+            if (!check(correct, { 'SSE entrega prazo válido e preserva expiração após F5': value => value })) {
+              diagnosticReservation(config.expectedExpiry === undefined ? 'sse_apos_reservar' : 'sse_apos_f5', {
+                server_time_ms: state.server_time_ms, expira_em_ms: expiry,
+                expira_em_esperada_ms: config.expectedExpiry ?? null,
+                restante_ms: remaining, token_sse_presente: state.minha_reserva_token != null,
+                token_sse_coerente: tokenConsistent,
+              });
+            }
           }
-          if (config.expectEmpty) check(state, { 'desistência remove a reserva do SSE': value => value.minha_reserva_token == null });
+          if (config.expectEmpty) {
+            const empty = state.minha_reserva_token == null && state.minha_reserva_expira_em_ms == null
+              && state.minha_reserva_segundos == null && state.minha_reserva_milissegundos == null;
+            quitOK.add(empty);
+            if (!check(empty, { 'desistência remove token e prazo da reserva do SSE': value => value })) {
+              diagnosticReservation('sse_apos_desistir', {
+                prazo_ainda_presente: state.minha_reserva_expira_em_ms != null,
+                token_sse_presente: state.minha_reserva_token != null,
+              });
+            }
+          }
           if (config.snapshotOnly) { intentional = true; client.close(); return; }
         }
         // A extensão entrega também os comentários (: ping), permitindo encerrar
@@ -180,17 +218,27 @@ export default function (data) {
   accepted.add(1);
   try {
     const before = stream(fingerprint, data.gateToken, { snapshotOnly: true, expectedToken: token });
-    if (!before) return;
+    if (!before || typeof before.minha_reserva_expira_em_ms !== 'number') return;
     sleep(2);
     const refreshed = http.post(url, null, params('reservar_f5', headers));
     let sameToken = false;
     try { sameToken = refreshed.status === 200 && refreshed.json('token_reserva') === token; } catch { /* Contabilizada abaixo. */ }
+    tokenF5OK.add(sameToken);
     resumeOK.add(sameToken);
-    check(sameToken, { 'POST do F5 não cria outra reserva': value => value });
+    if (!check(sameToken, { 'POST do F5 preserva o token da reserva': value => value })) {
+      diagnosticReservation('post_apos_f5', { status: refreshed.status, mesmo_token: sameToken });
+    }
     stream(fingerprint, data.gateToken, { expectedToken: token, expectedExpiry: before.minha_reserva_expira_em_ms });
   } finally {
     const quit = http.post(`${base}/api/resgate/desistir`, { token_reserva: token }, params('desistir', headers));
-    if (check(quit, { 'desistência responde HTTP 200': value => value.status === 200 })) stream(fingerprint, data.gateToken, { snapshotOnly: true, expectEmpty: true });
+    let released = false;
+    try { released = quit.status === 200 && quit.json('sucesso') === true; } catch { /* Contabilizada abaixo. */ }
+    quitOK.add(released);
+    if (check(released, { 'desistência responde HTTP 200 e confirma sucesso': value => value })) {
+      stream(fingerprint, data.gateToken, { snapshotOnly: true, expectEmpty: true });
+    } else {
+      diagnosticReservation('post_desistir', { status: quit.status, sucesso: released });
+    }
   }
   sleep(1 + Math.random() * 3);
 }
@@ -207,6 +255,9 @@ export function handleSummary(data) {
     falhas_sse: value('sse_falhas', 'rate'), sse_estado_p95_ms: value('sse_estado_ms', 'p(95)'),
     falhas_home: value('home_falhas', 'rate'), home_total_p95_ms: value('home_total_ms', 'p(95)'),
     continuidade_reserva: value('reserva_continuidade_ok', 'rate'), reserva_p95_ms: value('reserva_resposta_ms', 'p(95)'),
+    token_preservado_apos_f5: value('reserva_token_f5_ok', 'rate'),
+    prazo_preservado_no_sse: value('reserva_prazo_sse_ok', 'rate'),
+    desistencia_confirmada: value('reserva_desistencia_ok', 'rate'),
     reservas_aceitas_acumuladas: value('reservas_aceitas', 'count'),
     sem_vaga_em_preenchimento_acumuladas: value('reservas_sem_vaga_em_preenchimento', 'count'),
     sem_vaga_esgotado_acumuladas: value('reservas_sem_vaga_esgotado', 'count'),
