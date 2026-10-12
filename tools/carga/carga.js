@@ -10,17 +10,24 @@ const maximum = Number(__ENV.MAX_VISITORS || 10);
 const lot = Number(__ENV.TEST_LOTE_ID || 0);
 const run = __ENV.TEST_RUN_ID || '';
 const forceHTTP1 = (__ENV.GODEBUG || '').split(',').includes('http2client=0');
+const profile = __ENV.LOAD_PROFILE || 'normal';
 if (!/^https?:\/\/[^/?#]+$/.test(base) || base.includes('@')) throw new Error('Informe uma URL sem caminho, query ou credenciais.');
 if (!['home', 'reservas'].includes(mode)) throw new Error('Modo inválido.');
 if (![10, 100, 500, 1000, 2000, 3000, 4000].includes(maximum)) throw new Error('Limite inválido.');
 if (mode === 'reservas' && maximum > 2000) throw new Error('O teste de reservas aceita até 2000 visitantes.');
+if (!['normal', 'diagnostico'].includes(profile)) throw new Error('Perfil inválido.');
+if (profile === 'diagnostico' && (mode !== 'home' || maximum > 1000)) throw new Error('O diagnóstico curto permite somente home, até 1000 visitantes.');
 if (!/^[a-zA-Z0-9_-]{1,50}$/.test(run)) throw new Error('Identificação do teste inválida.');
 if (mode === 'reservas' && (!Number.isInteger(lot) || lot < 1 || !__ENV.LOAD_TEST_SECRET)) throw new Error('Reservas exigem lote de teste e chave temporária.');
 
 const stages = [];
-for (const target of [10, 100, 500, 1000, 2000, 3000, 4000].filter(n => n <= maximum)) {
-  stages.push({ duration: target <= 100 ? '30s' : '60s', target });
-  stages.push({ duration: '2m', target });
+if (profile === 'diagnostico') {
+  stages.push({ duration: '60s', target: maximum }, { duration: '2m', target: maximum });
+} else {
+  for (const target of [10, 100, 500, 1000, 2000, 3000, 4000].filter(n => n <= maximum)) {
+    stages.push({ duration: target <= 100 ? '30s' : '60s', target });
+    stages.push({ duration: '2m', target });
+  }
 }
 stages.push({ duration: '30s', target: 0 });
 
@@ -76,7 +83,7 @@ export function setup() {
   if (!preflight || (mode === 'reservas' && Number(preflight.id) !== lot)) throw new Error('O SSE não entregou o estado esperado. Confira o lote/Cloudflare antes da carga.');
   if (mode === 'reservas' && !preflight.pode_resgatar) throw new Error('O lote de teste não está aberto para resgates.');
   if (mode === 'reservas') { accepted.add(0); filling.add(0); soldOut.add(0); }
-  console.log(`Teste ${run}: ${mode}, até ${maximum} visitantes, HTTP ${forceHTTP1 ? '1.1 forçado' : 'automático'}. Ctrl+C interrompe.`);
+  console.log(`Teste ${run}: ${mode}, perfil ${profile}, até ${maximum} visitantes, HTTP ${forceHTTP1 ? '1.1 forçado' : 'automático'}. Ctrl+C interrompe.`);
   return { gateToken };
 }
 
@@ -192,6 +199,7 @@ export function handleSummary(data) {
   const value = (name, key) => data.metrics[name]?.values?.[key] ?? null;
   const report = {
     teste: run, modo: mode, limite_planejado: maximum,
+    perfil: profile,
     http1_forcado: forceHTTP1,
     vus_max_observado: value('vus', 'max'),
     conexoes_abertas_acumuladas: value('sse_conexoes_abertas', 'count'),

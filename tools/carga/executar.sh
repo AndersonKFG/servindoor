@@ -2,6 +2,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 command -v docker >/dev/null || { echo 'É necessário ter Docker disponível neste Ubuntu/WSL.'; exit 1; }
+command -v python3 >/dev/null || { echo 'É necessário ter Python 3 disponível para acompanhar o gerador.'; exit 1; }
 echo 'Execute no Ubuntu/WSL do seu computador, separado da VPS.'
 echo 'Este teste gera tráfego real. Ctrl+C interrompe.'
 case "${LOAD_HTTP1:-0}" in
@@ -9,6 +10,11 @@ case "${LOAD_HTTP1:-0}" in
   1) export GODEBUG='http2client=0'; echo 'Diagnóstico: HTTP/1.1 forçado no gerador; os critérios de falha permanecem iguais.' ;;
   *) echo 'LOAD_HTTP1 deve ser 0 ou 1.'; exit 1 ;;
 esac
+export LOAD_PROFILE="${LOAD_PROFILE:-normal}"
+[[ "$LOAD_PROFILE" == normal || "$LOAD_PROFILE" == diagnostico ]] || { echo 'LOAD_PROFILE inválido.'; exit 1; }
+if [[ "$LOAD_PROFILE" == diagnostico ]]; then
+  echo 'Diagnóstico curto: somente home, até 1000 VUs; rampa de 1 min + patamar de 2 min + saída de 30s.'
+fi
 read -r -p 'Endereço [https://www.servindoor.com.br]: ' TARGET_URL
 export TARGET_URL="${TARGET_URL:-https://www.servindoor.com.br}"
 read -r -p 'Modo: home ou reservas [home]: ' TEST_MODE
@@ -23,6 +29,10 @@ export MAX_VISITORS="${MAX_VISITORS:-10}"
 case "$MAX_VISITORS" in 10|100|500|1000|2000|3000|4000) ;; *) echo 'Limite inválido.'; exit 1 ;; esac
 if [[ "$TEST_MODE" == reservas && "$MAX_VISITORS" -gt 2000 ]]; then
   echo 'O teste de reservas aceita até 2000 visitantes.'
+  exit 1
+fi
+if [[ "$LOAD_PROFILE" == diagnostico && ( "$TEST_MODE" != home || "$MAX_VISITORS" -gt 1000 ) ]]; then
+  echo 'O diagnóstico curto permite somente home, até 1000 visitantes.'
   exit 1
 fi
 export TEST_RUN_ID="$(date -u +%Y%m%dT%H%M%S)_${RANDOM}"
@@ -52,10 +62,14 @@ if [[ ! -f .runtime/k6-1.3.0-sse-0.1.11 ]]; then
     -v "$(pwd)/.runtime:/runtime" grafana/xk6:latest \
     build v1.3.0 --with github.com/phymbert/xk6-sse@v0.1.11 --output /runtime/k6-1.3.0-sse-0.1.11
 fi
-docker run --rm --init --network host --ulimit nofile=16384:16384 \
+container_name="servindoor-carga-$TEST_RUN_ID"
+python3 monitorar_gerador.py "$container_name" "$output_dir/gerador.jsonl" &
+monitor_pid=$!
+trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
+docker run --rm --init --name "$container_name" --network host --ulimit nofile=16384:16384 \
   --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -e K6_AUTO_EXTENSION_RESOLUTION=false -e GODEBUG \
-  -e TARGET_URL -e TEST_MODE -e MAX_VISITORS -e TEST_RUN_ID -e SITE_PIN \
+  -e TARGET_URL -e TEST_MODE -e MAX_VISITORS -e TEST_RUN_ID -e SITE_PIN -e LOAD_PROFILE \
   -e TEST_LOTE_ID -e LOAD_TEST_SECRET \
   --entrypoint /runtime/k6-1.3.0-sse-0.1.11 -v "$(pwd)/.runtime:/runtime:ro" \
   -v "$(pwd)/carga.js:/scripts/carga.js:ro" -v "$output_dir:/resultados" \

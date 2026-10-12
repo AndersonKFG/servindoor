@@ -27,6 +27,7 @@ Responda às perguntas:
 O Docker prepara o k6 1.3.0 com a extensão comunitária SSE 0.1.11 na primeira
 execução (pode levar alguns minutos) e reutiliza esse binário depois. É necessário
 ter Docker funcionando no WSL, como já acontece com o ambiente de desenvolvimento.
+O acompanhamento do gerador usa também o Python 3 disponível no Ubuntu.
 Não há instalação de ferramenta na VPS para executar o gerador.
 
 O primeiro teste dura aproximadamente 3 minutos, além do download e da preparação.
@@ -86,11 +87,19 @@ tools/carga/resultados/IDENTIFICACAO_DO_TESTE/
   resumo.json
   metricas.json
   execucao.log
+  gerador.jsonl
 ```
 
 Envie o `resumo.json` para análise. `metricas.json` contém a evolução das métricas
 por tempo e pode crescer bastante. Esses arquivos são ignorados pelo Git.
 `execucao.log` guarda a saída do gerador, incluindo os diagnósticos de falhas.
+`gerador.jsonl` acompanha CPU/memória/PIDs pelo Docker, memória e swap do WSL,
+arquivos abertos do k6 quando acessíveis e contagens de sockets web por estado.
+São amostras durante o teste; a memória do WSL inclui outros processos locais.
+Os sockets são lidos no namespace de rede do gerador, compartilhado com o host
+do Docker por `--network host`, e também podem incluir outros processos.
+O monitor não lê ambiente, argumentos, payloads ou
+credenciais, e não altera limites do sistema.
 
 | Informação | Como interpretar |
 | --- | --- |
@@ -152,6 +161,24 @@ influencia a falha; isso não identifica sozinho o responsável nem comprova a
 capacidade com HTTP/2. Se falhar igual, investigue DNS, abertura de conexões,
 recursos/rede do gerador e o caminho até a VPS. Para voltar à negociação normal,
 execute o comando habitual sem `LOAD_HTTP1=1`.
+
+### Diagnóstico curto do gerador
+
+Para investigar a falha antes de repetir toda a escada de patamares:
+
+```bash
+LOAD_PROFILE=diagnostico bash tools/carga/executar.sh
+```
+
+Escolha `home` e máximo `1000`. Esse perfil chega ao máximo em 1 minuto, mantém
+por 2 minutos e sai em 30 segundos (aproximadamente 3min30s, além do setup).
+Preserva os critérios de interrupção, os timeouts e as visitas SSE. Compare
+execuções desse mesmo perfil ao alterar um fator por vez. A chegada é mais
+rápida que no perfil normal, portanto seus resultados não são diretamente
+equivalentes aos testes anteriores nem substituem a validação completa até
+4.000. O perfil curto só aceita home e até 1.000 VUs. Sem a variável, o roteiro
+continua usando a escada normal. Envie `gerador.jsonl` e `execucao.log` junto do
+resumo para investigar falhas de conexão.
 
 ## 5. Segunda etapa: reservas e F5
 
