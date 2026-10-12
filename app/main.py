@@ -26,8 +26,8 @@ def validar_configuracao_producao() -> None:
     problemas = []
     if len(settings.SECRET_KEY) < 32 or settings.SECRET_KEY == "festa-servidor-super-secret-key-ultra-fast-2026":
         problemas.append("SECRET_KEY precisa ser exclusiva e ter pelo menos 32 caracteres")
-    if len(settings.SITE_ACCESS_PIN.strip()) < 12 or settings.SITE_ACCESS_PIN.strip() == "123456":
-        problemas.append("SITE_ACCESS_PIN precisa ser exclusivo e ter pelo menos 12 caracteres")
+    if len(settings.SITE_ACCESS_PIN.strip()) != 6 or settings.SITE_ACCESS_PIN.strip() == "123456":
+        problemas.append("SITE_ACCESS_PIN precisa ser exclusivo e ter exatamente 6 caracteres")
 
     banco = urlsplit(settings.DATABASE_URL)
     senha_banco = unquote(banco.password or "")
