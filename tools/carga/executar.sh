@@ -54,4 +54,5 @@ docker run --rm --init --network host --ulimit nofile=16384:16384 \
   -e TEST_LOTE_ID -e LOAD_TEST_SECRET \
   --entrypoint /runtime/k6-1.3.0-sse-0.1.11 -v "$(pwd)/.runtime:/runtime:ro" \
   -v "$(pwd)/carga.js:/scripts/carga.js:ro" -v "$output_dir:/resultados" \
-  grafana/k6:latest run --out json=/resultados/metricas.json /scripts/carga.js
+  grafana/k6:latest run --out json=/resultados/metricas.json /scripts/carga.js \
+  2>&1 | tee "$output_dir/execucao.log"

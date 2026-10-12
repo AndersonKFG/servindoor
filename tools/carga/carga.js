@@ -34,11 +34,13 @@ const accepted = new Counter('reservas_aceitas');
 const filling = new Counter('reservas_sem_vaga_em_preenchimento');
 const soldOut = new Counter('reservas_sem_vaga_esgotado');
 const reservationFailures = new Rate('reserva_falhas_tecnicas');
+const homeFailures = new Rate('home_falhas');
+const homeTime = new Trend('home_total_ms', true);
 
 export const options = {
   scenarios: { visitantes: { executor: 'ramping-vus', startVUs: 0, stages, gracefulRampDown: '0s', gracefulStop: '0s' } },
   // Evita milhares de séries de métricas com fingerprints/URLs/tokens únicos.
-  systemTags: ['name', 'method', 'status', 'scenario', 'expected_response'],
+  systemTags: ['name', 'method', 'status', 'scenario', 'expected_response', 'error_code', 'proto', 'check'],
   userAgent: 'Servindoor-LoadTest/1.0',
   setupTimeout: '40s',
   thresholds: {
@@ -126,7 +128,23 @@ export default function (data) {
     'X-Device-ID': fingerprint, 'X-Load-Test-Key': __ENV.LOAD_TEST_SECRET || '', Accept: 'application/json',
   };
   if (__ITER === 0) {
+    const started = Date.now();
     const page = http.get(`${base}/`, params('home', { 'X-Gatekeeper-Token': data.gateToken }));
+    const elapsed = Date.now() - started;
+    homeFailures.add(page.status !== 200);
+    homeTime.add(elapsed);
+    if (page.status !== 200 || exec.vu.idInTest === 1) {
+      // Somente campos de diagnóstico da GET /. Não registra cabeçalhos de
+      // autenticação, cookies, corpos de resposta, PIN ou chave temporária.
+      console.warn('[diagnostico_home] ' + JSON.stringify({
+        teste: run, utc: new Date().toISOString(), vu: exec.vu.idInTest,
+        status: page.status, error_code: page.error_code || 0,
+        error: String(page.error || '').slice(0, 300),
+        remote_ip: page.remote_ip || null, proto: page.proto || null,
+        cf_ray: page.headers?.['Cf-Ray'] || null,
+        total_ms: elapsed, timings: page.timings,
+      }));
+    }
     if (!check(page, { 'home responde HTTP 200': value => value.status === 200 })) { sleep(5); return; }
   }
   if (mode === 'home') { stream(fingerprint, data.gateToken); sleep(1 + Math.random() * 2); return; }
@@ -177,6 +195,7 @@ export function handleSummary(data) {
     conexoes_abertas_acumuladas: value('sse_conexoes_abertas', 'count'),
     estados_recebidos_acumulados: value('sse_estados_recebidos', 'count'),
     falhas_sse: value('sse_falhas', 'rate'), sse_estado_p95_ms: value('sse_estado_ms', 'p(95)'),
+    falhas_home: value('home_falhas', 'rate'), home_total_p95_ms: value('home_total_ms', 'p(95)'),
     continuidade_reserva: value('reserva_continuidade_ok', 'rate'), reserva_p95_ms: value('reserva_resposta_ms', 'p(95)'),
     reservas_aceitas_acumuladas: value('reservas_aceitas', 'count'),
     sem_vaga_em_preenchimento_acumuladas: value('reservas_sem_vaga_em_preenchimento', 'count'),

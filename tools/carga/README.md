@@ -85,10 +85,12 @@ No computador gerador:
 tools/carga/resultados/IDENTIFICACAO_DO_TESTE/
   resumo.json
   metricas.json
+  execucao.log
 ```
 
 Envie o `resumo.json` para análise. `metricas.json` contém a evolução das métricas
 por tempo e pode crescer bastante. Esses arquivos são ignorados pelo Git.
+`execucao.log` guarda a saída do gerador, incluindo os diagnósticos de falhas.
 
 | Informação | Como interpretar |
 | --- | --- |
@@ -97,6 +99,8 @@ por tempo e pode crescer bastante. Esses arquivos são ignorados pelo Git.
 | `conexoes_abertas_acumuladas` | Total de aberturas, incluindo reconexões; não é simultaneidade |
 | `estados_recebidos_acumulados` | Total de snapshots SSE recebidos |
 | `falhas_sse` | Proporção de visitas SSE malsucedidas; idealmente zero |
+| `falhas_home` | Proporção das GETs iniciais à `/` que não responderam HTTP 200 |
+| `home_total_p95_ms` | Tempo total p95 da GET inicial, incluindo abertura de conexão |
 | `sse_estado_p95_ms` | 95% dos snapshots chegaram em até esse tempo |
 | `verificacoes_ok` | Proporção das verificações que passaram |
 | `continuidade_reserva` | No modo reservas, deve ser 1: mesmo token e expiração após F5 |
@@ -111,6 +115,20 @@ avaliação inicial, não uma capacidade previamente comprovada.
 O tempo HTTP de um SSE inclui a duração de toda a conexão: **90 segundos em
 `http_req_duration` do stream não significam que o site levou 90 segundos para
 responder**. Use `sse_estado_ms` e `sse_abertura_ms` para avaliar a abertura.
+
+### Se o teste parar com timeout
+
+As linhas `[diagnostico_home]` de `execucao.log` mostram o horário UTC, o código
+de erro do k6, o IP remoto quando disponível, o protocolo, o identificador
+Cloudflare quando recebido e os tempos da requisição. A primeira visita do VU 1
+também gera uma linha para referência, mesmo se responder HTTP 200. Não são
+registrados cabeçalhos de autenticação, cookies, corpos de resposta, PIN ou chave.
+
+Status `0` significa que não houve uma resposta HTTP utilizável; não é um erro
+HTTP 500 da aplicação. Tempos zerados de uma tentativa interrompida não provam
+sozinhos em qual etapa ela travou. Compare o código/mensagem do erro e o horário
+com os logs do servidor. Este diagnóstico mantém os timeouts e critérios de
+interrupção do roteiro.
 
 ## 5. Segunda etapa: reservas e F5
 
