@@ -130,6 +130,29 @@ sozinhos em qual etapa ela travou. Compare o código/mensagem do erro e o horár
 com os logs do servidor. Este diagnóstico mantém os timeouts e critérios de
 interrupção do roteiro.
 
+### Comparar HTTP/2 com HTTP/1.1
+
+Os acessos normais negociam o protocolo automaticamente. A extensão SSE 0.1.11
+usa HTTP/1.1. Se os timeouts afetarem as GETs iniciais e os SSE permanecerem
+rápidos, uma comparação possível é repetir a mesma carga forçando HTTP/1.1 no
+gerador:
+
+```bash
+LOAD_HTTP1=1 bash tools/carga/executar.sh
+```
+
+Mantenha endereço, modo e máximo iguais aos da execução anterior. Esta opção
+configura `GODEBUG=http2client=0` somente no processo do k6; o aplicativo, o Nginx
+e a Cloudflare continuam com a mesma configuração. Timeouts, etapas e limites
+de falha também permanecem iguais. O resumo identifica `http1_forcado: true` e
+a linha de referência `[diagnostico_home]` deve mostrar `proto: "HTTP/1.1"`.
+
+Se melhorar, há evidência de que o protocolo ou seu tratamento no caminho
+influencia a falha; isso não identifica sozinho o responsável nem comprova a
+capacidade com HTTP/2. Se falhar igual, investigue DNS, abertura de conexões,
+recursos/rede do gerador e o caminho até a VPS. Para voltar à negociação normal,
+execute o comando habitual sem `LOAD_HTTP1=1`.
+
 ## 5. Segunda etapa: reservas e F5
 
 Esta etapa altera o banco: cria reservas sintéticas, recupera-as simulando F5,

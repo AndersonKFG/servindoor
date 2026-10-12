@@ -9,6 +9,7 @@ const mode = __ENV.TEST_MODE || 'home';
 const maximum = Number(__ENV.MAX_VISITORS || 10);
 const lot = Number(__ENV.TEST_LOTE_ID || 0);
 const run = __ENV.TEST_RUN_ID || '';
+const forceHTTP1 = (__ENV.GODEBUG || '').split(',').includes('http2client=0');
 if (!/^https?:\/\/[^/?#]+$/.test(base) || base.includes('@')) throw new Error('Informe uma URL sem caminho, query ou credenciais.');
 if (!['home', 'reservas'].includes(mode)) throw new Error('Modo inválido.');
 if (![10, 100, 500, 1000, 2000, 3000, 4000].includes(maximum)) throw new Error('Limite inválido.');
@@ -75,7 +76,7 @@ export function setup() {
   if (!preflight || (mode === 'reservas' && Number(preflight.id) !== lot)) throw new Error('O SSE não entregou o estado esperado. Confira o lote/Cloudflare antes da carga.');
   if (mode === 'reservas' && !preflight.pode_resgatar) throw new Error('O lote de teste não está aberto para resgates.');
   if (mode === 'reservas') { accepted.add(0); filling.add(0); soldOut.add(0); }
-  console.log(`Teste ${run}: ${mode}, até ${maximum} visitantes. Ctrl+C interrompe.`);
+  console.log(`Teste ${run}: ${mode}, até ${maximum} visitantes, HTTP ${forceHTTP1 ? '1.1 forçado' : 'automático'}. Ctrl+C interrompe.`);
   return { gateToken };
 }
 
@@ -191,6 +192,7 @@ export function handleSummary(data) {
   const value = (name, key) => data.metrics[name]?.values?.[key] ?? null;
   const report = {
     teste: run, modo: mode, limite_planejado: maximum,
+    http1_forcado: forceHTTP1,
     vus_max_observado: value('vus', 'max'),
     conexoes_abertas_acumuladas: value('sse_conexoes_abertas', 'count'),
     estados_recebidos_acumulados: value('sse_estados_recebidos', 'count'),

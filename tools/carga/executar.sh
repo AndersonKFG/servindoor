@@ -4,6 +4,11 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 command -v docker >/dev/null || { echo 'É necessário ter Docker disponível neste Ubuntu/WSL.'; exit 1; }
 echo 'Execute no Ubuntu/WSL do seu computador, separado da VPS.'
 echo 'Este teste gera tráfego real. Ctrl+C interrompe.'
+case "${LOAD_HTTP1:-0}" in
+  0) export GODEBUG=''; echo 'HTTP: negociação automática (padrão).' ;;
+  1) export GODEBUG='http2client=0'; echo 'Diagnóstico: HTTP/1.1 forçado no gerador; os critérios de falha permanecem iguais.' ;;
+  *) echo 'LOAD_HTTP1 deve ser 0 ou 1.'; exit 1 ;;
+esac
 read -r -p 'Endereço [https://www.servindoor.com.br]: ' TARGET_URL
 export TARGET_URL="${TARGET_URL:-https://www.servindoor.com.br}"
 read -r -p 'Modo: home ou reservas [home]: ' TEST_MODE
@@ -49,7 +54,7 @@ if [[ ! -f .runtime/k6-1.3.0-sse-0.1.11 ]]; then
 fi
 docker run --rm --init --network host --ulimit nofile=16384:16384 \
   --user "$(id -u):$(id -g)" -e HOME=/tmp \
-  -e K6_AUTO_EXTENSION_RESOLUTION=false \
+  -e K6_AUTO_EXTENSION_RESOLUTION=false -e GODEBUG \
   -e TARGET_URL -e TEST_MODE -e MAX_VISITORS -e TEST_RUN_ID -e SITE_PIN \
   -e TEST_LOTE_ID -e LOAD_TEST_SECRET \
   --entrypoint /runtime/k6-1.3.0-sse-0.1.11 -v "$(pwd)/.runtime:/runtime:ro" \
