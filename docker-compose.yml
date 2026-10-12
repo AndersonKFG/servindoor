@@ -38,6 +38,12 @@ services:
       dockerfile: Dockerfile
     container_name: festa_web
     restart: unless-stopped
+    # Conexões SSE usam descritores durante toda a visita. Define também o
+    # limite efetivo para não herdar os 1024 arquivos por processo do host.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     command: ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-w", "4", "-b", "0.0.0.0:8000", "--access-logfile", "-", "app.main:app"]
     depends_on:
       db:
