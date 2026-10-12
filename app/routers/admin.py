@@ -121,6 +121,7 @@ def dados_status_lote_sse(lote: Lote) -> dict:
     }
 
 async def obter_dados_dashboard(session: AsyncSession):
+    agora = datetime.now(timezone.utc)
     stmt_lotes = (
         select(Lote)
         .where(Lote.deleted_at.is_(None))
@@ -138,6 +139,21 @@ async def obter_dados_dashboard(session: AsyncSession):
     # mantém o KPI geral coerente com as barras exibidas na tabela, sem contar
     # ingressos órfãos ou registros divergentes do lote.
     total_resgatados = sum(max(0, lote.quantidade_resgatada or 0) for lote in lotes_raw)
+
+    # Usa o relógio do servidor: reservas vencidas deixam de contar mesmo antes
+    # de a rotina de expiração atualizar seu status no banco.
+    stmt_em_resgate = (
+        select(func.count(ReservaIngresso.id))
+        .join(Lote, Lote.id == ReservaIngresso.lote_id)
+        .where(
+            Lote.deleted_at.is_(None),
+            ReservaIngresso.status == "ativa",
+            ReservaIngresso.utilizada == False,
+            ReservaIngresso.criada_em <= agora,
+            ReservaIngresso.expira_em > agora,
+        )
+    )
+    total_em_resgate = (await session.execute(stmt_em_resgate)).scalar() or 0
 
     stmt_checkins = select(func.count(LogAcesso.id)).where(LogAcesso.tipo == MovimentoTipo.entrada)
     res_checkins = await session.execute(stmt_checkins)
@@ -179,6 +195,7 @@ async def obter_dados_dashboard(session: AsyncSession):
     metricas = {
         "total_vagas": total_vagas,
         "total_resgatados": total_resgatados,
+        "total_em_resgate": total_em_resgate,
         "total_checkins": total_checkins,
         "total_lotes": len(lotes_raw),
         "lotes_abertos": lotes_abertos_count,

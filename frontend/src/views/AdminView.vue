@@ -17,6 +17,7 @@ let adminRefreshTimer = null
 const metricas = ref({
   total_vagas: 0,
   total_resgatados: 0,
+  total_em_resgate: 0,
   total_checkins: 0,
   lotes_abertos: 0,
   taxa_ocupacao: 0
@@ -481,13 +482,15 @@ function conectarAtualizacoesLote() {
 
   adminEventSource = new EventSource('/api/lote/stream')
   const atualizarPainel = () => {
-    if (adminRefreshTimer) clearTimeout(adminRefreshTimer)
+    // Eventos contínuos de reservas não podem adiar a atualização indefinidamente.
+    if (adminRefreshTimer) return
     adminRefreshTimer = setTimeout(() => {
       adminRefreshTimer = null
       carregarDadosAdmin(true)
-    }, 150)
+    }, 1000)
   }
 
+  adminEventSource.addEventListener('ESTADO_CONSOLIDADO', atualizarPainel)
   adminEventSource.addEventListener('LOTE_ATUALIZADO', atualizarPainel)
   adminEventSource.addEventListener('RESERVA_ATUALIZADA', atualizarPainel)
 }
@@ -539,6 +542,14 @@ onUnmounted(() => {
           :value="metricas.total_resgatados"
           icon="bi bi-people-fill"
           variant="emerald"
+        />
+
+        <KpiCard
+          title="Em Resgate"
+          :value="metricas.total_em_resgate ?? 0"
+          subtitle="Reservas ativas dentro do prazo"
+          icon="bi bi-hourglass-split"
+          variant="blue"
         />
 
         <KpiCard
