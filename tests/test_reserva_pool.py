@@ -8,7 +8,9 @@ import json
 import time
 import unittest
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import event, text
@@ -142,7 +144,10 @@ class TestReservaPool(unittest.IsolatedAsyncioTestCase):
         event.listen(self.pool.sync_engine, "before_cursor_execute", observar)
         try:
             with patch.object(resgate, "verificar_e_registrar_rate_limit_db", registrar), \
-                 patch.object(resgate.lote_event_hub, "broadcast", publicar):
+                 patch.object(resgate.lote_event_hub, "broadcast", publicar), \
+                 patch.object(resgate, "_filas_criacao_reserva", SimpleNamespace(get=lambda _: asyncio.Lock())):
+                # Filas independentes reproduzem chamadas de processos distintos;
+                # a coordenação entre eles continua dependendo do PostgreSQL.
                 primeira = asyncio.create_task(self.reservar("pool_primeira"))
                 await asyncio.wait_for(chegou_limitador.wait(), timeout=2)
                 respostas = await asyncio.wait_for(asyncio.gather(
@@ -154,6 +159,112 @@ class TestReservaPool(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(tentativas), 2)
         finally:
             event.remove(self.pool.sync_engine, "before_cursor_execute", observar)
+
+    async def test_quarenta_aguardando_fila_devolvem_conexoes_para_leituras(self):
+        entraram_na_fila = 0
+        todas_aguardando = asyncio.Event()
+
+        class FilaObservada(asyncio.Lock):
+            async def acquire(self):
+                nonlocal entraram_na_fila
+                if self.locked():
+                    entraram_na_fila += 1
+                    if entraram_na_fila == 40:
+                        todas_aguardando.set()
+                return await super().acquire()
+
+        fila = FilaObservada()
+        await fila.acquire()
+
+        async def publicar(tipo, dados):
+            async with self.pool.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+
+        with patch.object(resgate, "_filas_criacao_reserva", {1: fila}), \
+             patch.object(resgate.lote_event_hub, "broadcast", publicar):
+            tarefas = [asyncio.create_task(self.reservar(f"fila_{i}")) for i in range(40)]
+            try:
+                await asyncio.wait_for(todas_aguardando.wait(), timeout=5)
+                self.assertEqual(self.pool.pool.checkedout(), 0)
+                # As duas conexões continuam acessíveis enquanto as 40 criações
+                # aguardam, inclusive para consultar o prazo usado pelo SSE.
+                async with self.pool.connect() as leitura, self.sessions() as session:
+                    await leitura.execute(text("SELECT 1"))
+                    prazo = await asyncio.wait_for(_obter_prazo_reserva_sse(
+                        session, self.request(), 1, "fila_0", datetime.now(timezone.utc)
+                    ), timeout=1)
+                    self.assertIsNone(prazo["minha_reserva_expira_em_ms"])
+                fila.release()
+                respostas = await asyncio.wait_for(asyncio.gather(*tarefas), timeout=10)
+                self.assertEqual(sum(r.status_code == 200 for r in respostas), 10)
+            finally:
+                for tarefa in tarefas:
+                    if not tarefa.done():
+                        tarefa.cancel()
+                await asyncio.gather(*tarefas, return_exceptions=True)
+                if fila.locked():
+                    fila.release()
+
+    async def test_excecao_e_cancelamento_liberam_fila_e_conexao(self):
+        fila = asyncio.Lock()
+        with patch.object(resgate, "_filas_criacao_reserva", {1: fila}):
+            async with self.sessions() as session:
+                with self.assertRaisesRegex(RuntimeError, "falha controlada"):
+                    async with resgate._transacao_capacidade_reserva(session, self.request(), 1, criar=True):
+                        await session.execute(select(Lote).where(Lote.id == 1).with_for_update())
+                        raise RuntimeError("falha controlada")
+            self.assertFalse(fila.locked())
+            self.assertEqual(self.pool.pool.checkedout(), 0)
+            async with self.pool.connect() as conn:
+                await conn.execute(text("SELECT id FROM lotes WHERE id=1 FOR UPDATE NOWAIT"))
+
+            await fila.acquire()
+            iniciou_espera = asyncio.Event()
+            original = fila.acquire
+
+            async def aguardar():
+                iniciou_espera.set()
+                return await original()
+
+            with patch.object(fila, "acquire", aguardar):
+                tarefa = asyncio.create_task(self.reservar("fila_cancelada"))
+                await asyncio.wait_for(iniciou_espera.wait(), timeout=2)
+                tarefa.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await tarefa
+            self.assertTrue(fila.locked())  # Continua pertencendo ao chamador original.
+            self.assertEqual(self.pool.pool.checkedout(), 0)
+            fila.release()
+
+    async def test_quatro_filas_independentes_respeitam_capacidade(self):
+        worker = ContextVar("worker_teste", default=0)
+        filas = [asyncio.Lock() for _ in range(4)]
+        # Quatro filas distintas disputam o mesmo lote no PostgreSQL, como os
+        # quatro processos da aplicação. O teste não depende de memória comum
+        # para garantir a capacidade entre essas filas.
+        por_worker = SimpleNamespace(get=lambda _: filas[worker.get()])
+
+        async def reservar(i):
+            contexto = worker.set(i % 4)
+            try:
+                return await self.reservar(f"worker_{i}")
+            finally:
+                worker.reset(contexto)
+
+        async def publicar(tipo, dados):
+            async with self.pool.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+
+        with patch.object(resgate, "_filas_criacao_reserva", por_worker), \
+             patch.object(resgate.lote_event_hub, "broadcast", publicar):
+            respostas = await asyncio.wait_for(asyncio.gather(*(
+                reservar(i) for i in range(40)
+            )), timeout=10)
+        self.assertEqual(sum(r.status_code == 200 for r in respostas), 10)
+        self.assertTrue(all(r.status_code in (200, 400) for r in respostas))
+        async with self.sessions() as session:
+            reservas = (await session.execute(select(ReservaIngresso))).scalars().all()
+            self.assertEqual(len(reservas), 10)
 
     async def test_f5_recupera_reserva_mesmo_com_lote_bloqueado(self):
         async def publicar(tipo, dados):

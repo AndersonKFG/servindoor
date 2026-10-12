@@ -9,9 +9,10 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from functools import wraps
 from typing import Optional, List
+from weakref import WeakValueDictionary
 from fastapi import APIRouter, Request, Depends, Form, Query, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -44,6 +45,11 @@ VUE_INDEX_PATH = "app/static/dist/index.html"
 COOKIE_BROWSER_ID = "festa_browser_id"
 COOKIE_RESERVA_PRAZO = "festa_reserva_prazo"
 COOKIE_DEVICE_LEGACY = "festa_device_id"
+
+# Um processo admite uma criação por lote na transação de capacidade. O lock
+# PostgreSQL continua coordenando processos diferentes. Referências fracas
+# descartam o lock local quando não há chamadas usando/aguardando aquele lote.
+_filas_criacao_reserva = WeakValueDictionary()
 
 
 def _medir_fluxo_reserva(func):
@@ -106,6 +112,33 @@ async def _buscar_reserva_ativa_dispositivo(
         if reserva:
             return reserva
     return None
+
+
+@asynccontextmanager
+async def _transacao_capacidade_reserva(
+    session: AsyncSession, request: Request, lote_id: int, criar: bool,
+):
+    fila = None
+    if criar:
+        # A busca inicial é somente leitura. Devolve sua conexão ANTES de
+        # aguardar a fila local, mantendo o pool disponível para SSE e consultas.
+        await session.close()
+        fila = _filas_criacao_reserva.get(lote_id)
+        if fila is None:
+            fila = asyncio.Lock()
+            _filas_criacao_reserva[lote_id] = fila
+        with _medir_etapa_reserva(request, "fila_criacao_worker"):
+            await fila.acquire()
+    try:
+        yield
+    finally:
+        try:
+            # Também libera FOR UPDATE nas saídas antecipadas e nas exceções.
+            # O próximo da fila só entra depois da devolução desta conexão.
+            await session.close()
+        finally:
+            if fila is not None:
+                fila.release()
 
 
 # Rate Limit Global por IP via PostgreSQL (suporta 4 workers do Gunicorn)
@@ -678,166 +711,171 @@ async def pagina_resgate(
     reserva_existente = await _buscar_reserva_ativa_dispositivo(
         session, request, fingerprint_reserva, device_id_reserva
     )
-    stmt_lote = select(Lote).where(Lote.id == lote_id)
-    if not reserva_existente:
-        # Só uma criação exige serializar a conferência da capacidade do lote.
-        stmt_lote = stmt_lote.with_for_update()
-    etapa_lote = "consulta_lote" if reserva_existente else "lock_lote"
-    with _medir_etapa_reserva(request, etapa_lote):
-        res_lote = await session.execute(stmt_lote)
-    lote = res_lote.scalars().first()
-    agora = datetime.now(timezone.utc)
-    if not lote or not lote.ativo:
-        msg = "Este lote está temporariamente pausado ou inativo pela organização."
-        if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-            return JSONResponse(status_code=400, content={"codigo": "lote_inativo", "detail": msg, "mensagem": msg})
-        if os.path.exists(VUE_INDEX_PATH):
-            return FileResponse(VUE_INDEX_PATH)
-        return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
-
-    # 2. Regra Soberana de Horário
-    if lote.data_abertura and agora < lote.data_abertura:
-        msg = f"O período de resgate deste lote ainda não iniciou. Abertura prevista para {formatar_data_sp(lote.data_abertura)}."
-        if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-            return JSONResponse(status_code=400, content={"codigo": "nao_iniciado", "detail": msg, "mensagem": msg})
-        if os.path.exists(VUE_INDEX_PATH):
-            return FileResponse(VUE_INDEX_PATH)
-        return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
-
-    if lote.data_fechamento and agora > lote.data_fechamento:
-        msg = "O período de resgate deste lote já foi encerrado."
-        if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-            return JSONResponse(status_code=400, content={"codigo": "encerrado", "detail": msg, "mensagem": msg})
-        if os.path.exists(VUE_INDEX_PATH):
-            return FileResponse(VUE_INDEX_PATH)
-        return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
-
-    # 3. Outra chamada deste dispositivo pode ter criado a reserva enquanto
-    # esperávamos o lock. Repete a busca sob o lock antes de ocupar outra vaga.
-    if not reserva_existente:
-        reserva_existente = await _buscar_reserva_ativa_dispositivo(
-            session, request, fingerprint_reserva, device_id_reserva, "_apos_lock"
-        )
-
-    if reserva_existente and reserva_existente.lote_id != lote.id:
-        msg = "Este dispositivo já possui uma reserva ativa em outro lote. Conclua ou desista dela antes de tentar outro lote."
-        return JSONResponse(status_code=400, content={
-            "codigo": "reserva_outro_lote",
-            "detail": msg,
-            "mensagem": msg
-        })
-
-    if reserva_existente:
-        # Re-atacha à reserva ativa existente
-        if cpf_limpo and not reserva_existente.cpf:
-            reserva_existente.cpf = cpf_limpo
-            session.add(reserva_existente)
-            try:
-                await session.commit()
-            except IntegrityError:
-                await session.rollback()
-
-        token_reserva = reserva_existente.token
-        # O prazo da reserva é publicado pelo snapshot SSE, que valida criada_em
-        # e expira_em no mesmo relógio. Este GET só recupera o token da sessão.
-        server_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        restante_ms = None
-        tempo_restante_segundos = None
-        reserva_expira_em_ms = None
-    else:
-        # 4. Verifica vagas disponíveis no lote
-        stmt_reservas = (
-            select(func.count(ReservaIngresso.id))
-            .where(
-                ReservaIngresso.lote_id == lote.id,
-                ReservaIngresso.status == "ativa",
-                ReservaIngresso.expira_em > agora
-            )
-        )
-        with _medir_etapa_reserva(request, "contagem_vagas"):
-            res_count = await session.execute(stmt_reservas)
-        reservas_ativas = res_count.scalar() or 0
-
-        vagas_disponiveis = lote.quantidade_total - (lote.quantidade_resgatada + reservas_ativas)
-        if vagas_disponiveis <= 0:
-            if lote.quantidade_resgatada >= lote.quantidade_total:
-                msg = "Todos os ingressos deste lote já foram resgatados por outros servidores."
-                codigo = "esgotado"
-            else:
-                msg = "Todas as vagas restantes estão temporariamente em processo de preenchimento por outros servidores. Aguarde alguns instantes na tela inicial para tentar caso alguma vaga seja liberada!"
-                codigo = "em_preenchimento"
-
+    nova_reserva = None
+    async with _transacao_capacidade_reserva(
+        session, request, lote_id, criar=reserva_existente is None
+    ):
+        stmt_lote = select(Lote).where(Lote.id == lote_id)
+        if not reserva_existente:
+            # Só uma criação exige serializar a conferência da capacidade do lote.
+            stmt_lote = stmt_lote.with_for_update()
+        etapa_lote = "consulta_lote" if reserva_existente else "lock_lote"
+        with _medir_etapa_reserva(request, etapa_lote):
+            res_lote = await session.execute(stmt_lote)
+        lote = res_lote.scalars().first()
+        agora = datetime.now(timezone.utc)
+        if not lote or not lote.ativo:
+            msg = "Este lote está temporariamente pausado ou inativo pela organização."
             if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                return JSONResponse(status_code=400, content={"codigo": codigo, "detail": msg, "mensagem": msg})
+                return JSONResponse(status_code=400, content={"codigo": "lote_inativo", "detail": msg, "mensagem": msg})
             if os.path.exists(VUE_INDEX_PATH):
                 return FileResponse(VUE_INDEX_PATH)
             return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
 
-        # 5. Rate limit atômico por IP compartilhado via PostgreSQL
-        chave_rate_limit = _chave_rate_limit_reserva(request, lote.id, fingerprint_reserva, client_ip)
-        with _medir_etapa_reserva(request, "limitador"):
-            permitido = await verificar_e_registrar_rate_limit_db(chave_rate_limit, session)
-        if not permitido:
-            msg_ratelimit = "Muitas tentativas de reserva a partir deste IP. Aguarde um instante e tente novamente."
+        # 2. Regra Soberana de Horário
+        if lote.data_abertura and agora < lote.data_abertura:
+            msg = f"O período de resgate deste lote ainda não iniciou. Abertura prevista para {formatar_data_sp(lote.data_abertura)}."
             if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
-                return JSONResponse(status_code=429, content={"codigo": "rate_limit", "detail": msg_ratelimit, "mensagem": msg_ratelimit})
-            raise HTTPException(status_code=429, detail=msg_ratelimit)
+                return JSONResponse(status_code=400, content={"codigo": "nao_iniciado", "detail": msg, "mensagem": msg})
+            if os.path.exists(VUE_INDEX_PATH):
+                return FileResponse(VUE_INDEX_PATH)
+            return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
 
-        # 6. Cria uma nova Reserva Ativa de 5 minutos
-        token_reserva = str(uuid.uuid4())
-        agora_reserva = datetime.now(timezone.utc)
-        expira_em = agora_reserva + timedelta(minutes=5)
+        if lote.data_fechamento and agora > lote.data_fechamento:
+            msg = "O período de resgate deste lote já foi encerrado."
+            if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
+                return JSONResponse(status_code=400, content={"codigo": "encerrado", "detail": msg, "mensagem": msg})
+            if os.path.exists(VUE_INDEX_PATH):
+                return FileResponse(VUE_INDEX_PATH)
+            return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
 
-        nova_reserva = ReservaIngresso(
-            token=token_reserva,
-            lote_id=lote.id,
-            criada_em=agora_reserva,
-            expira_em=expira_em,
-            utilizada=False,
-            status="ativa",
-            cpf=cpf_limpo,
-            browser_token_hash=None,
-            device_fingerprint=fingerprint_reserva,
-            ip_origem=client_ip,
-            device_id=device_id_reserva or fingerprint_reserva
-        )
-        session.add(nova_reserva)
-        try:
-            with _medir_etapa_reserva(request, "commit"):
-                await session.commit()
-        except IntegrityError:
-            # Proteção contra corrida concorrente no PostgreSQL (rollback limpo sem 500)
-            await session.rollback()
-            agora_atual = datetime.now(timezone.utc)
-            condicoes_dispositivo = []
-            if fingerprint_reserva:
-                condicoes_dispositivo.append(ReservaIngresso.device_fingerprint == fingerprint_reserva)
-            if device_id_reserva:
-                condicoes_dispositivo.append(ReservaIngresso.device_id == device_id_reserva)
-            if condicoes_dispositivo:
-                stmt_existente = select(ReservaIngresso).where(
-                    ReservaIngresso.status == "ativa",
-                    ReservaIngresso.criada_em < agora_atual,
-                    ReservaIngresso.expira_em > agora_atual,
-                    or_(*condicoes_dispositivo)
-                ).order_by(desc(ReservaIngresso.expira_em))
-                existente_concorrente = (await session.execute(stmt_existente)).scalars().first()
-                if existente_concorrente and existente_concorrente.lote_id == lote.id:
-                    token_reserva = existente_concorrente.token
-                    return JSONResponse(content={"token_reserva": token_reserva, "lote_id": lote.id})
+        # 3. Outra chamada deste dispositivo pode ter criado a reserva enquanto
+        # esperávamos o lock. Repete a busca sob o lock antes de ocupar outra vaga.
+        if not reserva_existente:
+            reserva_existente = await _buscar_reserva_ativa_dispositivo(
+                session, request, fingerprint_reserva, device_id_reserva, "_apos_lock"
+            )
 
-            return JSONResponse(status_code=409, content={
-                "codigo": "conflito_concorrencia",
-                "detail": "Conflito durante a reserva simultânea. Tente novamente.",
-                "mensagem": "Conflito durante a reserva simultânea. Tente novamente."
+        if reserva_existente and reserva_existente.lote_id != lote.id:
+            msg = "Este dispositivo já possui uma reserva ativa em outro lote. Conclua ou desista dela antes de tentar outro lote."
+            return JSONResponse(status_code=400, content={
+                "codigo": "reserva_outro_lote",
+                "detail": msg,
+                "mensagem": msg
             })
 
-        agora_resposta = datetime.now(timezone.utc)
-        server_time_ms = int(agora_resposta.timestamp() * 1000)
-        restante_ms = max(0, int((expira_em - agora_resposta).total_seconds() * 1000))
-        tempo_restante_segundos = (restante_ms + 999) // 1000
-        reserva_expira_em_ms = server_time_ms + restante_ms
+        if reserva_existente:
+            # Re-atacha à reserva ativa existente
+            if cpf_limpo and not reserva_existente.cpf:
+                reserva_existente.cpf = cpf_limpo
+                session.add(reserva_existente)
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    await session.rollback()
 
+            token_reserva = reserva_existente.token
+            # O prazo da reserva é publicado pelo snapshot SSE, que valida criada_em
+            # e expira_em no mesmo relógio. Este GET só recupera o token da sessão.
+            server_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            restante_ms = None
+            tempo_restante_segundos = None
+            reserva_expira_em_ms = None
+        else:
+            # 4. Verifica vagas disponíveis no lote
+            stmt_reservas = (
+                select(func.count(ReservaIngresso.id))
+                .where(
+                    ReservaIngresso.lote_id == lote.id,
+                    ReservaIngresso.status == "ativa",
+                    ReservaIngresso.expira_em > agora
+                )
+            )
+            with _medir_etapa_reserva(request, "contagem_vagas"):
+                res_count = await session.execute(stmt_reservas)
+            reservas_ativas = res_count.scalar() or 0
+
+            vagas_disponiveis = lote.quantidade_total - (lote.quantidade_resgatada + reservas_ativas)
+            if vagas_disponiveis <= 0:
+                if lote.quantidade_resgatada >= lote.quantidade_total:
+                    msg = "Todos os ingressos deste lote já foram resgatados por outros servidores."
+                    codigo = "esgotado"
+                else:
+                    msg = "Todas as vagas restantes estão temporariamente em processo de preenchimento por outros servidores. Aguarde alguns instantes na tela inicial para tentar caso alguma vaga seja liberada!"
+                    codigo = "em_preenchimento"
+
+                if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
+                    return JSONResponse(status_code=400, content={"codigo": codigo, "detail": msg, "mensagem": msg})
+                if os.path.exists(VUE_INDEX_PATH):
+                    return FileResponse(VUE_INDEX_PATH)
+                return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
+
+            # 5. Rate limit atômico por IP compartilhado via PostgreSQL
+            chave_rate_limit = _chave_rate_limit_reserva(request, lote.id, fingerprint_reserva, client_ip)
+            with _medir_etapa_reserva(request, "limitador"):
+                permitido = await verificar_e_registrar_rate_limit_db(chave_rate_limit, session)
+            if not permitido:
+                msg_ratelimit = "Muitas tentativas de reserva a partir deste IP. Aguarde um instante e tente novamente."
+                if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
+                    return JSONResponse(status_code=429, content={"codigo": "rate_limit", "detail": msg_ratelimit, "mensagem": msg_ratelimit})
+                raise HTTPException(status_code=429, detail=msg_ratelimit)
+
+            # 6. Cria uma nova Reserva Ativa de 5 minutos
+            token_reserva = str(uuid.uuid4())
+            agora_reserva = datetime.now(timezone.utc)
+            expira_em = agora_reserva + timedelta(minutes=5)
+
+            nova_reserva = ReservaIngresso(
+                token=token_reserva,
+                lote_id=lote.id,
+                criada_em=agora_reserva,
+                expira_em=expira_em,
+                utilizada=False,
+                status="ativa",
+                cpf=cpf_limpo,
+                browser_token_hash=None,
+                device_fingerprint=fingerprint_reserva,
+                ip_origem=client_ip,
+                device_id=device_id_reserva or fingerprint_reserva
+            )
+            session.add(nova_reserva)
+            try:
+                with _medir_etapa_reserva(request, "commit"):
+                    await session.commit()
+            except IntegrityError:
+                # Proteção contra corrida concorrente no PostgreSQL (rollback limpo sem 500)
+                await session.rollback()
+                agora_atual = datetime.now(timezone.utc)
+                condicoes_dispositivo = []
+                if fingerprint_reserva:
+                    condicoes_dispositivo.append(ReservaIngresso.device_fingerprint == fingerprint_reserva)
+                if device_id_reserva:
+                    condicoes_dispositivo.append(ReservaIngresso.device_id == device_id_reserva)
+                if condicoes_dispositivo:
+                    stmt_existente = select(ReservaIngresso).where(
+                        ReservaIngresso.status == "ativa",
+                        ReservaIngresso.criada_em < agora_atual,
+                        ReservaIngresso.expira_em > agora_atual,
+                        or_(*condicoes_dispositivo)
+                    ).order_by(desc(ReservaIngresso.expira_em))
+                    existente_concorrente = (await session.execute(stmt_existente)).scalars().first()
+                    if existente_concorrente and existente_concorrente.lote_id == lote.id:
+                        token_reserva = existente_concorrente.token
+                        return JSONResponse(content={"token_reserva": token_reserva, "lote_id": lote.id})
+
+                return JSONResponse(status_code=409, content={
+                    "codigo": "conflito_concorrencia",
+                    "detail": "Conflito durante a reserva simultânea. Tente novamente.",
+                    "mensagem": "Conflito durante a reserva simultânea. Tente novamente."
+                })
+
+            agora_resposta = datetime.now(timezone.utc)
+            server_time_ms = int(agora_resposta.timestamp() * 1000)
+            restante_ms = max(0, int((expira_em - agora_resposta).total_seconds() * 1000))
+            tempo_restante_segundos = (restante_ms + 999) // 1000
+            reserva_expira_em_ms = server_time_ms + restante_ms
+
+    if nova_reserva is not None:
         # Transmite via SSE com contadores consistentes pós-commit.
         with _medir_etapa_reserva(request, "status_sse"):
             status_lote = await coletar_status_lote_para_sse(session, lote.id)
