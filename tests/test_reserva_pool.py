@@ -155,6 +155,77 @@ class TestReservaPool(unittest.IsolatedAsyncioTestCase):
         finally:
             event.remove(self.pool.sync_engine, "before_cursor_execute", observar)
 
+    async def test_f5_recupera_reserva_mesmo_com_lote_bloqueado(self):
+        async def publicar(tipo, dados):
+            pass
+
+        with patch.object(resgate.lote_event_hub, "broadcast", publicar):
+            resposta = await self.reservar("pool_f5_sem_lock")
+        token = json.loads(resposta.body)["token_reserva"]
+        async with self.sessions() as session:
+            original = (await session.execute(select(ReservaIngresso).where(
+                ReservaIngresso.token == token
+            ))).scalars().one()
+            prazo_original = original.expira_em
+
+        async with self.pool.connect() as bloqueador:
+            await bloqueador.execute(text("SELECT id FROM lotes WHERE id=1 FOR UPDATE"))
+            # A outra conexão precisa recuperar a reserva sem esperar este lock.
+            # Confere tanto a busca por fingerprint quanto o fallback por device_id.
+            for fingerprint in ("pool_f5_sem_lock", "fingerprint_diferente"):
+                request = self.request()
+                async with self.sessions() as session:
+                    atualizada = await asyncio.wait_for(resgate.pagina_resgate(
+                        request, 1, device_fingerprint=fingerprint,
+                        device_id="pool_f5_sem_lock", cpf=None, session=session,
+                    ), timeout=1)
+                self.assertEqual(atualizada.status_code, 200)
+                self.assertEqual(json.loads(atualizada.body)["token_reserva"], token)
+                self.assertIn("consulta_lote", request.state.reserva_tempos)
+                self.assertNotIn("lock_lote", request.state.reserva_tempos)
+            await bloqueador.rollback()
+
+        async with self.sessions() as session:
+            reservas = (await session.execute(select(ReservaIngresso))).scalars().all()
+            self.assertEqual(len(reservas), 1)
+            self.assertEqual(reservas[0].expira_em, prazo_original)
+
+    async def test_criacao_simultanea_mesmo_dispositivo_ocupa_uma_vaga(self):
+        buscas_iniciais = 0
+        ambas_buscaram = asyncio.Event()
+        buscar_original = resgate._buscar_reserva_ativa_dispositivo
+
+        async def buscar(session, request, fingerprint, device_id, sufixo=""):
+            nonlocal buscas_iniciais
+            reserva = await buscar_original(session, request, fingerprint, device_id, sufixo)
+            if not sufixo:
+                # Força ambas a encontrar nenhuma reserva antes de disputar o lock.
+                self.assertIsNone(reserva)
+                buscas_iniciais += 1
+                if buscas_iniciais == 2:
+                    ambas_buscaram.set()
+                await asyncio.wait_for(ambas_buscaram.wait(), timeout=2)
+            return reserva
+
+        async def publicar(tipo, dados):
+            async with self.pool.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+
+        with patch.object(resgate, "_buscar_reserva_ativa_dispositivo", buscar), \
+             patch.object(resgate.lote_event_hub, "broadcast", publicar):
+            respostas = await asyncio.wait_for(asyncio.gather(
+                self.reservar("pool_mesmo_dispositivo"),
+                self.reservar("pool_mesmo_dispositivo"),
+            ), timeout=5)
+        self.assertEqual([r.status_code for r in respostas], [200, 200])
+        tokens = {json.loads(r.body)["token_reserva"] for r in respostas}
+        self.assertEqual(len(tokens), 1)
+        async with self.sessions() as session:
+            reservas = (await session.execute(select(ReservaIngresso))).scalars().all()
+            tentativas = (await session.execute(select(RateLimitTentativa))).scalars().all()
+            self.assertEqual(len(reservas), 1)
+            self.assertEqual(len(tentativas), 1)
+
     async def test_concorrencia_capacidade_f5_sse_e_desistencia(self):
         async def publicar(tipo, dados):
             async with self.pool.connect() as conn:

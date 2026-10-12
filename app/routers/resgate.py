@@ -83,6 +83,31 @@ def _medir_etapa_reserva(request: Request, etapa: str):
             tempos[etapa] = round((time.perf_counter() - inicio) * 1000, 1)
 
 
+async def _buscar_reserva_ativa_dispositivo(
+    session: AsyncSession, request: Request,
+    fingerprint: Optional[str], device_id: Optional[str], sufixo: str = "",
+) -> Optional[ReservaIngresso]:
+    """Procura primeiro fingerprint e depois device_id, usando o relógio do servidor."""
+    for campo, valor, etapa in (
+        (ReservaIngresso.device_fingerprint, fingerprint, "busca_fingerprint"),
+        (ReservaIngresso.device_id, device_id, "busca_device_id"),
+    ):
+        if not valor:
+            continue
+        agora = datetime.now(timezone.utc)
+        stmt = select(ReservaIngresso).where(
+            campo == valor,
+            ReservaIngresso.status == "ativa",
+            ReservaIngresso.criada_em < agora,
+            ReservaIngresso.expira_em > agora,
+        ).order_by(desc(ReservaIngresso.expira_em)).limit(1)
+        with _medir_etapa_reserva(request, etapa + sufixo):
+            reserva = (await session.execute(stmt)).scalars().first()
+        if reserva:
+            return reserva
+    return None
+
+
 # Rate Limit Global por IP via PostgreSQL (suporta 4 workers do Gunicorn)
 # Calibrado para até 300 requisições/min por IP público, acomodando com folga 150+ participantes
 # em redes NAT corporativas/órgãos públicos sem bloqueio coletivo indevido.
@@ -647,13 +672,21 @@ async def pagina_resgate(
                 return JSONResponse(status_code=400, content={"codigo": tipo_erro, "detail": msg, "mensagem": msg})
             raise HTTPException(status_code=400, detail=msg)
 
-    # 1. Busca o Lote com bloqueio atômico para controle de concorrência
-    stmt_lote = select(Lote).where(Lote.id == lote_id).with_for_update()
+    # 1. Recuperar uma reserva existente não disputa a fila de criação de vagas.
     with _medir_etapa_reserva(request, "obter_conexao"):
         await session.connection()
-    with _medir_etapa_reserva(request, "lock_lote"):
+    reserva_existente = await _buscar_reserva_ativa_dispositivo(
+        session, request, fingerprint_reserva, device_id_reserva
+    )
+    stmt_lote = select(Lote).where(Lote.id == lote_id)
+    if not reserva_existente:
+        # Só uma criação exige serializar a conferência da capacidade do lote.
+        stmt_lote = stmt_lote.with_for_update()
+    etapa_lote = "consulta_lote" if reserva_existente else "lock_lote"
+    with _medir_etapa_reserva(request, etapa_lote):
         res_lote = await session.execute(stmt_lote)
     lote = res_lote.scalars().first()
+    agora = datetime.now(timezone.utc)
     if not lote or not lote.ativo:
         msg = "Este lote está temporariamente pausado ou inativo pela organização."
         if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
@@ -679,30 +712,12 @@ async def pagina_resgate(
             return FileResponse(VUE_INDEX_PATH)
         return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
 
-    # 3. Recupera a reserva nesta ordem: fingerprint e depois device_id.
-    # As duas datas são validadas contra o relógio do servidor.
-    reserva_existente = None
-    agora_busca = datetime.now(timezone.utc)
-    if fingerprint_reserva:
-        stmt_fingerprint = select(ReservaIngresso).where(
-            ReservaIngresso.device_fingerprint == fingerprint_reserva,
-            ReservaIngresso.status == "ativa",
-            ReservaIngresso.criada_em < agora_busca,
-            ReservaIngresso.expira_em > agora_busca,
-        ).order_by(desc(ReservaIngresso.expira_em))
-        with _medir_etapa_reserva(request, "busca_fingerprint"):
-            reserva_existente = (await session.execute(stmt_fingerprint)).scalars().first()
-
-    if not reserva_existente and device_id_reserva:
-        agora_busca = datetime.now(timezone.utc)
-        stmt_device_id = select(ReservaIngresso).where(
-            ReservaIngresso.device_id == device_id_reserva,
-            ReservaIngresso.status == "ativa",
-            ReservaIngresso.criada_em < agora_busca,
-            ReservaIngresso.expira_em > agora_busca,
-        ).order_by(desc(ReservaIngresso.expira_em))
-        with _medir_etapa_reserva(request, "busca_device_id"):
-            reserva_existente = (await session.execute(stmt_device_id)).scalars().first()
+    # 3. Outra chamada deste dispositivo pode ter criado a reserva enquanto
+    # esperávamos o lock. Repete a busca sob o lock antes de ocupar outra vaga.
+    if not reserva_existente:
+        reserva_existente = await _buscar_reserva_ativa_dispositivo(
+            session, request, fingerprint_reserva, device_id_reserva, "_apos_lock"
+        )
 
     if reserva_existente and reserva_existente.lote_id != lote.id:
         msg = "Este dispositivo já possui uma reserva ativa em outro lote. Conclua ou desista dela antes de tentar outro lote."
