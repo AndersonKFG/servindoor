@@ -4,7 +4,8 @@ Na VPS, após git pull:
     docker compose exec -T web python < app/scripts/cadastrar_organograma.py
 
 Pode ser executado novamente: reaproveita órgãos por nome ou sigla e eixos
-por nome, mantendo os IDs e os vínculos existentes.
+por nome, mantendo os IDs. GP, GVP, SEGOV, SAP, SEPE e SECOM são vinculados
+ao eixo 4 mesmo quando já cadastrados em outro eixo.
 """
 
 import asyncio
@@ -28,15 +29,14 @@ EIXOS = {
 
 # Nome oficial, sigla (quando consta no organograma), número do eixo.
 # GP e GVP seguem as siglas já cadastradas pelo usuário.
-# Consultorias foi excluída conforme solicitado.
+# Assessorias e Consultorias foram excluídas conforme solicitado.
 ORGAOS = (
-    ("Gabinete do Prefeito", "GP", None),
-    ("Gabinete da Vice-Prefeita", "GVP", None),
-    ("Secretaria de Governo e Relações Institucionais", "SEGOV", None),
-    ("Secretaria de Articulação Política", "SAP", None),
-    ("Assessorias", None, None),
-    ("Secretaria de Comunicação", "SECOM", None),
-    ("Secretaria de Projetos Estratégicos", "SEPE", None),
+    ("Gabinete do Prefeito", "GP", 4),
+    ("Gabinete da Vice-Prefeita", "GVP", 4),
+    ("Secretaria de Governo e Relações Institucionais", "SEGOV", 4),
+    ("Secretaria de Articulação Política", "SAP", 4),
+    ("Secretaria de Comunicação", "SECOM", 4),
+    ("Secretaria de Projetos Estratégicos", "SEPE", 4),
     ("Secretaria de Educação e Esportes", "SEDUC", 1),
     ("Secretaria de Saúde", "SMS", 1),
     ("Secretaria de Assistência Social e Combate à Fome", "SAS", 1),
@@ -67,6 +67,8 @@ ORGAOS = (
         5,
     ),
 )
+
+SIGLAS_RECLASSIFICADAS = {"GP", "GVP", "SEGOV", "SAP", "SEPE", "SECOM"}
 
 
 def normalizar(valor: str | None) -> str:
@@ -116,7 +118,11 @@ async def cadastrar() -> None:
                 eixo_id = ids_eixos.get(numero)
                 if candidatos:
                     orgao = candidatos[0]
-                    if orgao.eixo_id is None and eixo_id is not None:
+                    if (
+                        eixo_id is not None
+                        and orgao.eixo_id != eixo_id
+                        and (orgao.eixo_id is None or sigla in SIGLAS_RECLASSIFICADAS)
+                    ):
                         orgao.eixo_id = eixo_id
                         orgaos_vinculados += 1
                     elif eixo_id is not None and orgao.eixo_id != eixo_id:
