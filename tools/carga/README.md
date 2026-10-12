@@ -64,10 +64,12 @@ Não invente IPs usando `X-Forwarded-For`/`CF-Connecting-IP`, nem desligue todas
 proteções da Cloudflare. Se houver bloqueio, identifique a regra/evento antes de
 definir uma exceção temporária restrita ao IP do gerador.
 
-## 3. Aumentar até 4.000
+## 3. Home até 4.000; reservas até 2.000
 
 Depois de analisar o resultado de 10 visitantes, execute o mesmo comando e escolha
 `100`, depois `500`, `1000`, `2000`, `3000` e `4000`, conforme os resultados.
+Essa sequência completa vale para o modo `home`. No modo `reservas`, o máximo
+permitido é `2000`: avance por `10`, `100`, `500`, `1000` e `2000`.
 
 Cada execução passa por todos os patamares até o máximo escolhido, mantendo cada
 patamar por 2 minutos. O roteiro completo até 4.000 dura aproximadamente 20min30s.
@@ -98,6 +100,10 @@ por tempo e pode crescer bastante. Esses arquivos são ignorados pelo Git.
 | `sse_estado_p95_ms` | 95% dos snapshots chegaram em até esse tempo |
 | `verificacoes_ok` | Proporção das verificações que passaram |
 | `continuidade_reserva` | No modo reservas, deve ser 1: mesmo token e expiração após F5 |
+| `reservas_aceitas_acumuladas` | Visitas que conseguiram criar ou recuperar uma reserva; não é ocupação simultânea |
+| `sem_vaga_em_preenchimento_acumuladas` | Recusas esperadas porque as vagas estão reservadas |
+| `sem_vaga_esgotado_acumuladas` | Recusas esperadas porque os ingressos já foram resgatados |
+| `falhas_tecnicas_reserva` | Proporção de tentativas iniciais com erro inesperado, como HTTP 429/500 |
 
 O alvo inicial é receber 95% dos snapshots em até 3 segundos. É um critério de
 avaliação inicial, não uma capacidade previamente comprovada.
@@ -123,8 +129,24 @@ docker compose up -d --build --no-deps --force-recreate web
 ```
 
 No painel administrativo, crie um lote exclusivo chamado `TESTE DE CARGA`, aberto
-agora, com pelo menos 4.000 vagas e sem inscrições reais. Anote seu ID. Durante o
-teste, mantenha outros lotes pausados para a home não anunciar o lote errado.
+agora, com **1.500 vagas** e sem inscrições reais, representando o primeiro lote.
+Anote seu ID. Durante o teste, mantenha outros lotes pausados para a home não
+anunciar o lote errado. As outras aberturas, com **1.000 e 500 vagas**, acontecem
+em dias diferentes e podem ser representadas em execuções separadas.
+
+O limite de **2.000 visitantes** dá uma margem de demanda sobre as 1.500 vagas
+do primeiro lote. HTTP 400 com código `em_preenchimento` ou `esgotado` é uma recusa
+esperada por lotação e aparece separadamente no resumo. HTTP 429, HTTP 500,
+respostas inválidas e outros códigos continuam contando como falha técnica.
+A métrica genérica `http_req_failed` do k6 também inclui esses HTTP 400 esperados;
+use os contadores específicos e `falhas_tecnicas_reserva` para distinguir as causas.
+
+Quem não consegue vaga acompanha o SSE por uma visita de aproximadamente 90–110
+segundos antes de tentar novamente. Quem consegue verifica o F5 e desiste ao fim
+da visita, liberando a vaga. Como a chegada é gradual e há liberação de vagas,
+**não esperamos exatamente 1.500 reservas aceitas e 500 recusas**: os contadores
+são acumulados ao longo do teste. Este cenário ainda não reproduz uma disputa
+simultânea por todas as vagas na abertura nem o preenchimento do formulário.
 
 O limitador normal permite 300 novas reservas por minuto por IP. Para simular
 milhares de dispositivos saindo do mesmo computador, configure uma exceção

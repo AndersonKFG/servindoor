@@ -9,16 +9,25 @@ export TARGET_URL="${TARGET_URL:-https://www.servindoor.com.br}"
 read -r -p 'Modo: home ou reservas [home]: ' TEST_MODE
 export TEST_MODE="${TEST_MODE:-home}"
 [[ "$TEST_MODE" == home || "$TEST_MODE" == reservas ]] || { echo 'Modo inválido.'; exit 1; }
-read -r -p 'Máximo: 10, 100, 500, 1000, 2000, 3000 ou 4000 [10]: ' MAX_VISITORS
+if [[ "$TEST_MODE" == reservas ]]; then
+  read -r -p 'Máximo: 10, 100, 500, 1000 ou 2000 [10]: ' MAX_VISITORS
+else
+  read -r -p 'Máximo: 10, 100, 500, 1000, 2000, 3000 ou 4000 [10]: ' MAX_VISITORS
+fi
 export MAX_VISITORS="${MAX_VISITORS:-10}"
 case "$MAX_VISITORS" in 10|100|500|1000|2000|3000|4000) ;; *) echo 'Limite inválido.'; exit 1 ;; esac
+if [[ "$TEST_MODE" == reservas && "$MAX_VISITORS" -gt 2000 ]]; then
+  echo 'O teste de reservas aceita até 2000 visitantes.'
+  exit 1
+fi
 export TEST_RUN_ID="$(date -u +%Y%m%dT%H%M%S)_${RANDOM}"
 read -r -s -p 'PIN do site (não aparece; Enter se desativado): ' SITE_PIN
 echo
 export SITE_PIN
 export TEST_LOTE_ID=0 LOAD_TEST_SECRET=''
 if [[ "$TEST_MODE" == reservas ]]; then
-  echo 'Use um lote exclusivo de teste, sem inscrições reais, com pelo menos 4000 vagas.'
+  echo 'Use um lote exclusivo de teste, sem inscrições reais, com 1500 vagas para representar a primeira abertura.'
+  echo 'Para representar as outras aberturas, teste separadamente lotes de 1000 ou 500 vagas.'
   read -r -p 'ID desse lote: ' TEST_LOTE_ID
   [[ "$TEST_LOTE_ID" =~ ^[1-9][0-9]*$ ]] || { echo 'ID inválido.'; exit 1; }
   read -r -s -p 'Chave temporária LOAD_TEST_SECRET (não aparece): ' LOAD_TEST_SECRET

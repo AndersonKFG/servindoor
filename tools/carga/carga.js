@@ -12,6 +12,7 @@ const run = __ENV.TEST_RUN_ID || '';
 if (!/^https?:\/\/[^/?#]+$/.test(base) || base.includes('@')) throw new Error('Informe uma URL sem caminho, query ou credenciais.');
 if (!['home', 'reservas'].includes(mode)) throw new Error('Modo inválido.');
 if (![10, 100, 500, 1000, 2000, 3000, 4000].includes(maximum)) throw new Error('Limite inválido.');
+if (mode === 'reservas' && maximum > 2000) throw new Error('O teste de reservas aceita até 2000 visitantes.');
 if (!/^[a-zA-Z0-9_-]{1,50}$/.test(run)) throw new Error('Identificação do teste inválida.');
 if (mode === 'reservas' && (!Number.isInteger(lot) || lot < 1 || !__ENV.LOAD_TEST_SECRET)) throw new Error('Reservas exigem lote de teste e chave temporária.');
 
@@ -29,6 +30,10 @@ const openTime = new Trend('sse_abertura_ms', true);
 const snapshotTime = new Trend('sse_estado_ms', true);
 const reservationTime = new Trend('reserva_resposta_ms', true);
 const resumeOK = new Rate('reserva_continuidade_ok');
+const accepted = new Counter('reservas_aceitas');
+const filling = new Counter('reservas_sem_vaga_em_preenchimento');
+const soldOut = new Counter('reservas_sem_vaga_esgotado');
+const reservationFailures = new Rate('reserva_falhas_tecnicas');
 
 export const options = {
   scenarios: { visitantes: { executor: 'ramping-vus', startVUs: 0, stages, gracefulRampDown: '0s', gracefulStop: '0s' } },
@@ -40,7 +45,10 @@ export const options = {
     checks: [{ threshold: 'rate>0.99', abortOnFail: true, delayAbortEval: '30s' }],
     sse_falhas: [{ threshold: 'rate<0.01', abortOnFail: true, delayAbortEval: '30s' }],
     sse_estado_ms: ['p(95)<3000'],
-    ...(mode === 'reservas' ? { reserva_continuidade_ok: ['rate==1'], reserva_resposta_ms: ['p(95)<3000'] } : {}),
+    ...(mode === 'reservas' ? {
+      reserva_continuidade_ok: ['rate==1'], reserva_resposta_ms: ['p(95)<3000'],
+      reserva_falhas_tecnicas: [{ threshold: 'rate<0.01', abortOnFail: true, delayAbortEval: '30s' }],
+    } : {}),
   },
 };
 
@@ -64,6 +72,7 @@ export function setup() {
   const preflight = stream('loadtest_' + run + '_preflight', gateToken, { snapshotOnly: true, timeout: '10s' });
   if (!preflight || (mode === 'reservas' && Number(preflight.id) !== lot)) throw new Error('O SSE não entregou o estado esperado. Confira o lote/Cloudflare antes da carga.');
   if (mode === 'reservas' && !preflight.pode_resgatar) throw new Error('O lote de teste não está aberto para resgates.');
+  if (mode === 'reservas') { accepted.add(0); filling.add(0); soldOut.add(0); }
   console.log(`Teste ${run}: ${mode}, até ${maximum} visitantes. Ctrl+C interrompe.`);
   return { gateToken };
 }
@@ -127,9 +136,22 @@ export default function (data) {
   const url = `${base}/api/lote/${lot}/reservar?device_fingerprint=${encodeURIComponent(fingerprint)}&device_id=${encodeURIComponent(fingerprint)}`;
   const reserved = http.post(url, null, params('reservar', headers));
   reservationTime.add(reserved.timings.duration);
-  let token = null;
-  try { token = reserved.json('token_reserva'); } catch { /* Resposta não JSON também é falha. */ }
-  if (!check(reserved, { 'reserva criada/recuperada': value => value.status === 200 && !!token })) { sleep(5); return; }
+  let response = null;
+  try { response = reserved.json(); } catch { /* Resposta não JSON também é falha. */ }
+  const token = response?.token_reserva;
+  const success = reserved.status === 200 && typeof token === 'string' && token.length > 0;
+  const capacity = reserved.status === 400 && ['em_preenchimento', 'esgotado'].includes(response?.codigo);
+  reservationFailures.add(!success && !capacity);
+  if (!check(reserved, { 'reserva aceita ou sem vaga por lotação': () => success || capacity })) { sleep(5); return; }
+  if (capacity) {
+    if (response.codigo === 'em_preenchimento') filling.add(1);
+    else soldOut.add(1);
+    // Quem não conseguiu vaga continua acompanhando o SSE sem repetir o POST em loop.
+    stream(fingerprint, data.gateToken);
+    sleep(1 + Math.random() * 3);
+    return;
+  }
+  accepted.add(1);
   try {
     const before = stream(fingerprint, data.gateToken, { snapshotOnly: true, expectedToken: token });
     if (!before) return;
@@ -156,6 +178,10 @@ export function handleSummary(data) {
     estados_recebidos_acumulados: value('sse_estados_recebidos', 'count'),
     falhas_sse: value('sse_falhas', 'rate'), sse_estado_p95_ms: value('sse_estado_ms', 'p(95)'),
     continuidade_reserva: value('reserva_continuidade_ok', 'rate'), reserva_p95_ms: value('reserva_resposta_ms', 'p(95)'),
+    reservas_aceitas_acumuladas: value('reservas_aceitas', 'count'),
+    sem_vaga_em_preenchimento_acumuladas: value('reservas_sem_vaga_em_preenchimento', 'count'),
+    sem_vaga_esgotado_acumuladas: value('reservas_sem_vaga_esgotado', 'count'),
+    falhas_tecnicas_reserva: value('reserva_falhas_tecnicas', 'rate'),
     verificacoes_ok: value('checks', 'rate'),
     limites: 'VUs são visitantes programados; não comprovam conexões saudáveis simultâneas. Veja métricas por tempo e o servidor. Não cobre foto, emissão de ingresso ou e-mail.',
   };
