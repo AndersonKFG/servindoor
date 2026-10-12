@@ -296,6 +296,25 @@ pelo prefixo `loadtest_`. As visitas concluídas desistem pela rota normal; ao
 interromper o processo, algumas podem permanecer ativas até a expiração normal
 de 5 minutos. Não é necessário apagar o banco inteiro.
 
+## Investigar espera no banco durante reservas
+
+Na VPS, abra outro terminal e inicie a coleta antes da carga:
+
+```bash
+cd ~/servindoor
+bash tools/carga/monitorar_banco.sh 180
+```
+
+Em seguida, execute o teste de reservas no terminal principal. O monitor coleta
+a cada dois segundos durante três minutos e salva um CSV em
+`tools/carga/resultados/banco_*.csv`. Ele executa somente consultas de diagnóstico;
+registra PIDs, estados, tempos, categorias de operação e quais conexões bloqueiam
+outras. Não exporta SQL bruto, parâmetros, CPF, tokens ou credenciais.
+`consulta_ms` inclui tempo de espera; em uma conexão ociosa em transação, é o tempo
+desde o início da última consulta, não uma medida da duração daquela consulta.
+As amostras podem perder bloqueios curtos entre coletas. Não representam toda a
+latência HTTP, a fila do pool na aplicação nem o uso de CPU do servidor.
+
 ## Limites deste roteiro
 
 - Não executa 4.000 navegadores completos: carrega HTML e simula o protocolo/API.
