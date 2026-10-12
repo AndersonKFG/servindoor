@@ -72,8 +72,10 @@ Depois de analisar o resultado de 10 visitantes, execute o mesmo comando e escol
 Essa sequência completa vale para o modo `home`. No modo `reservas`, o máximo
 permitido é `2000`: avance por `10`, `100`, `500`, `1000` e `2000`.
 
-Cada execução passa por todos os patamares até o máximo escolhido, mantendo cada
-patamar por 2 minutos. O roteiro completo até 4.000 dura aproximadamente 20min30s.
+Para máximos de 500 ou mais, a execução sobe direto até 500 e depois passa por
+1.000, 2.000, 3.000 e 4.000, até o máximo escolhido. Cada subida dura 1 minuto,
+cada patamar permanece por 2 minutos e a saída dura 30 segundos. Até 2.000 são
+9min30s; até 4.000, 15min30s. Os testes pequenos de 10 e 100 mantêm suas etapas.
 Não existe promessa de que todos os patamares serão alcançados: erros podem parar
 o teste antes. Os visitantes chegam gradualmente; este roteiro não simula 4.000
 pessoas clicando exatamente no mesmo instante.

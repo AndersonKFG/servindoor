@@ -24,7 +24,8 @@ const stages = [];
 if (profile === 'diagnostico') {
   stages.push({ duration: '60s', target: maximum }, { duration: '2m', target: maximum });
 } else {
-  for (const target of [10, 100, 500, 1000, 2000, 3000, 4000].filter(n => n <= maximum)) {
+  const targets = maximum >= 500 ? [500, 1000, 2000, 3000, 4000] : [10, 100];
+  for (const target of targets.filter(n => n <= maximum)) {
     stages.push({ duration: target <= 100 ? '30s' : '60s', target });
     stages.push({ duration: '2m', target });
   }
