@@ -3,11 +3,14 @@ import base64
 import collections
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
+from functools import wraps
 from typing import Optional, List
 from fastapi import APIRouter, Request, Depends, Form, Query, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse, Response
@@ -31,6 +34,7 @@ from app.core.events import lote_event_hub
 from app.routers.public import invalidar_cache_live_status, coletar_status_lote_para_sse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="app/templates")
 
 FOTOS_DIR = "app/static/uploads/fotos"
@@ -40,6 +44,43 @@ VUE_INDEX_PATH = "app/static/dist/index.html"
 COOKIE_BROWSER_ID = "festa_browser_id"
 COOKIE_RESERVA_PRAZO = "festa_reserva_prazo"
 COOKIE_DEVICE_LEGACY = "festa_device_id"
+
+
+def _medir_fluxo_reserva(func):
+    """Registra chamadas lentas sem CPF, token, cookie ou identificador pessoal."""
+    @wraps(func)
+    async def medida(*args, **kwargs):
+        request = kwargs.get("request") or args[0]
+        request.state.reserva_tempos = {}
+        inicio = time.perf_counter()
+        resultado = "excecao"
+        lote_id = kwargs.get("lote_id")
+        if lote_id is None and func.__name__ == "pagina_resgate" and len(args) > 1:
+            lote_id = args[1]
+        try:
+            resposta = await func(*args, **kwargs)
+            resultado = resposta.status_code
+            return resposta
+        finally:
+            total_ms = (time.perf_counter() - inicio) * 1000
+            if total_ms >= 1000:
+                logger.warning(
+                    "reserva_lenta operacao=%s lote_id=%s resultado=%s total_ms=%.1f etapas_ms=%s",
+                    func.__name__, lote_id,
+                    resultado, total_ms, request.state.reserva_tempos,
+                )
+    return medida
+
+
+@contextmanager
+def _medir_etapa_reserva(request: Request, etapa: str):
+    inicio = time.perf_counter()
+    try:
+        yield
+    finally:
+        tempos = getattr(request.state, "reserva_tempos", None)
+        if tempos is not None:
+            tempos[etapa] = round((time.perf_counter() - inicio) * 1000, 1)
 
 
 # Rate Limit Global por IP via PostgreSQL (suporta 4 workers do Gunicorn)
@@ -502,18 +543,21 @@ async def status_reserva(
 # 3. DESISTIR DA VAGA RESERVADA (LIBERAÇÃO IMEDIATA)
 # ============================================================================
 @router.post("/api/resgate/desistir")
+@_medir_fluxo_reserva
 async def desistir_reserva(
     request: Request,
     token_reserva: str = Form(...),
     session: AsyncSession = Depends(get_session)
 ):
-    await expirar_reservas_vencidas(session)
+    with _medir_etapa_reserva(request, "expiracao"):
+        await expirar_reservas_vencidas(session)
     _, current_browser_hash, _ = obter_ou_criar_browser_id(request)
 
     stmt = select(ReservaIngresso).where(
         ReservaIngresso.token == token_reserva
     )
-    res = await session.execute(stmt)
+    with _medir_etapa_reserva(request, "consulta_reserva"):
+        res = await session.execute(stmt)
     reserva = res.scalars().first()
 
     if reserva and reserva.status == "ativa" and not reserva.utilizada:
@@ -528,29 +572,32 @@ async def desistir_reserva(
         reserva.expira_em = datetime(2000, 1, 1, tzinfo=timezone.utc)
         session.add(reserva)
         try:
-            await session.commit()
+            with _medir_etapa_reserva(request, "commit"):
+                await session.commit()
         except Exception:
             await session.rollback()
             return JSONResponse(status_code=500, content={"sucesso": False, "mensagem": "Erro ao cancelar reserva."})
 
         # O coletor já consulta o lote e calcula as vagas após o commit.
-        status_lote = await coletar_status_lote_para_sse(session, reserva.lote_id)
+        with _medir_etapa_reserva(request, "status_sse"):
+            status_lote = await coletar_status_lote_para_sse(session, reserva.lote_id)
         # NOTIFY obtém sua própria conexão. Devolve a conexão de leitura antes
         # de publicá-lo para não esgotar o pool com duas conexões por chamada.
         await session.close()
         invalidar_cache_live_status()
-        await lote_event_hub.broadcast(
-            "LOTE_ATUALIZADO",
-            {
-                "tipo": "reserva_liberada",
-                "lote_id": reserva.lote_id,
-                "device_id": reserva.device_id,
-                "device_fingerprint": reserva.device_fingerprint,
-                "token_reserva": token_reserva,
-                "motivo": "desistencia",
-                **status_lote
-            }
-        )
+        with _medir_etapa_reserva(request, "publicacao_sse"):
+            await lote_event_hub.broadcast(
+                "LOTE_ATUALIZADO",
+                {
+                    "tipo": "reserva_liberada",
+                    "lote_id": reserva.lote_id,
+                    "device_id": reserva.device_id,
+                    "device_fingerprint": reserva.device_fingerprint,
+                    "token_reserva": token_reserva,
+                    "motivo": "desistencia",
+                    **status_lote
+                }
+            )
 
     response = JSONResponse(content={
         "sucesso": True,
@@ -565,6 +612,7 @@ async def desistir_reserva(
 # ============================================================================
 @router.get("/resgate/{lote_id}")
 @router.post("/api/lote/{lote_id}/reservar")
+@_medir_fluxo_reserva
 async def pagina_resgate(
     request: Request, 
     lote_id: int, 
@@ -581,7 +629,8 @@ async def pagina_resgate(
     client_ip = extrair_ip_cliente(request)
     
     # Expirar reservas vencidas com throttle
-    await expirar_reservas_vencidas(session)
+    with _medir_etapa_reserva(request, "expiracao"):
+        await expirar_reservas_vencidas(session)
 
     # Mantém o cookie legado na resposta, mas não o usa para localizar a reserva.
     browser_token, _, _ = obter_ou_criar_browser_id(request)
@@ -600,7 +649,10 @@ async def pagina_resgate(
 
     # 1. Busca o Lote com bloqueio atômico para controle de concorrência
     stmt_lote = select(Lote).where(Lote.id == lote_id).with_for_update()
-    res_lote = await session.execute(stmt_lote)
+    with _medir_etapa_reserva(request, "obter_conexao"):
+        await session.connection()
+    with _medir_etapa_reserva(request, "lock_lote"):
+        res_lote = await session.execute(stmt_lote)
     lote = res_lote.scalars().first()
     if not lote or not lote.ativo:
         msg = "Este lote está temporariamente pausado ou inativo pela organização."
@@ -638,7 +690,8 @@ async def pagina_resgate(
             ReservaIngresso.criada_em < agora_busca,
             ReservaIngresso.expira_em > agora_busca,
         ).order_by(desc(ReservaIngresso.expira_em))
-        reserva_existente = (await session.execute(stmt_fingerprint)).scalars().first()
+        with _medir_etapa_reserva(request, "busca_fingerprint"):
+            reserva_existente = (await session.execute(stmt_fingerprint)).scalars().first()
 
     if not reserva_existente and device_id_reserva:
         agora_busca = datetime.now(timezone.utc)
@@ -648,7 +701,8 @@ async def pagina_resgate(
             ReservaIngresso.criada_em < agora_busca,
             ReservaIngresso.expira_em > agora_busca,
         ).order_by(desc(ReservaIngresso.expira_em))
-        reserva_existente = (await session.execute(stmt_device_id)).scalars().first()
+        with _medir_etapa_reserva(request, "busca_device_id"):
+            reserva_existente = (await session.execute(stmt_device_id)).scalars().first()
 
     if reserva_existente and reserva_existente.lote_id != lote.id:
         msg = "Este dispositivo já possui uma reserva ativa em outro lote. Conclua ou desista dela antes de tentar outro lote."
@@ -685,7 +739,8 @@ async def pagina_resgate(
                 ReservaIngresso.expira_em > agora
             )
         )
-        res_count = await session.execute(stmt_reservas)
+        with _medir_etapa_reserva(request, "contagem_vagas"):
+            res_count = await session.execute(stmt_reservas)
         reservas_ativas = res_count.scalar() or 0
 
         vagas_disponiveis = lote.quantidade_total - (lote.quantidade_resgatada + reservas_ativas)
@@ -705,7 +760,9 @@ async def pagina_resgate(
 
         # 5. Rate limit atômico por IP compartilhado via PostgreSQL
         chave_rate_limit = _chave_rate_limit_reserva(request, lote.id, fingerprint_reserva, client_ip)
-        if not await verificar_e_registrar_rate_limit_db(chave_rate_limit, session):
+        with _medir_etapa_reserva(request, "limitador"):
+            permitido = await verificar_e_registrar_rate_limit_db(chave_rate_limit, session)
+        if not permitido:
             msg_ratelimit = "Muitas tentativas de reserva a partir deste IP. Aguarde um instante e tente novamente."
             if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
                 return JSONResponse(status_code=429, content={"codigo": "rate_limit", "detail": msg_ratelimit, "mensagem": msg_ratelimit})
@@ -731,7 +788,8 @@ async def pagina_resgate(
         )
         session.add(nova_reserva)
         try:
-            await session.commit()
+            with _medir_etapa_reserva(request, "commit"):
+                await session.commit()
         except IntegrityError:
             # Proteção contra corrida concorrente no PostgreSQL (rollback limpo sem 500)
             await session.rollback()
@@ -766,24 +824,26 @@ async def pagina_resgate(
         reserva_expira_em_ms = server_time_ms + restante_ms
 
         # Transmite via SSE com contadores consistentes pós-commit.
-        status_lote = await coletar_status_lote_para_sse(session, lote.id)
+        with _medir_etapa_reserva(request, "status_sse"):
+            status_lote = await coletar_status_lote_para_sse(session, lote.id)
         await session.close()
         invalidar_cache_live_status()
-        await lote_event_hub.broadcast(
-            "LOTE_ATUALIZADO",
-            {
-                "tipo": "reserva_criada",
-                "lote_id": lote.id,
-                "device_id": nova_reserva.device_id,
-                "device_fingerprint": nova_reserva.device_fingerprint,
-                "token_reserva": token_reserva,
-                "server_time_ms": server_time_ms,
-                "expira_em_ms": reserva_expira_em_ms,
-                "segundos_restantes": tempo_restante_segundos,
-                "milissegundos_restantes": restante_ms,
-                **status_lote
-            }
-        )
+        with _medir_etapa_reserva(request, "publicacao_sse"):
+            await lote_event_hub.broadcast(
+                "LOTE_ATUALIZADO",
+                {
+                    "tipo": "reserva_criada",
+                    "lote_id": lote.id,
+                    "device_id": nova_reserva.device_id,
+                    "device_fingerprint": nova_reserva.device_fingerprint,
+                    "token_reserva": token_reserva,
+                    "server_time_ms": server_time_ms,
+                    "expira_em_ms": reserva_expira_em_ms,
+                    "segundos_restantes": tempo_restante_segundos,
+                    "milissegundos_restantes": restante_ms,
+                    **status_lote
+                }
+            )
 
     secure_flag = is_conexao_segura(request)
 

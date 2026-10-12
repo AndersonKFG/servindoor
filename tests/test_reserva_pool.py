@@ -16,12 +16,43 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel, select
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from app.core.config import settings
 from app.db.session import engine
 from app.models.all_models import Lote, RateLimitTentativa, ReservaIngresso
 from app.routers import resgate
 from app.routers.public import _obter_prazo_reserva_sse
+
+
+class TestMedicaoReserva(unittest.IsolatedAsyncioTestCase):
+    async def test_registra_tempo_sem_identificadores_e_preserva_resposta(self):
+        request = Request({"type": "http", "headers": []})
+
+        @resgate._medir_fluxo_reserva
+        async def fluxo(request):
+            with resgate._medir_etapa_reserva(request, "lock_lote"):
+                pass
+            return JSONResponse({"token_reserva": "nao_deve_aparecer_no_log"})
+
+        with patch.object(resgate.time, "perf_counter", side_effect=[0, 0, 1.1, 1.2]), \
+             patch.object(resgate.logger, "warning") as log:
+            resposta = await fluxo(request)
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(request.state.reserva_tempos, {"lock_lote": 1100.0})
+        log.assert_called_once()
+        self.assertNotIn("nao_deve_aparecer_no_log", str(log.call_args))
+
+    async def test_assinaturas_http_preservadas(self):
+        from fastapi import FastAPI
+        app = FastAPI()
+        app.include_router(resgate.router)
+        schema = app.openapi()
+        parametros = schema["paths"]["/api/lote/{lote_id}/reservar"]["post"]["parameters"]
+        self.assertEqual({p["name"] for p in parametros}, {
+            "lote_id", "device_fingerprint", "device_id", "cpf"
+        })
+        self.assertIn("requestBody", schema["paths"]["/api/resgate/desistir"]["post"])
 
 
 class TestReservaPool(unittest.IsolatedAsyncioTestCase):
