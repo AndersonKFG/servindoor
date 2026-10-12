@@ -34,7 +34,7 @@ WITH atividade AS MATERIALIZED (
   WHERE datname = current_database()
     AND backend_type = 'client backend' AND pid <> pg_backend_pid()
 )
-SELECT clock_timestamp() AT TIME ZONE 'UTC' AS instante_utc, pid, state, wait_event_type, wait_event,
+SELECT statement_timestamp() AT TIME ZONE 'UTC' AS instante_utc, pid, state, wait_event_type, wait_event,
        ROUND(EXTRACT(EPOCH FROM (clock_timestamp() - xact_start)) * 1000) AS transacao_ms,
        ROUND(EXTRACT(EPOCH FROM (clock_timestamp() - query_start)) * 1000) AS consulta_ms,
        bloqueadores, operacao

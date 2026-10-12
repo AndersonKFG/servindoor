@@ -315,6 +315,16 @@ desde o início da última consulta, não uma medida da duração daquela consul
 As amostras podem perder bloqueios curtos entre coletas. Não representam toda a
 latência HTTP, a fila do pool na aplicação nem o uso de CPU do servidor.
 
+Para copiar um resumo pelo console, sem baixar o CSV, aguarde a coleta terminar:
+
+```bash
+python3 tools/carga/resumir_banco.py
+```
+
+O comando lê o CSV mais recente e mostra estados, esperas e até cinco cadeias de
+bloqueadores. Para escolher outra coleta, passe o caminho do CSV como argumento.
+O resumo é uma seleção das amostras; o arquivo original continua disponível.
+
 ## Limites deste roteiro
 
 - Não executa 4.000 navegadores completos: carrega HTML e simula o protocolo/API.
