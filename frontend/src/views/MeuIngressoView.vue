@@ -727,7 +727,7 @@ async function handleConcluirCancelamento() {
 
         <button
           type="button"
-          class="btn-action-primary btn-cancel-confirm font-outfit mt-4 cancel-selfie-submit"
+          class="btn btn-danger-critical btn-action-primary btn-cancel-confirm font-outfit mt-4 w-100 cancel-selfie-submit"
           :disabled="!fotoAoVivo || loadingEnviarFoto"
           @click="handleConcluirCancelamento"
         >
