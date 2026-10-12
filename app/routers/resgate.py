@@ -183,38 +183,45 @@ def obter_ou_criar_browser_id(request: Request) -> tuple[str, str, bool]:
 
 async def verificar_e_registrar_rate_limit_db(ip: str, session: Optional[AsyncSession] = None) -> bool:
     """
-    Rate limiter atômico compartilhado via banco de dados entre múltiplos workers do Gunicorn.
-    Utiliza sessão dedicada independente para NUNCA comitar ou liberar prematuramente
-    o lock de transação ('SELECT ... FOR UPDATE') da sessão principal do chamador.
+    Registra o limite sem obter outra conexão enquanto o chamador bloqueia o lote.
+    O savepoint isola falhas do limitador sem comitar a transação da reserva nem
+    liberar seu SELECT FOR UPDATE. Sem sessão fornecida, usa transação própria.
     """
     agora_utc = datetime.now(timezone.utc)
     limite_janela = agora_utc - timedelta(seconds=_RATE_LIMIT_WINDOW_SECONDS)
 
+    async def registrar(rl_session: AsyncSession) -> bool:
+        stmt_count = select(func.count(RateLimitTentativa.id)).where(
+            RateLimitTentativa.ip == ip,
+            RateLimitTentativa.acao == "reserva",
+            RateLimitTentativa.criado_em > limite_janela
+        )
+        res = await rl_session.execute(stmt_count)
+        total_tentativas = res.scalar() or 0
+
+        if total_tentativas >= _RATE_LIMIT_MAX_REQUISICOES:
+            return False
+
+        registro = RateLimitTentativa(ip=ip, acao="reserva", criado_em=agora_utc)
+        rl_session.add(registro)
+        await rl_session.flush()
+
+        # Limpeza periódica leve (2% das chamadas) de registros com mais de 10 minutos
+        if secrets.randbelow(50) == 0:
+            corte_antigo = agora_utc - timedelta(minutes=10)
+            stmt_del = delete(RateLimitTentativa).where(RateLimitTentativa.criado_em < corte_antigo)
+            await rl_session.execute(stmt_del)
+
+        return True
+
     try:
+        if session is not None:
+            async with session.begin_nested():
+                return await registrar(session)
         async with async_session() as rl_session:
-            stmt_count = select(func.count(RateLimitTentativa.id)).where(
-                RateLimitTentativa.ip == ip,
-                RateLimitTentativa.acao == "reserva",
-                RateLimitTentativa.criado_em > limite_janela
-            )
-            res = await rl_session.execute(stmt_count)
-            total_tentativas = res.scalar() or 0
-
-            if total_tentativas >= _RATE_LIMIT_MAX_REQUISICOES:
-                return False
-
-            registro = RateLimitTentativa(ip=ip, acao="reserva", criado_em=agora_utc)
-            rl_session.add(registro)
+            permitido = await registrar(rl_session)
             await rl_session.commit()
-
-            # Limpeza periódica leve (2% das chamadas) de registros com mais de 10 minutos
-            if secrets.randbelow(50) == 0:
-                corte_antigo = agora_utc - timedelta(minutes=10)
-                stmt_del = delete(RateLimitTentativa).where(RateLimitTentativa.criado_em < corte_antigo)
-                await rl_session.execute(stmt_del)
-                await rl_session.commit()
-
-            return True
+            return permitido
     except Exception:
         return True
 
@@ -526,20 +533,11 @@ async def desistir_reserva(
             await session.rollback()
             return JSONResponse(status_code=500, content={"sucesso": False, "mensagem": "Erro ao cancelar reserva."})
 
-        # Recalcula contadores consistentes no banco apos commit
-        stmt_count = select(func.count(ReservaIngresso.id)).where(
-            ReservaIngresso.lote_id == reserva.lote_id,
-            ReservaIngresso.status == "ativa",
-            ReservaIngresso.expira_em > datetime.now(timezone.utc)
-        )
-        res_count = await session.execute(stmt_count)
-        reservas_ativas = res_count.scalar() or 0
-
-        stmt_lote = select(Lote).where(Lote.id == reserva.lote_id)
-        res_lote = await session.execute(stmt_lote)
-        lote_obj = res_lote.scalars().first()
-        vagas_disp = max(0, lote_obj.quantidade_total - (lote_obj.quantidade_resgatada + reservas_ativas)) if lote_obj else 0
-
+        # O coletor já consulta o lote e calcula as vagas após o commit.
+        status_lote = await coletar_status_lote_para_sse(session, reserva.lote_id)
+        # NOTIFY obtém sua própria conexão. Devolve a conexão de leitura antes
+        # de publicá-lo para não esgotar o pool com duas conexões por chamada.
+        await session.close()
         invalidar_cache_live_status()
         await lote_event_hub.broadcast(
             "LOTE_ATUALIZADO",
@@ -550,7 +548,7 @@ async def desistir_reserva(
                 "device_fingerprint": reserva.device_fingerprint,
                 "token_reserva": token_reserva,
                 "motivo": "desistencia",
-                **(await coletar_status_lote_para_sse(session, reserva.lote_id))
+                **status_lote
             }
         )
 
@@ -767,7 +765,9 @@ async def pagina_resgate(
         tempo_restante_segundos = (restante_ms + 999) // 1000
         reserva_expira_em_ms = server_time_ms + restante_ms
 
-        # Transmite via SSE com contadores consistentes pós-commit
+        # Transmite via SSE com contadores consistentes pós-commit.
+        status_lote = await coletar_status_lote_para_sse(session, lote.id)
+        await session.close()
         invalidar_cache_live_status()
         await lote_event_hub.broadcast(
             "LOTE_ATUALIZADO",
@@ -781,7 +781,7 @@ async def pagina_resgate(
                 "expira_em_ms": reserva_expira_em_ms,
                 "segundos_restantes": tempo_restante_segundos,
                 "milissegundos_restantes": restante_ms,
-                **(await coletar_status_lote_para_sse(session, lote.id))
+                **status_lote
             }
         )
 
