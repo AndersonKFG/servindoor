@@ -6,6 +6,7 @@ import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
+from email.utils import formataddr
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
@@ -34,6 +35,16 @@ def gerar_qrcode_png_bytes(data: str) -> Optional[bytes]:
         return None
 
 
+class _SMTPWithReceipt(smtplib.SMTP):
+    """Guarda apenas a resposta ao DATA, sem registrar credenciais ou mensagem."""
+    delivery_response: Optional[tuple[int, bytes]] = None
+
+    def data(self, msg):
+        result = super().data(msg)
+        self.delivery_response = result
+        return result
+
+
 def _send_smtp_email_sync(
     to_email: str,
     subject: str,
@@ -44,13 +55,16 @@ def _send_smtp_email_sync(
     from_name: Optional[str] = None,
     *,
     raise_on_error: bool = False,
+    queue_id: Optional[int] = None,
 ) -> bool:
     server = None
     try:
         msg = MIMEMultipart("related")
         msg["Subject"] = subject
         from_email = from_email or settings.SMTP_FROM
-        msg["From"] = f"{from_name or settings.SMTP_FROM_NAME} <{from_email}>"
+        # Com compat32, um nome acentuado sem formataddr pode codificar também
+        # o endereço inteiro como encoded-word, invalidando o cabeçalho From.
+        msg["From"] = formataddr((from_name or settings.SMTP_FROM_NAME, from_email))
         msg["To"] = to_email
 
         msg_alternative = MIMEMultipart("alternative")
@@ -69,12 +83,16 @@ def _send_smtp_email_sync(
             ticket_img.add_header("Content-Disposition", "inline", filename="ingresso_servindoor_2026.png")
             msg.attach(ticket_img)
 
-        server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15)
+        server = _SMTPWithReceipt(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15)
         server.starttls()
         if settings.SMTP_USER and settings.SMTP_PASSWORD:
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
         
         server.sendmail(from_email, [to_email], msg.as_string())
+        if server.delivery_response is not None:
+            code, response = server.delivery_response
+            receipt = response.decode("utf-8", errors="replace").replace("\r", " ").replace("\n", " ")[:1000]
+            logger.info("SMTP aceitou e-mail id=%s resposta=%s %s", queue_id, code, receipt)
         try:
             server.quit()
         except (smtplib.SMTPException, OSError):

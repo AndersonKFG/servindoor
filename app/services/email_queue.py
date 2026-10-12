@@ -139,6 +139,7 @@ async def email_queue_worker(stop_event: asyncio.Event) -> None:
                         row["recipient"], row["subject"], row["html_body"],
                         row["qr_image"], row["ticket_image"], sender[0], sender[1],
                         raise_on_error=True,
+                        queue_id=row["id"],
                     )
                 except Exception as exc:
                     ok = False
