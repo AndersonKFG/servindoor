@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # Servidor
     WORKERS_COUNT: int = 4
 
+    # Exceção temporária do limitador de reservas, exclusiva de testes de carga.
+    # Requer chave, lote e prazo explícitos; permanece desativada por padrão.
+    LOAD_TEST_SECRET: str = ""
+    LOAD_TEST_LOTE_ID: int = 0
+    LOAD_TEST_UNTIL: str = ""
+
     # Amazon SES / SMTP Servindoor
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587

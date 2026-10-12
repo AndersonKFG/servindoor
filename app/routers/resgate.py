@@ -51,6 +51,29 @@ _RATE_LIMIT_MAX_REQUISICOES = int(os.getenv("RATE_LIMIT_RESERVA_MAX_IP", "300"))
 # Estrutura e função para retrocompatibilidade com testes legados em memória
 _ip_reserva_requisicoes = {}
 
+def _chave_rate_limit_reserva(request: Request, lote_id: int, fingerprint: Optional[str], ip: str) -> str:
+    """Separa visitantes sintéticos somente durante um teste explicitamente autorizado."""
+    chave = settings.LOAD_TEST_SECRET
+    if len(chave) < 32 or lote_id != settings.LOAD_TEST_LOTE_ID:
+        return ip
+    if not fingerprint or not fingerprint.startswith("loadtest_") or len(fingerprint) > 100:
+        return ip
+    fornecida = request.headers.get("x-load-test-key", "")
+    if not secrets.compare_digest(fornecida.encode("utf-8"), chave.encode("utf-8")):
+        return ip
+    try:
+        limite = datetime.fromisoformat(settings.LOAD_TEST_UNTIL.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return ip
+    if limite.tzinfo is None:
+        return ip
+    restante = (limite - datetime.now(timezone.utc)).total_seconds()
+    if not 0 < restante <= 7200:
+        return ip
+    # O limitador e sua consulta continuam sendo exercitados. Cada visitante
+    # sintético recebe um contador próprio, sem alterar o IP salvo na reserva.
+    return f"loadtest:{ip}:{fingerprint}"
+
 def verificar_rate_limit_ip_reserva(ip: str, max_requisicoes: int = 60, janela_segundos: int = 60) -> bool:
     """Implementação em memória para retrocompatibilidade com testes unitários locais."""
     agora = time.time()
@@ -683,7 +706,8 @@ async def pagina_resgate(
             return templates.TemplateResponse(request=request, name="erro.html", context={"mensagem": msg})
 
         # 5. Rate limit atômico por IP compartilhado via PostgreSQL
-        if not await verificar_e_registrar_rate_limit_db(client_ip, session):
+        chave_rate_limit = _chave_rate_limit_reserva(request, lote.id, fingerprint_reserva, client_ip)
+        if not await verificar_e_registrar_rate_limit_db(chave_rate_limit, session):
             msg_ratelimit = "Muitas tentativas de reserva a partir deste IP. Aguarde um instante e tente novamente."
             if request.url.path.startswith("/api/") or "application/json" in request.headers.get("accept", ""):
                 return JSONResponse(status_code=429, content={"codigo": "rate_limit", "detail": msg_ratelimit, "mensagem": msg_ratelimit})
