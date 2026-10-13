@@ -230,7 +230,8 @@ function completeRedemption(token, headers) {
   const body = Object.entries(fields).map(([key, value]) =>
     `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`).join('') + `--${boundary}--\r\n`;
   const requestHeaders = { ...headers, 'X-Load-Test-Form': '1', 'Content-Type': `multipart/form-data; boundary=${boundary}` };
-  const send = name => http.post(`${base}/api/lote/${lot}/resgatar`, body, params(name, requestHeaders));
+  const loadKeyParam = __ENV.LOAD_TEST_SECRET ? `?load_test_key=${encodeURIComponent(__ENV.LOAD_TEST_SECRET)}` : '';
+  const send = name => http.post(`${base}/api/lote/${lot}/resgatar${loadKeyParam}`, body, params(name, requestHeaders));
   const decode = response => { try { return response.json(); } catch { return null; } };
   const isConfirmed = (response, result) => response.status === 200 && result?.sucesso === true
     && Number.isInteger(result.solicitacao_id) && result.solicitacao_id > 0
