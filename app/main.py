@@ -10,12 +10,13 @@ from fastapi.responses import FileResponse
 from sqlmodel import select
 
 from app.core.config import settings
+from app.core.events import lote_event_hub
+from app.core.http_protection import HttpProtectionMiddleware
 from app.db.session import async_session, init_db
 from app.models.all_models import Ingresso, SolicitacaoCancelamento, SolicitacaoValidacao, Usuario
 
 # Importando as rotas separadas
 from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq, sponsor_logos
-from app.routers.gatekeeper import validar_token_gatekeeper
 
 _MAX_RESGATE_BODY_BYTES = 6 * 1024 * 1024
 
@@ -68,18 +69,11 @@ async def lifespan(app: FastAPI):
             import asyncpg
             from sqlalchemy import text
             from app.db.session import engine
-            from app.core.events import lote_event_hub
 
             async def _send_pg_notify(payload_str: str):
-                try:
-                    async with engine.connect() as conn:
-                        await conn.execute(
-                            text("SELECT pg_notify('lote_events', :payload)"),
-                            {"payload": payload_str}
-                        )
-                        await conn.commit()
-                except Exception as e:
-                    pass
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT pg_notify('lote_events', :payload)"), {"payload": payload_str})
+                    await conn.commit()
 
             lote_event_hub.register_pg_sender(_send_pg_notify)
 
@@ -88,6 +82,7 @@ async def lifespan(app: FastAPI):
                 if "?sslmode=require" in db_url:
                     db_url = db_url.replace("?sslmode=require", "")
                 while True:
+                    conn = None
                     try:
                         conn = await asyncpg.connect(db_url)
                         def _on_notify(c, pid, channel, payload):
@@ -100,6 +95,9 @@ async def lifespan(app: FastAPI):
                         break
                     except Exception:
                         await asyncio.sleep(5)
+                    finally:
+                        if conn is not None:
+                            await conn.close()
 
             listen_task = asyncio.create_task(_pg_listener_worker())
         except Exception:
@@ -108,88 +106,32 @@ async def lifespan(app: FastAPI):
     email_worker_stop = asyncio.Event()
     from app.services.email_queue import email_queue_worker
     email_worker_task = asyncio.create_task(email_queue_worker(email_worker_stop))
+    from app.services.resgate_jobs import resgate_jobs_worker
+    external_worker_task = asyncio.create_task(resgate_jobs_worker(email_worker_stop))
+    maintenance_task = asyncio.create_task(resgate.reserva_maintenance_worker(email_worker_stop))
 
-    yield
-    email_worker_stop.set()
-    email_worker_task.cancel()
+    async def _public_snapshot(lote_id):
+        async with async_session() as session:
+            return await public.coletar_status_lote_para_sse(session, lote_id)
+
+    lote_event_hub.start_reservation_publisher(_public_snapshot)
+    await resgate.reserva_batch_service.start()
     try:
-        await email_worker_task
-    except asyncio.CancelledError:
-        pass
-    if listen_task:
-        listen_task.cancel()
+        yield
+    finally:
+        email_worker_stop.set()
+        await resgate.reserva_batch_service.stop()
+        await lote_event_hub.stop_reservation_publisher()
+        tasks = [email_worker_task, external_worker_task, maintenance_task]
+        if listen_task:
+            tasks.append(listen_task)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     print("🛑 Desligando sistema...")
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
-
-@app.middleware("http")
-async def limitar_corpo_resgate(request: Request, call_next):
-    if request.method != "POST" or not request.url.path.startswith("/api/resgate/"):
-        return await call_next(request)
-
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > _MAX_RESGATE_BODY_BYTES:
-                return JSONResponse(status_code=413, content={"detail": "A imagem excede o limite de 4 MB."})
-        except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "Tamanho da requisição inválido."})
-
-    body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > _MAX_RESGATE_BODY_BYTES:
-            return JSONResponse(status_code=413, content={"detail": "A imagem excede o limite de 4 MB."})
-    request._body = bytes(body)
-    return await call_next(request)
-
-# Middleware de Proteção Gatekeeper (Intercepta chamadas /api/* não autorizadas)
-from fastapi.responses import JSONResponse
-
-@app.middleware("http")
-async def gatekeeper_api_protection(request: Request, call_next):
-    if not settings.GATEKEEPER_ENABLED:
-        return await call_next(request)
-
-    path = request.url.path
-
-    # Permite arquivos estáticos, rotas do próprio gatekeeper, rotas de consulta pública e assets
-    if (
-        path.startswith("/api/gatekeeper/")
-        or path.startswith("/api/meu-ingresso/")
-        or path == "/api/sorteios/meus-premios"
-        or path == "/api/time"
-        or path.startswith("/api/lote/live-status")
-        or path.startswith("/api/lote/stream")
-        or path.startswith("/api/faq")
-        or path.startswith("/api/sponsor-logos")
-        or path.startswith("/static/")
-        or path.startswith("/assets/")
-        or path.startswith("/images/")
-        or path in ["/favicon.ico", "/servindooricon.ico"]
-    ):
-        return await call_next(request)
-
-    # Se for uma rota de API, verifica autorização do dispositivo
-    if path.startswith("/api/"):
-        token = request.cookies.get(settings.SITE_ACCESS_COOKIE_NAME)
-        if not token:
-            token = request.headers.get("x-gatekeeper-token")
-        
-        if not validar_token_gatekeeper(token):
-            # Se não tem o token do gatekeeper, checa se há sessão de usuário autenticado
-            user_cookie = request.cookies.get("access_token")
-            if not user_cookie:
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "detail": "Acesso não autorizado. Código de liberação necessário.",
-                        "gatekeeper_required": True
-                    }
-                )
-
-    return await call_next(request)
-
+app.add_middleware(HttpProtectionMiddleware, max_body_bytes=_MAX_RESGATE_BODY_BYTES)
 
 
 # Compressão GZip para respostas rápidas e menor tráfego de rede

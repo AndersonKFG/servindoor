@@ -112,6 +112,7 @@ export function useLoteStatus(loteIdParam = null) {
   const loteEncerradoRecente = ref(null)
 
   const lastStateVersion = ref(null)
+  const receivedPrivateEvents = new Set()
   let isSSEActive = false
 
   function aplicarDadosCompletos(data) {
@@ -195,7 +196,8 @@ export function useLoteStatus(loteIdParam = null) {
       : Number.isFinite(restantePeloServidorMs) && restantePeloServidorMs >= 0
         ? Date.now() + restantePeloServidorMs
         : data.minha_reserva_expira_em_ms
-    minhaReservaToken.value = data.minha_reserva_token
+    if (data.minha_reserva_token) minhaReservaToken.value = data.minha_reserva_token
+    else if (data.minha_reserva_expira_em_ms == null) minhaReservaToken.value = null
     loading.value = false
   }
 
@@ -249,7 +251,14 @@ export function useLoteStatus(loteIdParam = null) {
           const loteAtualId = lote.value?.id || lotePrevisaoId.value
 
           const eventVersion = Number(event.lastEventId || data.state_version || 0)
-          if (eventVersion) {
+          if (event.type === 'RESERVA_ATUALIZADA' && data.event_id) {
+            if (receivedPrivateEvents.has(data.event_id)) return
+            receivedPrivateEvents.add(data.event_id)
+            if (receivedPrivateEvents.size > 256) receivedPrivateEvents.delete(receivedPrivateEvents.values().next().value)
+          }
+          // Eventos privados podem chegar de workers com relógios diferentes.
+          // Seu UUID evita duplicatas sem perder uma confirmação legítima.
+          if (eventVersion && event.type !== 'RESERVA_ATUALIZADA') {
             if (lastStateVersion.value && eventVersion <= Number(lastStateVersion.value)) return
             lastStateVersion.value = eventVersion
           }
@@ -272,12 +281,12 @@ export function useLoteStatus(loteIdParam = null) {
             return
           }
           // 1. Sincronização direta de reserva para o próprio dispositivo em tempo real (<5ms)
-          const correspondeAoNavegador = (data.device_id && data.device_id === myFp) ||
+          const correspondeAoNavegador = (data.device_id && data.device_id === getDeviceId()) ||
             (data.token_reserva && data.token_reserva === minhaReservaToken.value)
           const correspondeAoFingerprint = data.device_fingerprint && data.device_fingerprint === myFp
           if (correspondeAoNavegador || correspondeAoFingerprint) {
             if (data.tipo === 'reserva_criada') {
-              if (correspondeAoNavegador) minhaReservaToken.value = data.token_reserva
+              if (correspondeAoNavegador && data.token_reserva) minhaReservaToken.value = data.token_reserva
               minhaReservaSegundos.value = data.segundos_restantes
               const restanteReservaMs = Number(data.milissegundos_restantes)
               minhaReservaExpiraEmMs.value = Number.isFinite(restanteReservaMs) && restanteReservaMs >= 0

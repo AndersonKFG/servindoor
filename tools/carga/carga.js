@@ -1,6 +1,7 @@
 import http from 'k6/http';
 import sse from 'k6/x/sse';
 import exec from 'k6/execution';
+import encoding from 'k6/encoding';
 import { check, sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 
@@ -11,14 +12,24 @@ const lot = Number(__ENV.TEST_LOTE_ID || 0);
 const run = __ENV.TEST_RUN_ID || '';
 const forceHTTP1 = (__ENV.GODEBUG || '').split(',').includes('http2client=0');
 const profile = __ENV.LOAD_PROFILE || 'normal';
+const secretary = Number(__ENV.TEST_SECRETARIA_ID || 0);
+const controlledEmail = __ENV.LOAD_TEST_EMAIL || '';
+const testsReservations = mode === 'reservas' || mode === 'resgate';
 if (!/^https?:\/\/[^/?#]+$/.test(base) || base.includes('@')) throw new Error('Informe uma URL sem caminho, query ou credenciais.');
-if (!['home', 'reservas'].includes(mode)) throw new Error('Modo inválido.');
+if (!['home', 'reservas', 'resgate'].includes(mode)) throw new Error('Modo inválido.');
 if (![10, 100, 500, 1000, 2000, 3000, 4000].includes(maximum)) throw new Error('Limite inválido.');
-if (mode === 'reservas' && maximum > 2000) throw new Error('O teste de reservas aceita até 2000 visitantes.');
+if (testsReservations && maximum > 2000) throw new Error('Reservas e resgate aceitam até 2000 visitantes.');
 if (!['normal', 'diagnostico'].includes(profile)) throw new Error('Perfil inválido.');
 if (profile === 'diagnostico' && (mode !== 'home' || maximum > 1000)) throw new Error('O diagnóstico curto permite somente home, até 1000 visitantes.');
 if (!/^[a-zA-Z0-9_-]{1,50}$/.test(run)) throw new Error('Identificação do teste inválida.');
-if (mode === 'reservas' && (!Number.isInteger(lot) || lot < 1 || !__ENV.LOAD_TEST_SECRET)) throw new Error('Reservas exigem lote de teste e chave temporária.');
+if (testsReservations && (!Number.isInteger(lot) || lot < 1 || !__ENV.LOAD_TEST_SECRET)) throw new Error('Reservas e resgate exigem lote de teste e chave temporária.');
+if (mode === 'resgate' && (!Number.isInteger(secretary) || secretary < 1
+  || !/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(controlledEmail)
+  || __ENV.LOAD_TEST_EMAIL_CONFIRMED !== 'ENVIAR_EMAILS')) {
+  throw new Error('Resgate exige secretaria válida, e-mail controlado e confirmação ENVIAR_EMAILS.');
+}
+// JPEG sintético de 320x240, sem pessoa real: mede upload e gravação da foto.
+const testPhoto = mode === 'resgate' ? 'data:image/jpeg;base64,' + encoding.b64encode(open('./foto_teste.jpg', 'b')) : '';
 
 const stages = [];
 if (profile === 'diagnostico') {
@@ -48,10 +59,19 @@ const soldOut = new Counter('reservas_sem_vaga_esgotado');
 const reservationFailures = new Rate('reserva_falhas_tecnicas');
 const homeFailures = new Rate('home_falhas');
 const homeTime = new Trend('home_total_ms', true);
+const formTime = new Trend('resgate_formulario_ms', true);
+const formFailures = new Rate('resgate_falhas_tecnicas');
+const idempotentOK = new Rate('resgate_idempotencia_ok');
+const recoveredOK = new Rate('resgate_recuperacao_ok');
+const confirmedForms = new Counter('resgates_confirmados');
+const repeatedCPFs = new Counter('resgates_cpf_ja_atendido');
+const submittedForms = new Counter('resgates_formularios_enviados');
 let reservationDiagnostics = 0;
 
 export const options = {
-  scenarios: { visitantes: { executor: 'ramping-vus', startVUs: 0, stages, gracefulRampDown: '0s', gracefulStop: '0s' } },
+  scenarios: { visitantes: mode === 'resgate'
+    ? { executor: 'per-vu-iterations', vus: maximum, iterations: 1, maxDuration: '10m', gracefulStop: '30s' }
+    : { executor: 'ramping-vus', startVUs: 0, stages, gracefulRampDown: '0s', gracefulStop: '0s' } },
   // Evita milhares de séries de métricas com fingerprints/URLs/tokens únicos.
   systemTags: ['name', 'method', 'status', 'scenario', 'expected_response', 'error_code', 'proto', 'check'],
   userAgent: 'Servindoor-LoadTest/1.0',
@@ -60,11 +80,19 @@ export const options = {
     checks: [{ threshold: 'rate>0.99', abortOnFail: true, delayAbortEval: '30s' }],
     sse_falhas: [{ threshold: 'rate<0.01', abortOnFail: true, delayAbortEval: '30s' }],
     sse_estado_ms: ['p(95)<3000'],
+    ...(testsReservations ? {
+      reserva_resposta_ms: ['p(95)<3000'],
+      reserva_falhas_tecnicas: [{ threshold: 'rate<0.01', abortOnFail: true, delayAbortEval: '30s' }],
+    } : {}),
     ...(mode === 'reservas' ? {
-      reserva_continuidade_ok: ['rate==1'], reserva_resposta_ms: ['p(95)<3000'],
+      reserva_continuidade_ok: ['rate==1'],
       reserva_token_f5_ok: ['rate==1'], reserva_prazo_sse_ok: ['rate==1'],
       reserva_desistencia_ok: ['rate==1'],
-      reserva_falhas_tecnicas: [{ threshold: 'rate<0.01', abortOnFail: true, delayAbortEval: '30s' }],
+    } : {}),
+    ...(mode === 'resgate' ? {
+      resgate_formulario_ms: ['p(95)<3000'], resgate_idempotencia_ok: ['rate==1'],
+      resgate_falhas_tecnicas: [{ threshold: 'rate<0.01', abortOnFail: true, delayAbortEval: '30s' }],
+      resgates_confirmados: ['count>0'],
     } : {}),
   },
 };
@@ -87,9 +115,18 @@ export function setup() {
     gateToken = access.json('token');
   }
   const preflight = stream('loadtest_' + run + '_preflight', gateToken, { snapshotOnly: true, timeout: '10s' });
-  if (!preflight || (mode === 'reservas' && Number(preflight.id) !== lot)) throw new Error('O SSE não entregou o estado esperado. Confira o lote/Cloudflare antes da carga.');
-  if (mode === 'reservas' && !preflight.pode_resgatar) throw new Error('O lote de teste não está aberto para resgates.');
-  if (mode === 'reservas') { accepted.add(0); filling.add(0); soldOut.add(0); }
+  if (!preflight || (testsReservations && Number(preflight.id) !== lot)) throw new Error('O SSE não entregou o estado esperado. Confira o lote/Cloudflare antes da carga.');
+  if (testsReservations && !preflight.pode_resgatar) throw new Error('O lote de teste não está aberto para resgates.');
+  if (testsReservations) { accepted.add(0); filling.add(0); soldOut.add(0); }
+  if (mode === 'resgate') {
+    const departments = http.get(`${base}/api/secretarias`, params('secretarias_setup', { 'X-Gatekeeper-Token': gateToken }));
+    let available = null;
+    try { available = departments.json(); } catch {}
+    if (departments.status !== 200 || !Array.isArray(available) || !available.some(item => Number(item.id) === secretary)) {
+      throw new Error('A secretaria escolhida não foi encontrada. Nenhum formulário foi enviado.');
+    }
+    confirmedForms.add(0); repeatedCPFs.add(0); submittedForms.add(0);
+  }
   console.log(`Teste ${run}: ${mode}, perfil ${profile}, até ${maximum} visitantes, HTTP ${forceHTTP1 ? '1.1 forçado' : 'automático'}. Ctrl+C interrompe.`);
   return { gateToken };
 }
@@ -111,7 +148,7 @@ function stream(fingerprint, gateToken, config = {}) {
   let failed = false;
   let ready = false;
   const headers = { 'X-Gatekeeper-Token': gateToken, 'X-Device-Fingerprint': fingerprint };
-  const query = `device_fingerprint=${encodeURIComponent(fingerprint)}${mode === 'reservas' ? `&lote_id=${lot}` : ''}`;
+  const query = `device_fingerprint=${encodeURIComponent(fingerprint)}${testsReservations ? `&lote_id=${lot}` : ''}`;
   try {
     sse.open(`${base}/api/lote/stream?${query}`, {
       headers, timeout: config.timeout || '120s', tags: { name: 'lote_stream' },
@@ -156,6 +193,7 @@ function stream(fingerprint, gateToken, config = {}) {
               });
             }
           }
+          if (config.onSnapshot) config.onSnapshot(state);
           if (config.snapshotOnly) { intentional = true; client.close(); return; }
         }
         // A extensão entrega também os comentários (: ping), permitindo encerrar
@@ -166,6 +204,84 @@ function stream(fingerprint, gateToken, config = {}) {
   } catch { failed = true; }
   failures.add(failed || !ready || !intentional);
   return ready ? state : null;
+}
+
+function syntheticCPF() {
+  // Cada décimo VU usa o CPF do VU anterior, com dispositivo diferente.
+  const visitor = exec.vu.idInTest % 10 === 0 ? exec.vu.idInTest - 1 : exec.vu.idInTest;
+  let seed = 2166136261;
+  for (let index = 0; index < run.length; index++) seed = Math.imul(seed ^ run.charCodeAt(index), 16777619) >>> 0;
+  const digits = String(100000000 + seed % 898990000 + visitor).split('').map(Number);
+  for (const weight of [10, 11]) {
+    const sum = digits.reduce((total, digit, index) => total + digit * (weight - index), 0);
+    const remainder = sum % 11;
+    digits.push(remainder < 2 ? 0 : 11 - remainder);
+  }
+  return digits.join('');
+}
+
+function completeRedemption(token, headers) {
+  const boundary = `servindoor-${run}-${exec.vu.idInTest}`;
+  const fields = {
+    token_reserva: token, cpf: syntheticCPF(), nome: `TESTE CARGA ${run} VU ${exec.vu.idInTest}`,
+    data_nascimento: '1990-01-01', setor: `TESTE_CARGA_${run}`, secretaria_id: String(secretary),
+    vinculo: 'Efetivo', telefone: '81999999999', email: controlledEmail, foto_base64: testPhoto,
+  };
+  const body = Object.entries(fields).map(([key, value]) =>
+    `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`).join('') + `--${boundary}--\r\n`;
+  const requestHeaders = { ...headers, 'X-Load-Test-Form': '1', 'Content-Type': `multipart/form-data; boundary=${boundary}` };
+  const send = name => http.post(`${base}/api/lote/${lot}/resgatar`, body, params(name, requestHeaders));
+  const decode = response => { try { return response.json(); } catch { return null; } };
+  const isConfirmed = (response, result) => response.status === 200 && result?.sucesso === true
+    && Number.isInteger(result.solicitacao_id) && result.solicitacao_id > 0
+    && typeof result.token === 'string' && result.token.length > 0 && typeof result.redirect_url === 'string';
+  const isDuplicate = (response, result) => response.status === 409 && result?.codigo === 'cpf_ja_atendido';
+  const diagnose = (stage, response, result) => diagnosticReservation(stage, {
+    status: response.status, error_code: response.error_code || 0,
+    codigo_api: typeof result?.codigo === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(result.codigo) ? result.codigo : null,
+    total_ms: response.timings.duration, cf_ray: response.headers?.['Cf-Ray'] || null,
+    resposta_json: result !== null,
+  });
+
+  // A conexão SSE permanece aberta enquanto esse callback envia o formulário.
+  // Não reproduz digitação/câmera de navegador: a foto já está preparada.
+  sleep(2 + Math.random() * 8);
+  submittedForms.add(1);
+  let response = send('resgatar_formulario');
+  formTime.add(response.timings.duration);
+  let result = decode(response);
+  const firstConfirmed = isConfirmed(response, result);
+  const firstDuplicate = isDuplicate(response, result);
+  formFailures.add(!firstConfirmed && !firstDuplicate);
+  if (!firstConfirmed && !firstDuplicate) {
+    diagnose('post_resgatar', response, result);
+    check(false, { 'formulário aceita cadastro ou informa CPF já atendido': value => value });
+    // Resposta perdida pode esconder um commit concluído. Repete exatamente o
+    // mesmo token/CPF/foto; não desiste de uma reserva com resultado incerto.
+    if (response.status === 0 || response.status === 200 || response.status >= 500 || response.status === 408 || response.status === 429) {
+      sleep(0.5);
+      response = send('resgatar_recuperar');
+      result = decode(response);
+      recoveredOK.add(isConfirmed(response, result));
+    }
+  } else check(true, { 'formulário aceita cadastro ou informa CPF já atendido': value => value });
+
+  if (isDuplicate(response, result)) {
+    repeatedCPFs.add(1);
+    const quit = http.post(`${base}/api/resgate/desistir`, { token_reserva: token }, params('desistir_cpf_ja_atendido', headers));
+    let released = false;
+    try { released = quit.status === 200 && quit.json('sucesso') === true; } catch {}
+    if (!check(released, { 'CPF já atendido encerra ciclo e libera sua reserva': value => value })) diagnose('desistir_cpf_ja_atendido', quit, decode(quit));
+    return;
+  }
+  if (!isConfirmed(response, result)) return;
+  confirmedForms.add(1);
+  const repeat = send('resgatar_repetir_confirmacao');
+  const repeated = decode(repeat);
+  const same = isConfirmed(repeat, repeated) && repeated.solicitacao_id === result.solicitacao_id
+    && repeated.token === result.token && repeated.redirect_url === result.redirect_url;
+  idempotentOK.add(same);
+  if (!check(same, { 'repetir confirmação preserva protocolo e resultado': value => value })) diagnose('post_resgatar_repetir', repeat, repeated);
 }
 
 export default function (data) {
@@ -207,16 +323,42 @@ export default function (data) {
   const success = reserved.status === 200 && typeof token === 'string' && token.length > 0;
   const capacity = reserved.status === 400 && ['em_preenchimento', 'esgotado'].includes(response?.codigo);
   reservationFailures.add(!success && !capacity);
+  if (!success && !capacity) {
+    // Registra o primeiro POST que efetivamente falhou, antes de o aborto
+    // cancelar F5/desistências em andamento. Nunca imprime corpo ou tokens.
+    const apiCode = response?.codigo || response?.code || response?.detail?.codigo;
+    diagnosticReservation('post_reservar', {
+      status: reserved.status,
+      codigo_api: typeof apiCode === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(apiCode) ? apiCode : null,
+      error_code: reserved.error_code || 0,
+      total_ms: reserved.timings.duration,
+      espera_ms: reserved.timings.waiting,
+      conexao_ms: reserved.timings.connecting,
+      cf_ray: reserved.headers?.['Cf-Ray'] || null,
+      resposta_json: response !== null,
+      token_presente: typeof token === 'string' && token.length > 0,
+    });
+  }
   if (!check(reserved, { 'reserva aceita ou sem vaga por lotação': () => success || capacity })) { sleep(5); return; }
   if (capacity) {
     if (response.codigo === 'em_preenchimento') filling.add(1);
     else soldOut.add(1);
+    if (mode === 'resgate') return;
     // Quem não conseguiu vaga continua acompanhando o SSE sem repetir o POST em loop.
     stream(fingerprint, data.gateToken);
     sleep(1 + Math.random() * 3);
     return;
   }
   accepted.add(1);
+  if (mode === 'resgate') {
+    let sent = false;
+    stream(fingerprint, data.gateToken, {
+      snapshotOnly: true, expectedToken: token,
+      onSnapshot: () => { sent = true; completeRedemption(token, headers); },
+    });
+    check(sent, { 'reserva aceita alcança envio do formulário': value => value });
+    return;
+  }
   try {
     const before = stream(fingerprint, data.gateToken, { snapshotOnly: true, expectedToken: token });
     if (!before || typeof before.minha_reserva_expira_em_ms !== 'number') return;
@@ -263,8 +405,17 @@ export function handleSummary(data) {
     sem_vaga_em_preenchimento_acumuladas: value('reservas_sem_vaga_em_preenchimento', 'count'),
     sem_vaga_esgotado_acumuladas: value('reservas_sem_vaga_esgotado', 'count'),
     falhas_tecnicas_reserva: value('reserva_falhas_tecnicas', 'rate'),
+    formularios_enviados: value('resgates_formularios_enviados', 'count'),
+    resgates_confirmados: value('resgates_confirmados', 'count'),
+    cpf_ja_atendido: value('resgates_cpf_ja_atendido', 'count'),
+    formulario_p95_ms: value('resgate_formulario_ms', 'p(95)'),
+    falhas_tecnicas_formulario: value('resgate_falhas_tecnicas', 'rate'),
+    confirmacao_idempotente: value('resgate_idempotencia_ok', 'rate'),
+    recuperacao_apos_falha: value('resgate_recuperacao_ok', 'rate'),
     verificacoes_ok: value('checks', 'rate'),
-    limites: 'VUs são visitantes programados; não comprovam conexões saudáveis simultâneas. Veja métricas por tempo e o servidor. Não cobre foto, emissão de ingresso ou e-mail.',
+    limites: mode === 'resgate'
+      ? 'Uma tentativa por VU, chegada direta. Foto JPEG sintética de 320x240; cadastra solicitação pendente e enfileira e-mail real no destino controlado. Não cobre câmera, aprovação, PDF do ingresso nem entrega SMTP. API externa é dispensada somente pela autorização temporária de teste.'
+      : 'VUs são visitantes programados; não comprovam conexões saudáveis simultâneas. Veja métricas por tempo e o servidor. Não cobre foto, emissão de ingresso ou e-mail.',
   };
   return {
     '/resultados/resumo.json': JSON.stringify({ report, metrics: data.metrics }, null, 2),

@@ -3,9 +3,9 @@ import os
 import json
 import asyncio
 import time
-import hashlib
 from datetime import datetime, timezone
 from typing import Optional, List, Dict
+from weakref import WeakValueDictionary
 from fastapi import APIRouter, Request, Depends, HTTPException, status, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, func, or_, and_, desc
 from sqlalchemy.orm import selectinload
 
-from app.db.session import get_session
+from app.db.session import get_session, async_session
 from app.models.all_models import Lote, Usuario, Ingresso, ReservaIngresso, UserRole
 from app.core.security import extrair_ip_cliente, formatar_iso_sp, formatar_data_sp, para_epoch_ms_sp, TZ_SAO_PAULO
 from app.core.events import lote_event_hub
@@ -26,10 +26,11 @@ DATA_FESTA_OBJ = datetime.fromisoformat(DATA_FESTA_ISO)
 VUE_INDEX_PATH = "app/static/dist/index.html"
 
 _live_status_cache: Dict[str, dict] = {}
+_live_status_locks = WeakValueDictionary()
 _CACHE_TTL = 1.5
 
 def invalidar_cache_live_status():
-    """Invalida o cache de live-status para refletir novas reservas, desistências e alterações de lote imediatamente"""
+    """Invalida o estado público em cada publicação agrupada ou alteração administrativa."""
     _live_status_cache.clear()
 
 lote_event_hub.register_cache_invalidator(invalidar_cache_live_status)
@@ -305,9 +306,8 @@ def _obter_browser_token_hash_public(request: Request) -> Optional[str]:
     valid_payload = validar_browser_token(tok)
     if valid_payload:
         return hash_token(valid_payload)
-    legacy = request.cookies.get("festa_device_id")
-    if legacy and len(legacy.strip()) >= 16:
-        return hashlib.sha256(legacy.strip().encode("utf-8")).hexdigest()
+    # O identificador legado continua disponível para localizar um prazo, mas
+    # um cookie sem assinatura não autoriza recuperar o token da reserva.
     return None
 
 
@@ -376,8 +376,7 @@ async def _obter_prazo_reserva_sse(
         return resultado
 
     reserva_forte = next((item for item in reservas_validas if (
-        (browser_hash and item[0].browser_token_hash == browser_hash) or
-        (legacy_device_id and item[0].device_id == legacy_device_id)
+        browser_hash and item[0].browser_token_hash == browser_hash
     )), None)
     reserva, _criada_em_utc, expira_em_utc = reserva_forte or max(
         reservas_validas,
@@ -398,15 +397,13 @@ async def _obter_prazo_reserva_sse(
     return resultado
 
 
-async def coletar_dados_live_status(
+async def _coletar_base_live_status(
     session: AsyncSession,
     request: Request,
     lote_id: Optional[int] = None,
-    device_id: Optional[str] = None
 ) -> dict:
-    """Coleta o estado completo consolidado de lote, contagem e reserva ativa deste dispositivo"""
+    """Carrega apenas os campos públicos compartilhados por todos os visitantes."""
     agora = datetime.now(timezone.utc)
-    dev_id = device_id or request.headers.get("x-device-fingerprint") or request.cookies.get("festa_device_id")
 
     server_time_ms = int(agora.timestamp() * 1000)
     cache_global_key = f"base_status_{lote_id or 0}"
@@ -418,11 +415,6 @@ async def coletar_dados_live_status(
         base_content["server_time_ms"] = server_time_ms
         base_content["server_time_iso"] = agora.isoformat()
 
-        target_lote_id = base_content.get("id")
-        prazo_reserva = await _obter_prazo_reserva_sse(
-            session, request, target_lote_id, dev_id, agora
-        )
-        base_content.update(prazo_reserva)
         base_content["state_version"] = lote_event_hub.state_version
 
         return base_content
@@ -548,10 +540,6 @@ async def coletar_dados_live_status(
             "status_info": status_info
         }
 
-    prazo_reserva = await _obter_prazo_reserva_sse(
-        session, request, lote.id, dev_id, agora
-    )
-
     final_content = {
         "has_lote": True,
         "modo_festa": False,
@@ -579,7 +567,10 @@ async def coletar_dados_live_status(
         "lote_encerrado_recente": lote_encerrado_info,
         "data_festa_iso": DATA_FESTA_ISO,
         "data_festa_formatada": "30/10/2026 às 12:00",
-        **prazo_reserva
+        "minha_reserva_segundos": None,
+        "minha_reserva_milissegundos": None,
+        "minha_reserva_expira_em_ms": None,
+        "minha_reserva_token": None,
     }
 
     # Salva no cache global
@@ -596,6 +587,66 @@ async def coletar_dados_live_status(
     return final_content
 
 
+def _base_cache_disponivel(cache_key: str, agora: datetime) -> Optional[dict]:
+    entry = _live_status_cache.get(cache_key)
+    if not entry or time.monotonic() - entry["time"] >= _CACHE_TTL:
+        return None
+    content = entry.get("content")
+    if not content:
+        return None
+    now_ms = int(agora.timestamp() * 1000)
+    abre = content.get("data_abertura_ms")
+    fecha = content.get("data_fechamento_ms")
+    if content.get("status_slug") == "agendado" and abre and now_ms >= abre:
+        return None
+    if content.get("status_slug") in ("aberto", "reservado") and fecha and now_ms >= fecha:
+        return None
+    return content
+
+
+async def coletar_dados_live_status(
+    session: AsyncSession,
+    request: Request,
+    lote_id: Optional[int] = None,
+    device_id: Optional[str] = None,
+) -> dict:
+    """Compartilha a consulta pública e resolve separadamente a reserva do dono.
+
+    Uma rajada de reconexões calcula a parte pública uma vez. Consultas privadas
+    continuam concorrentes e não passam por essa fila após o cache ser preenchido.
+    """
+    cache_key = f"base_status_{lote_id or 0}"
+    agora = datetime.now(timezone.utc)
+    base = _base_cache_disponivel(cache_key, agora)
+    if base is None:
+        lock = _live_status_locks.get(cache_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _live_status_locks[cache_key] = lock
+        async with lock:
+            agora = datetime.now(timezone.utc)
+            base = _base_cache_disponivel(cache_key, agora)
+            if base is None:
+                # A entrada anterior pode ter cruzado a abertura/fechamento;
+                # não deixe o carregador interno reutilizar esse estado antigo.
+                _live_status_cache.pop(cache_key, None)
+                base = await _coletar_base_live_status(session, request, lote_id=lote_id)
+                _live_status_cache[cache_key] = {
+                    "time": time.monotonic(), "content": dict(base),
+                }
+
+    agora = datetime.now(timezone.utc)
+    content = dict(base)
+    content["server_time_ms"] = int(agora.timestamp() * 1000)
+    content["server_time_iso"] = formatar_iso_sp(agora)
+    content["state_version"] = lote_event_hub.state_version
+    dev_id = device_id or request.headers.get("x-device-fingerprint") or request.cookies.get("festa_device_id")
+    content.update(await _obter_prazo_reserva_sse(
+        session, request, content.get("id"), dev_id, agora,
+    ))
+    return content
+
+
 @router.get("/api/lote/stream")
 async def stream_lote_eventos(
     request: Request,
@@ -605,18 +656,20 @@ async def stream_lote_eventos(
     session: AsyncSession = Depends(get_session)
 ):
     """
-    Canal Server-Sent Events (SSE) oficial em tempo real (<50ms).
-    Notifica instantaneamente todos os clientes conectados sobre alterações de lotes,
-    reservas criadas/liberadas/concluídas, adiamentos, antecipações, ativações, pausas e encerramentos.
-    Garante consistência absoluta e linearizabilidade:
-    1. Registra a fila de eventos ANTES de ler o snapshot (zero window of vulnerability).
-    2. Envia replay de quaisquer eventos ocorridos entre a requisição inicial (last_version) e a abertura do SSE.
-    3. Envia o ESTADO_CONSOLIDADO atômico lido no exato momento da conexão.
-    4. Continua entregando todos os eventos futuros em tempo real.
+    Canal SSE com estado público agrupado e notificações individuais filtradas.
+    Inscreve antes da leitura para conservar os eventos que chegarem durante o
+    snapshot; o snapshot do banco reconcilia qualquer lacuna no replay limitado.
     """
     # 1. Registra na fila ANTES do snapshot para não perder nenhum evento que ocorra durante a leitura
-    queue = await lote_event_hub.subscribe()
     dev_id = device_fingerprint or request.headers.get("x-device-fingerprint") or request.cookies.get("festa_device_id")
+    browser_hash = _obter_browser_token_hash_public(request)
+    subscription = {
+        "device_fingerprint": dev_id,
+        "device_id": dev_id,
+        "browser_token_hash": browser_hash,
+        "lote_id": lote_id,
+    }
+    queue = await lote_event_hub.subscribe(**subscription)
 
     # Extrai last_version (prioriza Query param, depois header oficial Last-Event-ID)
     header_last_id = request.headers.get("last-event-id")
@@ -625,7 +678,11 @@ async def stream_lote_eventos(
         eff_version = int(header_last_id)
 
     # 2. Busca eventos perdidos no buffer caso o cliente tenha recebido versão anterior no fetch inicial
-    missed_events = lote_event_hub.get_events_since(eff_version)
+    missed_events = lote_event_hub.get_events_since(eff_version, **subscription)
+    # Uma reconexão pode trazer o cursor de outro worker. Reserve uma versão
+    # local acima dele ANTES da leitura; eventos concorrentes continuam acima
+    # deste snapshot, mesmo se a consulta começar antes do commit correspondente.
+    version_snap = lote_event_hub.next_version(minimum=(eff_version or 0) + 1)
 
     # 3. O banco é necessário apenas para o snapshot inicial. A dependência
     # padrão do FastAPI só fecha a sessão quando a StreamingResponse termina;
@@ -640,9 +697,10 @@ async def stream_lote_eventos(
         # se a consulta falhasse ou o cliente cancelasse durante o snapshot.
         await lote_event_hub.unsubscribe(queue)
         raise
-    version_snap = estado_atual.get("state_version", lote_event_hub.state_version)
+    estado_atual["state_version"] = version_snap
 
     async def event_generator():
+        snapshot_barrier = version_snap
         try:
             # Handshake inicial informando conexão estabelecida
             yield f'id: {version_snap}\nevent: conectado\ndata: {{"status": "conectado", "state_version": {version_snap}}}\n\n'
@@ -658,6 +716,30 @@ async def stream_lote_eventos(
                 try:
                     # Aguarda mensagens de transmissão com timeout de 20s para keep-alive ping
                     msg = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    if getattr(queue, "_sse_needs_snapshot", False):
+                        # Filas são limitadas. Um cliente lento ou um overflow
+                        # no transporte individual volta ao estado do banco,
+                        # sem depender de receber cada transição intermediária.
+                        queue._sse_needs_snapshot = False
+                        snapshot_barrier = lote_event_hub.next_version()
+                        async with async_session() as reconciliation_session:
+                            reconciled = await coletar_dados_live_status(
+                                reconciliation_session, request, lote_id=lote_id, device_id=dev_id,
+                            )
+                        reconciled["state_version"] = snapshot_barrier
+                        yield (
+                            f'id: {snapshot_barrier}\nevent: ESTADO_CONSOLIDADO\n'
+                            f'data: {json.dumps(reconciled, ensure_ascii=False)}\n\n'
+                        )
+                        continue
+                    message_version = next((
+                        int(line[4:]) for line in msg.splitlines()[:3]
+                        if line.startswith("id: ")
+                    ), 0)
+                    if message_version and message_version <= snapshot_barrier:
+                        # O snapshot já cobriu estes eventos. Reaplicar uma
+                        # liberação antiga poderia apagar uma reserva mais nova.
+                        continue
                     yield msg
                 except asyncio.TimeoutError:
                     yield ": ping\n\n"

@@ -551,8 +551,14 @@ async function confirmarRejeicao() {
               <h3 class="entity-card-title">{{ s.usuario?.nome || 'Desconhecido' }}</h3>
               <div class="entity-card-sub">
                 <span class="table-code-pill font-monospace">{{ s.usuario?.cpf_formatado || s.usuario?.cpf }}</span>
-                <span v-if="s.identificado_api" class="badge badge-cyan" title="Vínculo confirmado em tempo real via API da Escola de Governo">
+                <span v-if="s.identificado_api" class="badge badge-cyan" title="Vínculo confirmado via API da Escola de Governo">
                   <i class="bi bi-patch-check-fill me-1 text-cyan"></i> Servidor (API)
+                </span>
+                <span v-else-if="['queued', 'processing'].includes(s.validacao_externa_status)" class="badge badge-amber">
+                  <i class="bi bi-hourglass-split me-1"></i> Consulta em andamento
+                </span>
+                <span v-else-if="s.validacao_externa_status === 'failed'" class="badge badge-amber">
+                  <i class="bi bi-exclamation-circle me-1"></i> Consulta indisponível — análise manual
                 </span>
               </div>
               <div v-if="s.usuario?.email" class="text-muted small mt-1 text-truncate" :title="s.usuario.email">
@@ -710,9 +716,14 @@ async function confirmarRejeicao() {
             <i class="bi bi-patch-check-fill text-cyan fs-5"></i>
             <div>
               <strong class="text-cyan d-block">Identificado como Servidor via API Oficial</strong>
-              <p class="mb-0 small text-light">Este CPF foi confirmado em tempo real junto à Escola de Governo. O servidor é elegível.</p>
+              <p class="mb-0 small text-light">Este CPF foi confirmado junto à Escola de Governo. O servidor é elegível.</p>
             </div>
           </div>
+        </div>
+
+        <div v-if="['queued', 'processing'].includes(solicitacaoSelecionada.validacao_externa_status)" class="modal-alert-card modal-alert-card--warning mb-3">
+          <strong class="d-block">Consulta à Escola de Governo em andamento</strong>
+          <p class="mb-0 small">O cadastro está salvo. O resultado da consulta aparecerá assim que estiver disponível; a equipe também pode realizar a análise manual.</p>
         </div>
 
         <div v-if="solicitacaoSelecionada.status === 'pendente_analise'" class="modal-alert-card modal-alert-card--warning mb-3">

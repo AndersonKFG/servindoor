@@ -135,7 +135,7 @@ class TestReservaSSETimezone(unittest.IsolatedAsyncioTestCase):
             ativa = await status_reserva(self.request, 'reserva-legada', session)
             self.assertEqual(ativa.status_code, 200)
             self.assertIn(b'"ativa":true', ativa.body)
-            with patch('app.routers.resgate.lote_event_hub.broadcast', new_callable=AsyncMock) as broadcast:
+            with patch('app.routers.resgate.lote_event_hub.publish_reservation_change') as broadcast:
                 resposta = await desistir_reserva(self.request, 'reserva-legada', session)
             self.assertEqual(resposta.status_code, 200, resposta.body)
             self.assertIn(b'"sucesso":true', resposta.body)
@@ -144,9 +144,9 @@ class TestReservaSSETimezone(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reserva.status, 'cancelada')
             self.assertIsNotNone(reserva.expira_em.tzinfo)
             self.assertLess(reserva.expira_em, self.agora)
-            broadcast.assert_awaited_once()
-            self.assertEqual(broadcast.call_args.args[1]['tipo'], 'reserva_liberada')
-            self.assertEqual(broadcast.call_args.args[1]['motivo'], 'desistencia')
+            broadcast.assert_called_once()
+            self.assertEqual(broadcast.call_args.args[0]['tipo'], 'reserva_liberada')
+            self.assertEqual(broadcast.call_args.args[0]['motivo'], 'desistencia')
             prazo = await _obter_prazo_reserva_sse(
                 session, self.request, 10000, 'hw_regressao', self.agora,
             )
@@ -155,10 +155,10 @@ class TestReservaSSETimezone(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cancelada.status_code, 200)
             self.assertIn(b'"status":"desistida"', cancelada.body)
             # Repetir a desistência mantém o resultado e não gera outra liberação.
-            with patch('app.routers.resgate.lote_event_hub.broadcast', new_callable=AsyncMock) as repetido:
+            with patch('app.routers.resgate.lote_event_hub.publish_reservation_change') as repetido:
                 resposta = await desistir_reserva(self.request, 'reserva-legada', session)
             self.assertEqual(resposta.status_code, 200)
-            repetido.assert_not_awaited()
+            repetido.assert_not_called()
 
 
 if __name__ == '__main__':

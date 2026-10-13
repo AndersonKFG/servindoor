@@ -388,6 +388,7 @@ class SolicitacaoValidacao(SQLModel, table=True):
     __tablename__ = "solicitacoes_validacao"
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    reserva_id: Optional[int] = Field(default=None, foreign_key="reservas_ingressos.id", unique=True, nullable=True)
     token: Optional[str] = Field(default=None, unique=True, index=True, nullable=True)
     usuario_id: int = Field(foreign_key="usuarios.id", index=True)
     lote_id: int = Field(foreign_key="lotes.id", index=True)

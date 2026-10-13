@@ -201,6 +201,12 @@ As linhas `[diagnostico_reserva]` identificam a etapa que falhou sem registrar
 tokens ou cookies. A desistência só passa quando o prazo também desaparece;
 um token nulo sozinho não comprova a liberação.
 
+As linhas com `etapa: "post_reservar"` registram a falha da criação inicial:
+HTTP, código da API, código de transporte do k6, duração e identificador Cloudflare.
+Não incluem CPF, token, corpo, cookies ou chave. Desistências com status zero
+exatamente no aborto podem ser requisições canceladas pelo próprio gerador;
+compare primeiro a falha inicial registrada antes da interrupção.
+
 Antes, publique os ajustes do aplicativo na VPS, pois o limite temporário depende
 do código novo:
 
@@ -296,6 +302,90 @@ pelo prefixo `loadtest_`. As visitas concluídas desistem pela rota normal; ao
 interromper o processo, algumas podem permanecer ativas até a expiração normal
 de 5 minutos. Não é necessário apagar o banco inteiro.
 
+## 6. Resgate com formulário, foto e confirmação repetida
+
+Escolha o modo **`resgate`** no mesmo comando:
+
+```bash
+bash tools/carga/executar.sh
+```
+
+Este cenário inicia o máximo escolhido **diretamente**, sem passar pelos
+patamares de 500 e 1.000. Cada VU executa um ciclo e termina. O limite de dez
+minutos encerra visitantes que ficaram presos; o teste termina antes se todos
+concluírem. O preenchimento é representado por uma pausa de 2–10 segundos.
+Não é necessário esperar dez minutos se o ciclo levar apenas alguns segundos.
+
+Além do lote exclusivo e da chave temporária, informe:
+
+| Campo | Valor |
+| --- | --- |
+| Máximo | Até `2000` |
+| Secretaria | ID de uma secretaria cadastrada e permitida no lote |
+| E-mail | Uma única caixa controlada por você, apta a receber os testes |
+| Autorização de e-mails | Digite `ENVIAR_EMAILS` para autorizar as mensagens reais |
+| Confirmação final | `TESTAR` |
+
+**Este modo grava usuários, solicitações pendentes e fotos, consome vagas e
+enfileira e-mails reais.** O destino informado é usado em todos os formulários.
+A fila poderá continuar enviando depois que o k6 terminar. Considere a cota do
+provedor antes de autorizar até 2.000 mensagens. A consulta à API externa de
+servidores é dispensada somente quando o aplicativo aceita a chave temporária,
+o lote autorizado, o prazo e a identificação de teste; o teste não mede essa API.
+
+Cada visitante:
+
+1. Carrega a home, recebe o estado SSE e tenta reservar uma vaga.
+2. Mantém uma conexão SSE aberta enquanto envia o formulário multipart com
+   uma foto JPEG sintética de **320×240 e aproximadamente 69 KB**, sem pessoa real.
+3. Usa um CPF matematicamente válido, determinístico para o teste. Cada décimo
+   visitante reutiliza o CPF do anterior, com outro dispositivo.
+4. Confere a confirmação pendente e repete o mesmo token, CPF e conteúdo,
+   exigindo o mesmo protocolo e endereço de confirmação. A repetição não pode
+   criar cadastro, foto ou e-mail adicional.
+5. Se encontrar `cpf_ja_atendido`, libera a própria reserva e encerra seu ciclo.
+   Quem encontra lotação também encerra. Esses dois resultados são esperados.
+
+Uma falha de transporte/HTTP 5xx permite uma tentativa de recuperação com os
+mesmos dados. A primeira falha continua contando na métrica; a recuperação não
+esconde o erro. Não se envia desistência quando o resultado é incerto, pois o
+servidor pode já ter concluído a gravação. Reservas restantes expiram normalmente.
+
+### Como avaliar
+
+O resumo acrescenta `formularios_enviados`, `resgates_confirmados`,
+`cpf_ja_atendido`, `formulario_p95_ms`, `falhas_tecnicas_formulario`,
+`confirmacao_idempotente` e `recuperacao_apos_falha`. A idempotência deve ser `1`.
+Recuperação nula significa que não houve falha recuperável para avaliar.
+Os critérios de tempo continuam em p95 menor que três segundos e falhas
+técnicas abaixo de 1%; os critérios não foram afrouxados para aprovar a execução.
+
+Com 1.500 vagas e 2.000 visitantes, o total confirmado nunca deve superar 1.500.
+Não exija exatamente 500 recusas: CPFs repetidos podem liberar vagas durante a
+disputa, e falhas precisam ser investigadas individualmente. O resumo HTTP precisa
+ser confrontado com solicitações, usuários, contador do lote e arquivos na VPS.
+Contar URLs de fotos no banco não comprova que os arquivos existem no disco.
+
+Na VPS, depois que as requisições terminarem, confira o banco e os arquivos sem
+baixar nada. Substitua a identificação, o ID do lote e o número confirmado:
+
+```bash
+docker compose exec web python tools/carga/conferir_resgates.py IDENTIFICACAO_DO_TESTE 1 --confirmados 1500
+```
+
+O script abre uma transação somente de leitura, limita consultas ao teste e
+confere os arquivos vinculados dentro da pasta de fotos. Mostra contagens,
+estados da fila e verificações, sem CPF, token ou e-mail. `consistente: true`
+exige unicidade, fotos presentes com assinatura JPEG, tarefas e e-mails
+registrados e ocupação dentro da capacidade. E-mail `sent` indica aceite do
+SMTP, sem comprovar chegada à caixa. O script não procura arquivos órfãos e
+não confirma a integridade visual de uma selfie.
+
+Os cadastros recebem `setor = TESTE_CARGA_IDENTIFICACAO_DO_TESTE` e nome iniciado
+por `TESTE CARGA`. Anote a identificação exibida para localizar esses registros.
+Depois de conferir os resultados, limpe apenas os dados do teste e revogue a
+autorização temporária. Este roteiro não executa limpeza automática no banco.
+
 ## Investigar espera no banco durante reservas
 
 Na VPS, abra outro terminal e inicie a coleta antes da carga:
@@ -332,8 +422,10 @@ O resumo é uma seleção das amostras; o arquivo original continua disponível.
 - Uma conexão SSE aberta não basta: confira se ela recebe estado/eventos no tempo
   esperado, quantos visitantes chegam ao patamar e o consumo do servidor.
 - O resumo agregado pode esconder piora em um patamar; use as métricas por tempo.
-- Não testa emissão de ingresso, entrega de e-mail, upload, expiração completa
-  nem prova sozinho que a lotação jamais será excedida.
+- `home` e `reservas` não enviam fotos ou formulários. `resgate` cobre upload,
+  gravação do cadastro pendente e repetição da confirmação; não cobre aprovação,
+  PDF do ingresso, entrega SMTP, câmera ou expiração completa. Nenhum resumo HTTP
+  sozinho comprova os arquivos salvos ou a consistência do banco.
 - Não lê ou altera configurações da Cloudflare. Um único IP não representa a
   distribuição de milhares de visitantes em diferentes redes.
 

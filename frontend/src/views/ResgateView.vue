@@ -182,8 +182,57 @@ watch(() => form.value.data_nascimento, (val) => {
 // PERSISTÊNCIA AUTOMÁTICA DE RASCUNHO (Dentro dos 5 minutos de reserva)
 // ============================================================================
 const DRAFT_STORAGE_PREFIX = 'festa_resgate_draft_'
+const PENDING_STORAGE_KEY = `festa_resgate_envio_pendente_${loteId}`
+const envioPendente = ref(null)
 
-function salvarRascunhoFormulario() {
+function payloadDeEnvioCompleto(payload) {
+  return ['cpf', 'nome', 'data_nascimento', 'secretaria_id', 'setor', 'vinculo', 'telefone', 'email', 'foto_base64']
+    .every(field => typeof payload?.[field] === 'string' && payload[field].length > 0)
+}
+
+function registrarEnvioPendente(payload) {
+  // O rascunho guarda uma única cópia da foto. Enquanto o resultado é incerto,
+  // alterações na tela não substituem os dados que serão reenviados.
+  salvarRascunhoFormulario(true)
+  envioPendente.value = { token: tokenReserva.value, cpf: payload.cpf, payload: { ...payload }, completo: payloadDeEnvioCompleto(payload) }
+  try {
+    sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify({
+      token: tokenReserva.value, cpf: payload.cpf, salvoEm: Date.now()
+    }))
+  } catch {}
+}
+
+function limparEnvioPendente() {
+  envioPendente.value = null
+  try { sessionStorage.removeItem(PENDING_STORAGE_KEY) } catch {}
+}
+
+function restaurarEnvioPendente() {
+  try {
+    const metadata = JSON.parse(sessionStorage.getItem(PENDING_STORAGE_KEY) || 'null')
+    if (typeof metadata?.token !== 'string' || !metadata.token || typeof metadata.cpf !== 'string'
+      || !Number.isFinite(metadata.salvoEm) || Date.now() - metadata.salvoEm > 24 * 60 * 60 * 1000) {
+      limparEnvioPendente()
+      return false
+    }
+    // Bloqueia a validação automática de CPF durante a recuperação: um envio
+    // já salvo pode ter criado a solicitação que essa validação detectaria.
+    envioPendente.value = { token: metadata.token, cpf: metadata.cpf, payload: null, completo: false }
+    tokenReserva.value = metadata.token
+    restaurarRascunhoFormulario()
+    form.value.cpf = metadata.cpf
+    envioPendente.value.payload = { ...form.value }
+    envioPendente.value.completo = payloadDeEnvioCompleto(form.value)
+    errorMessage.value = 'O último envio está sem confirmação. Clique em Verificar Envio para recuperar o resultado com os mesmos dados.'
+    return true
+  } catch {
+    limparEnvioPendente()
+    return false
+  }
+}
+
+function salvarRascunhoFormulario(forcar = false) {
+  if (envioPendente.value && forcar !== true) return
   try {
     const temDados = form.value.cpf || form.value.nome || form.value.telefone || form.value.email || nascAno.value || form.value.foto_base64
     if (!temDados) return
@@ -216,7 +265,7 @@ function restaurarRascunhoFormulario() {
 
     const draft = JSON.parse(raw)
     // Se o rascunho foi salvo há mais de 10 minutos, descarta
-    if (Date.now() - (draft.salvoEm || 0) > 10 * 60 * 1000) {
+    if (!envioPendente.value && Date.now() - (draft.salvoEm || 0) > 10 * 60 * 1000) {
       limparRascunhoFormulario()
       return false
     }
@@ -235,7 +284,7 @@ function restaurarRascunhoFormulario() {
     if (draft.nascDia) nascDia.value = draft.nascDia
     if (draft.data_nascimento) form.value.data_nascimento = draft.data_nascimento
 
-    if (draft.cpf && draft.cpf.replace(/\D/g, '').length === 11) {
+    if (!envioPendente.value && draft.cpf && draft.cpf.replace(/\D/g, '').length === 11) {
       validarCpfNoServidor(draft.cpf.replace(/\D/g, ''))
     }
     return true
@@ -319,9 +368,11 @@ let debounceCpfTimer = null
 
 let resgateEventSource = null
 let modalSseStatus = false
+const receivedPrivateEvents = new Set()
 
 function atualizarStatusLote(data) {
   if (!data || (data.lote_id && String(data.lote_id) !== String(loteId))) return
+  if (submitting.value || envioPendente.value) return
 
   const status = data.status_slug
   if (!status) return
@@ -404,8 +455,15 @@ function connectResgateSSE() {
       try {
         const data = JSON.parse(event.data)
         if (data.lote_id && String(data.lote_id) !== String(loteId)) return
+        if (event.type === 'RESERVA_ATUALIZADA' && data.event_id) {
+          if (receivedPrivateEvents.has(data.event_id)) return
+          receivedPrivateEvents.add(data.event_id)
+          if (receivedPrivateEvents.size > 256) receivedPrivateEvents.delete(receivedPrivateEvents.values().next().value)
+        }
+        const reservaDesteDispositivo = (data.token_reserva && data.token_reserva === tokenReserva.value) ||
+          data.device_fingerprint === myFp || (data.device_id && data.device_id === getDeviceId())
         atualizarStatusLote(data)
-        if (data.tipo === 'reserva_criada' && data.device_fingerprint === myFp) {
+        if (data.tipo === 'reserva_criada' && reservaDesteDispositivo && !envioPendente.value) {
           if (data.token_reserva) tokenReserva.value = data.token_reserva
           aplicarPrazoReservaDaStream(data)
         }
@@ -413,9 +471,10 @@ function connectResgateSSE() {
         if (
           (data.tipo === 'reserva_liberada' || data.tipo === 'resgate_concluido') &&
           tokenReserva.value &&
-          data.token_reserva === tokenReserva.value &&
+          reservaDesteDispositivo &&
           !desistindo.value &&
           !submitting.value &&
+          !envioPendente.value &&
           !modalFeedback.value.show
         ) {
           if (data.tipo === 'resgate_concluido') {
@@ -471,12 +530,14 @@ function formatCPF(val) {
 
 // Validação de CPF em segundo plano ao atingir 11 dígitos
 async function validarCpfNoServidor(digits) {
+  if (submitting.value || envioPendente.value) return
   try {
     validandoCpf.value = true
     cpfStatus.value = null
     const tokenParam = tokenReserva.value ? `&token_reserva=${encodeURIComponent(tokenReserva.value)}` : ''
     const res = await fetch(`/api/resgate/validar-cpf?cpf=${digits}${tokenParam}`)
     const data = await res.json()
+    if (submitting.value || envioPendente.value) return
 
     if (!data.valido) {
       cpfStatus.value = {
@@ -606,6 +667,9 @@ function updateCountdown() {
 
   if (dist <= 0) {
     tempoRestanteSegundos.value = 0
+    // O servidor pode ter confirmado o cadastro mesmo se a resposta se perdeu.
+    // A expiração não deve apagar o material necessário para recuperá-lo.
+    if (submitting.value || envioPendente.value) return
     apagarCookiePrazoReserva()
     limparRascunhoFormulario()
     showModalExpirado.value = true
@@ -633,6 +697,19 @@ const isTimerCritical = computed(() => tempoRestanteSegundos.value <= 60)
 async function carregarDadosResgate() {
   try {
     loading.value = true
+
+    if (restaurarEnvioPendente()) {
+      if (await consultarConfirmacaoPendente()) return
+      try {
+        const secRes = await fetch('/api/secretarias')
+        if (secRes.ok) secretarias.value = await secRes.json()
+      } catch {}
+      if (!envioPendente.value.completo) {
+        errorMessage.value = 'O envio ainda está sem confirmação e o rascunho não está completo neste navegador. Preencha novamente os campos e a foto; Verificar Envio recupera a confirmação antes de tentar reenviar.'
+      }
+      loading.value = false
+      return
+    }
 
     const deviceFp = getDeviceFingerprint()
     const deviceId = getDeviceId()
@@ -742,6 +819,11 @@ function fecharModalFeedback() {
 
 // Desistir da vaga reservada
 async function executarDesistencia() {
+  if (submitting.value || envioPendente.value) {
+    showModalDesistir.value = false
+    errorMessage.value = 'Verifique o resultado do envio antes de desistir. Seu cadastro pode já ter sido confirmado.'
+    return
+  }
   limparRascunhoFormulario()
   if (!tokenReserva.value) {
     router.push('/')
@@ -765,54 +847,99 @@ async function executarDesistencia() {
   }
 }
 
-async function handleSubmit() {
+function validarFormularioParaEnvio() {
   if (!form.value.secretaria_id) {
     errorMessage.value = 'Selecione sua secretaria ou órgão para continuar.'
     document.getElementById('secretaria-selector-button')?.focus()
-    return
+    return false
   }
 
   const digits = form.value.cpf.replace(/\D/g, '')
   if (!validarCpfMatematico(digits)) {
     errorMessage.value = 'CPF inválido. Verifique os números digitados.'
-    return
+    return false
   }
 
   if (cpfStatus.value && !cpfStatus.value.valido) {
     errorMessage.value = cpfStatus.value.msg
-    return
+    return false
   }
 
   if (idadeInvalida.value) {
     errorMessage.value = 'O resgate de ingressos é permitido exclusivamente para maiores de 18 anos.'
-    return
+    return false
   }
 
   if (!form.value.foto_base64) {
     errorMessage.value = 'A selfie ao vivo é obrigatória para emissão do ingresso nominal.'
-    return
+    return false
   }
 
   if (!tokenReserva.value) {
     errorMessage.value = 'Reserva de vaga expirada ou não encontrada. Por favor, recarregue a página.'
-    return
+    return false
+  }
+  return true
+}
+
+function finalizarEnvioConfirmado(data) {
+  const target = data?.redirect_url || (data?.ingresso_id ? '/sucesso/' + data.ingresso_id : null)
+  if (!target || data?.sucesso === false) return false
+  limparEnvioPendente()
+  apagarCookiePrazoReserva()
+  limparRascunhoFormulario()
+  router.push(target)
+  return true
+}
+
+async function consultarConfirmacaoPendente() {
+  if (!envioPendente.value) return false
+  const token = encodeURIComponent(envioPendente.value.token)
+  const cpf = encodeURIComponent(envioPendente.value.cpf.replace(/\D/g, ''))
+  try {
+    const response = await fetch(`/api/lote/${loteId}/resgate-confirmado?token_reserva=${token}&cpf=${cpf}`, {
+      headers: { 'Accept': 'application/json' }, cache: 'no-store', credentials: 'same-origin'
+    })
+    if (response.ok) return finalizarEnvioConfirmado(await response.json())
+  } catch {}
+  return false
+}
+
+async function handleSubmit() {
+  if (submitting.value) return
+  const recuperandoEnvio = !!envioPendente.value
+  if (!recuperandoEnvio) {
+    if (!validarFormularioParaEnvio()) return
+    registrarEnvioPendente(form.value)
   }
 
   submitting.value = true
   errorMessage.value = ''
 
   try {
+    if (recuperandoEnvio) {
+      if (await consultarConfirmacaoPendente()) return
+      if (!envioPendente.value.completo) {
+        form.value.cpf = envioPendente.value.cpf
+        if (!validarFormularioParaEnvio() || !payloadDeEnvioCompleto(form.value)) {
+          errorMessage.value = 'Não foi possível recuperar a confirmação. Complete novamente os campos e a foto para reenviar com a mesma identificação.'
+          return
+        }
+        registrarEnvioPendente(form.value)
+      }
+    }
     const formData = new FormData()
-    formData.append('token_reserva', tokenReserva.value)
-    formData.append('cpf', form.value.cpf)
-    formData.append('nome', form.value.nome)
-    formData.append('data_nascimento', form.value.data_nascimento)
-    formData.append('setor', form.value.setor)
-    formData.append('secretaria_id', form.value.secretaria_id || '1')
-    formData.append('vinculo', form.value.vinculo)
-    formData.append('telefone', form.value.telefone)
-    formData.append('email', form.value.email)
-    formData.append('foto_base64', form.value.foto_base64)
+    const payload = envioPendente.value.payload
+    formData.append('token_reserva', envioPendente.value.token)
+    formData.append('cpf', payload.cpf)
+    formData.append('nome', payload.nome)
+    formData.append('data_nascimento', payload.data_nascimento)
+    formData.append('setor', payload.setor)
+    formData.append('secretaria_id', payload.secretaria_id || '1')
+    formData.append('vinculo', payload.vinculo)
+    formData.append('telefone', payload.telefone)
+    formData.append('email', payload.email)
+    formData.append('foto_base64', payload.foto_base64)
 
     const res = await fetch(`/api/lote/${loteId}/resgatar`, {
       method: 'POST',
@@ -824,6 +951,9 @@ async function handleSubmit() {
       const targetUrl = new URL(res.url)
       if (targetUrl.pathname.startsWith('/sucesso/')) {
         const id = targetUrl.pathname.split('/').pop()
+        limparEnvioPendente()
+        limparRascunhoFormulario()
+        apagarCookiePrazoReserva()
         router.push('/sucesso/' + id)
         return
       }
@@ -832,35 +962,30 @@ async function handleSubmit() {
     }
 
     if (!res.ok) {
+      if (res.status >= 500 || res.status === 408 || res.status === 429) {
+        errorMessage.value = 'Não foi possível confirmar o resultado. Clique em Verificar Envio para reenviar os mesmos dados com segurança.'
+        return
+      }
+      limparEnvioPendente()
       const text = await res.text()
       try {
         const json = JSON.parse(text)
-        errorMessage.value = json.detail || 'Erro ao processar resgate do ingresso.'
+        errorMessage.value = (typeof json.detail === 'string' ? json.detail : json.detail?.mensagem) || 'Erro ao processar resgate do ingresso.'
         if (json.detail === 'Você desistiu desta vaga por outro navegador.') {
           showModalDesistidaOutroNavegador.value = true
         }
       } catch {
         errorMessage.value = 'Não foi possível concluir o resgate. Verifique seus dados.'
       }
-      submitting.value = false
       return
     }
 
     const data = await res.json()
-    apagarCookiePrazoReserva()
-    if (data.ingresso_id) {
-      limparRascunhoFormulario()
-      router.push('/sucesso/' + data.ingresso_id)
-      return
-    }
-    if (data.redirect_url) {
-      limparRascunhoFormulario()
-      router.push(data.redirect_url)
-      return
-    }
+    if (finalizarEnvioConfirmado(data)) return
+    errorMessage.value = 'O servidor não retornou uma confirmação. Clique em Verificar Envio para recuperar o resultado.'
   } catch (e) {
-    console.error('Erro no envio:', e)
-    errorMessage.value = 'Falha de conexão com o servidor. Tente novamente.'
+    errorMessage.value = 'A conexão falhou antes da confirmação. Clique em Verificar Envio: seus dados e a identificação do envio foram preservados.'
+  } finally {
     submitting.value = false
   }
 }
@@ -899,7 +1024,8 @@ onUnmounted(() => {
             <span class="font-outfit">{{ displayTimer }}</span>
           </span>
           <span class="timer-text">
-            Sua vaga está garantida por <strong class="text-warning">{{ displayTimerInline }}</strong>
+            <template v-if="envioPendente">Aguardando a confirmação do envio.</template>
+            <template v-else>Sua vaga está garantida por <strong class="text-warning">{{ displayTimerInline }}</strong></template>
           </span>
         </div>
 
@@ -1173,9 +1299,10 @@ onUnmounted(() => {
               <button
                 type="submit"
                 class="btn-vip-mega font-outfit"
-                :disabled="submitting || !form.foto_base64 || (cpfStatus && !cpfStatus.valido) || idadeInvalida"
+                :formnovalidate="!!envioPendente"
+                :disabled="submitting || (!envioPendente && (!form.foto_base64 || (cpfStatus && !cpfStatus.valido) || idadeInvalida))"
               >
-                <span v-if="!submitting">Concluir e Garantir Ingresso</span>
+                <span v-if="!submitting">{{ envioPendente ? 'Verificar Envio' : 'Concluir e Garantir Ingresso' }}</span>
                 <span v-else>Processando Ingresso...</span>
                 <i v-if="!submitting" class="bi bi-check-circle-fill"></i>
                 <i v-else class="bi bi-arrow-repeat spin"></i>

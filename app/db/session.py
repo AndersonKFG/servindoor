@@ -117,6 +117,11 @@ async def init_db():
         await conn.execute(text("ALTER TABLE solicitacoes_cancelamento ADD COLUMN IF NOT EXISTS codigo_ultimo_envio_em TIMESTAMPTZ;"))
         await conn.execute(text("UPDATE solicitacoes_cancelamento SET codigo_ultimo_envio_em = criado_em WHERE codigo_ultimo_envio_em IS NULL;"))
         await conn.execute(text("ALTER TABLE solicitacoes_validacao ADD COLUMN IF NOT EXISTS token VARCHAR;"))
+        await conn.execute(text("ALTER TABLE solicitacoes_validacao ADD COLUMN IF NOT EXISTS reserva_id INTEGER REFERENCES reservas_ingressos(id);"))
+        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_solicitacao_reserva ON solicitacoes_validacao (reserva_id) WHERE reserva_id IS NOT NULL;"))
+        from app.services.resgate_jobs import RESGATE_JOBS_DDL, RESGATE_JOBS_INDEX_DDL
+        await conn.execute(text(RESGATE_JOBS_DDL))
+        await conn.execute(text(RESGATE_JOBS_INDEX_DDL))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reservas_ativas ON reservas_ingressos (lote_id, utilizada, expira_em);"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_solicitacoes_usuario_lote ON solicitacoes_validacao (usuario_id, lote_id);"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ingressos_usuario_ativo ON ingressos (usuario_id) WHERE deleted_at IS NULL;"))
@@ -168,3 +173,6 @@ async def init_db():
         await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_reserva_cpf_ativa ON reservas_ingressos (cpf) WHERE status = 'ativa';"))
         await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_reserva_browser_ativa ON reservas_ingressos (browser_token_hash) WHERE status = 'ativa';"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_rate_limit_ip_acao_ts ON rate_limit_tentativas (ip, acao, criado_em);"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reserva_capacidade_ativa ON reservas_ingressos (lote_id, expira_em) WHERE status = 'ativa';"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reserva_fingerprint_ativa ON reservas_ingressos (device_fingerprint, expira_em DESC) WHERE status = 'ativa';"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reserva_device_ativa ON reservas_ingressos (device_id, expira_em DESC) WHERE status = 'ativa';"))

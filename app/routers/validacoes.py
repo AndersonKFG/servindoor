@@ -6,6 +6,7 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, desc
 from sqlalchemy.orm import selectinload
@@ -77,13 +78,20 @@ async def listar_solicitacoes_validacao(
     }
 
     # Filtragem por status e secretaria
+    selecionadas = [
+        s for s in todas
+        if (not status_filtro or status_filtro == "todos" or s.status == status_filtro)
+        and (not secretaria_id or s.secretaria_id == secretaria_id)
+    ]
+    estados_externos = {}
+    if selecionadas:
+        estados_externos = dict((await session.execute(text("""
+            SELECT solicitacao_id, status FROM resgate_jobs
+            WHERE job_type = 'external_validation'
+              AND solicitacao_id = ANY(CAST(:ids AS INTEGER[]))
+        """), {"ids": [s.id for s in selecionadas]})).all())
     lista_filtrada = []
-    for s in todas:
-        if status_filtro and status_filtro != "todos" and s.status != status_filtro:
-            continue
-        if secretaria_id and s.secretaria_id != secretaria_id:
-            continue
-
+    for s in selecionadas:
         u = s.usuario
         l = s.lote
         sec = s.secretaria or (u.secretaria if u else None)
@@ -92,6 +100,7 @@ async def listar_solicitacoes_validacao(
             "id": s.id,
             "status": s.status,
             "identificado_api": bool(getattr(s, "identificado_api", False)),
+            "validacao_externa_status": estados_externos.get(s.id),
             "criado_em": formatar_data_sp(s.criado_em) if s.criado_em else "-",
             "analisado_em": formatar_data_sp(s.analisado_em),
             "analisado_por_nome": s.analisado_por.nome if s.analisado_por else None,
