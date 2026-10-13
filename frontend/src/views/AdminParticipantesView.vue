@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Modal from '../components/Modal.vue'
+import PhotoCorrectionRequestModal from '../components/PhotoCorrectionRequestModal.vue'
 import KpiCard from '../components/KpiCard.vue'
 import DropdownSelect from '../components/DropdownSelect.vue'
 import QRCode from 'qrcode'
@@ -37,6 +38,13 @@ const secretariasServer = ref([])
 
 // Modais
 const showModalFoto = ref(false)
+const showModalCorrecaoFoto = ref(false)
+const participanteCorrecaoFoto = ref(null)
+
+function abrirModalCorrecaoFoto(p) {
+  participanteCorrecaoFoto.value = p
+  showModalCorrecaoFoto.value = true
+}
 const fotoZoomUrl = ref('')
 const fotoZoomNome = ref('')
 
@@ -895,6 +903,18 @@ onUnmounted(() => {
                   <span class="action-label">Enviar e-mail</span>
                 </button>
 
+                <button
+                  type="button"
+                  class="btn-action-icon btn-action-icon--cyan action-expandable action-expandable--wide"
+                  :disabled="isIngressoInvalido(p) || !p.email"
+                  :title="!p.email ? 'Cadastre um e-mail para solicitar a correção' : (isIngressoInvalido(p) ? 'Ingresso extraviado/cancelado' : 'Solicitar correção de foto por e-mail')"
+                  aria-label="Solicitar correção de foto"
+                  @click="abrirModalCorrecaoFoto(p)"
+                >
+                  <i class="bi bi-camera"></i>
+                  <span class="action-label">Corrigir foto</span>
+                </button>
+
                 <span v-if="p.ingresso && !p.ingresso.cancelado" class="action-divider"></span>
 
                 <!-- Lixeira: em Vermelho (--danger) -->
@@ -1050,6 +1070,12 @@ onUnmounted(() => {
         </div>
       </template>
     </Modal>
+
+    <PhotoCorrectionRequestModal
+      :show="showModalCorrecaoFoto"
+      :participante="participanteCorrecaoFoto"
+      @close="showModalCorrecaoFoto = false"
+    />
 
     <!-- MODAL 2: ENVIAR E-MAIL -->
     <Modal

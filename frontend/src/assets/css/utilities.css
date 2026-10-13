@@ -117,3 +117,7 @@
   align-items: center;
   gap: 8px;
 }
+.text-pre-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

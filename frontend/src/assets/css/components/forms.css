@@ -1080,3 +1080,9 @@ input[type="radio"] {
   color: var(--text-muted);
   font-size: 0.84rem;
 }
+.form-fieldset {
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}

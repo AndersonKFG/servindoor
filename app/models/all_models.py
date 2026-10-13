@@ -174,6 +174,21 @@ class Usuario(SQLModel, table=True):
         return self.foto_rosto_url
 
 
+class SolicitacaoCorrecaoFoto(SQLModel, table=True):
+    __tablename__ = "solicitacoes_correcao_foto"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    usuario_id: int = Field(foreign_key="usuarios.id", index=True)
+    solicitado_por_id: int = Field(foreign_key="usuarios.id")
+    token_hash: str = Field(unique=True, index=True)
+    email_destino: str
+    motivo: Optional[str] = Field(default=None, nullable=True)
+    status: str = Field(default="pendente", index=True)
+    criado_em: datetime = Field(default_factory=agora_utc)
+    expira_em: datetime
+    concluido_em: Optional[datetime] = Field(default=None, nullable=True)
+
+
 class Lote(SQLModel, table=True):
     __tablename__ = "lotes"
 

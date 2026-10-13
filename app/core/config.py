@@ -12,6 +12,7 @@ except ImportError:
 class Settings(BaseSettings):
     # Configurações Gerais
     PROJECT_NAME: str = "Serv indoor"
+    PUBLIC_BASE_URL: str = "https://servindoor.com.br"
     DEBUG: bool = False
     ENVIRONMENT: str = "development"
     

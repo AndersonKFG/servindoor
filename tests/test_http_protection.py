@@ -62,6 +62,14 @@ class TestHttpProtection(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages[0]["status"], 403)
         self.assertTrue(json.loads(messages[1]["body"])["gatekeeper_required"])
 
+    async def test_correcao_por_token_dispensa_pin(self):
+        messages = await self.invoke("/api/correcao-foto/token", gatekeeper=True)
+        self.assertEqual(messages[0]["status"], 200)
+
+    async def test_correcao_por_token_limita_tamanho_da_foto(self):
+        messages = await self.invoke("/api/correcao-foto/token", chunks=[b"a" * (6 * 1024 * 1024 + 1)], gatekeeper=True)
+        self.assertEqual(messages[0]["status"], 413)
+
     async def test_multipart_aceita_selfie_base64_maior_que_um_mb(self):
         app = FastAPI()
         router = APIRouter(route_class=ResgateFormRoute)

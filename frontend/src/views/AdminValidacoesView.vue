@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '../composables/useConfirm'
@@ -38,6 +38,11 @@ const busca = ref('')
 const filtroStatus = ref('pendente_analise')
 const filtroSecretaria = ref('')
 const secretariasDisponiveis = ref([])
+
+const itensPorPagina = ref(25)
+const paginaAtual = ref(1)
+const totalPaginasServer = ref(1)
+const totalRegistrosServer = ref(0)
 
 const optionsStatus = [
   { value: 'todos', label: 'Status: Todos', icon: 'bi bi-list-check' },
@@ -147,17 +152,35 @@ async function dispararComunicacoesLote() {
 }
 
 let pollTimer = null
+let debounceTimer = null
+let requestController = null
+let requestVersion = 0
+let unmounted = false
 
 async function carregarValidacoes(silent = false) {
+  if (unmounted || (silent && requestController)) return
+  requestController?.abort()
+  const controller = new AbortController()
+  requestController = controller
+  const version = ++requestVersion
   try {
     if (!silent) loading.value = true
-    const res = await fetch('/api/admin/validacoes?status_filtro=todos')
+    const params = new URLSearchParams({
+      page: String(paginaAtual.value),
+      limit: String(Math.min(Number(itensPorPagina.value), 50)),
+      status_filtro: filtroStatus.value || 'todos'
+    })
+    if (filtroSecretaria.value) params.set('secretaria_id', String(filtroSecretaria.value))
+    if (busca.value.trim()) params.set('busca', busca.value.trim())
+    const res = await fetch(`/api/admin/validacoes?${params.toString()}`, { signal: controller.signal })
+    if (version !== requestVersion || unmounted) return
     if (res.status === 401 || res.status === 403) {
       router.push('/login')
       return
     }
     const data = await res.json()
-    if (data.sucesso) {
+    if (version !== requestVersion || unmounted) return
+    if (res.ok && data.sucesso) {
       solicitacoes.value = data.solicitacoes || []
       kpis.value = data.kpis || {
         total_pendentes: 0,
@@ -168,56 +191,84 @@ async function carregarValidacoes(silent = false) {
         total_comunicacao_pendente: 0
       }
 
-      const secMap = new Map()
-      solicitacoes.value.forEach(s => {
-        if (s.secretaria_id && s.secretaria_nome) {
-          secMap.set(s.secretaria_id, s.secretaria_nome)
-        }
-      })
-      secretariasDisponiveis.value = Array.from(secMap.entries()).map(([id, nome]) => ({ id, nome }))
+      paginaAtual.value = data.pagination.page
+      totalPaginasServer.value = data.pagination.total_pages
+      totalRegistrosServer.value = data.pagination.total
+      secretariasDisponiveis.value = data.secretarias_disponiveis || []
+    } else if (!silent) {
+      toast.error(typeof data.detail === 'string' ? data.detail : 'Erro ao carregar validações.')
     }
   } catch (err) {
-    if (!silent) toast.error('Erro ao carregar validações.')
+    if (!silent && err.name !== 'AbortError' && version === requestVersion && !unmounted) {
+      toast.error('Erro ao carregar validações.')
+    }
   } finally {
-    if (!silent) loading.value = false
+    if (version === requestVersion) {
+      requestController = null
+      loading.value = false
+    }
   }
 }
 
 onMounted(async () => {
   await carregarValidacoes()
+  if (unmounted) return
   pollTimer = setInterval(() => {
     carregarValidacoes(true)
   }, 10000)
 })
 
 onUnmounted(() => {
+  unmounted = true
+  requestVersion++
+  requestController?.abort()
+  clearTimeout(debounceTimer)
   if (pollTimer) clearInterval(pollTimer)
 })
 
-const solicitacoesFiltradas = computed(() => {
-  return solicitacoes.value.filter(s => {
-    if (filtroStatus.value && filtroStatus.value !== 'todos') {
-      if (filtroStatus.value === 'confirmados_api') {
-        if (!s.identificado_api || s.status !== 'pendente_analise') return false
-      } else if (s.status !== filtroStatus.value) {
-        return false
-      }
-    }
-    if (filtroSecretaria.value) {
-      if (String(s.secretaria_id) !== String(filtroSecretaria.value)) return false
-    }
-    if (busca.value.trim()) {
-      const b = busca.value.trim().toLowerCase()
-      const nome = s.usuario?.nome?.toLowerCase() || ''
-      const cpf = s.usuario?.cpf || ''
-      const prot = `val-${String(s.id).padStart(6, '0')}`.toLowerCase()
-      const sec = s.secretaria_nome?.toLowerCase() || ''
-      if (!nome.includes(b) && !cpf.includes(b) && !prot.includes(b) && !sec.includes(b)) {
-        return false
-      }
-    }
-    return true
-  })
+// A API aplica os filtros antes da paginação; os cards representam a página atual.
+const solicitacoesFiltradas = computed(() => solicitacoes.value)
+
+const totalPaginas = computed(() => totalPaginasServer.value)
+const infoPaginacao = computed(() => {
+  const total = totalRegistrosServer.value
+  if (total === 0) return '0 de 0'
+  const inicio = (paginaAtual.value - 1) * Number(itensPorPagina.value) + 1
+  const fim = Math.min(paginaAtual.value * Number(itensPorPagina.value), total)
+  return `${inicio} - ${fim} de ${total}`
+})
+
+const paginasVisiveis = computed(() => {
+  const total = totalPaginas.value
+  const atual = paginaAtual.value
+  const delta = 2
+  const range = []
+  for (let i = Math.max(2, atual - delta); i <= Math.min(total - 1, atual + delta); i++) range.push(i)
+  if (atual - delta > 2) range.unshift('...')
+  if (atual + delta < total - 1) range.push('...')
+  range.unshift(1)
+  if (total > 1) range.push(total)
+  return range
+})
+
+function irParaPagina(p) {
+  if (loading.value || p === '...' || p < 1 || p > totalPaginasServer.value || p === paginaAtual.value) return
+  paginaAtual.value = p
+  return carregarValidacoes()
+}
+
+watch(busca, () => {
+  clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    paginaAtual.value = 1
+    carregarValidacoes()
+  }, 350)
+})
+
+watch([filtroStatus, filtroSecretaria, itensPorPagina], () => {
+  clearTimeout(debounceTimer)
+  paginaAtual.value = 1
+  carregarValidacoes()
 })
 
 function abrirModalAnalise(solic) {
@@ -436,6 +487,7 @@ async function confirmarRejeicao() {
             v-model="busca"
             type="text"
             class="form-control"
+            maxlength="200"
             placeholder="Buscar por Nome, CPF, Protocolo, Secretaria..."
           />
           <button v-if="busca" type="button" class="btn-clear-search" @click="busca = ''">
@@ -469,11 +521,19 @@ async function confirmarRejeicao() {
         <h2 class="table-title font-quattrocento">
           <i class="bi bi-list-check text-cyan me-2"></i>
           Solicitações de Validação
-          <span class="table-badge-count">{{ solicitacoesFiltradas.length }}</span>
+          <span class="table-badge-count">{{ totalRegistrosServer }}</span>
         </h2>
+        <div class="table-header-controls">
+          <label for="validacoes-page-size" class="text-muted small me-2">Exibir:</label>
+          <select id="validacoes-page-size" v-model="itensPorPagina" class="form-select form-select-sm select-page-size" :disabled="loading">
+            <option :value="10">10</option>
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+          </select>
+        </div>
       </div>
 
-      <div v-if="loading && !solicitacoes.length" class="table-loading-state">
+      <div v-if="loading" class="table-loading-state">
         <div class="spinner-border text-cyan mb-3"></div>
         <p>Carregando solicitações de validação...</p>
       </div>
@@ -638,6 +698,35 @@ async function confirmarRejeicao() {
             </div>
           </div>
 
+        </div>
+      </div>
+      <div v-if="totalRegistrosServer > 0" class="pagination-footer">
+        <div class="pagination-info">
+          Mostrando <strong>{{ infoPaginacao }}</strong>
+        </div>
+        <div class="pagination-buttons">
+          <button type="button" class="btn-page-nav" :disabled="loading || paginaAtual === 1"
+            title="Primeira Página" aria-label="Primeira página" @click="irParaPagina(1)">
+            <i class="bi bi-chevron-double-left"></i>
+          </button>
+          <button type="button" class="btn-page-nav" :disabled="loading || paginaAtual === 1"
+            title="Página Anterior" aria-label="Página anterior" @click="irParaPagina(paginaAtual - 1)">
+            <i class="bi bi-chevron-left"></i>
+          </button>
+          <button v-for="(p, idx) in paginasVisiveis" :key="idx" type="button" class="btn-page-number"
+            :class="{ 'is-active': p === paginaAtual, 'is-dots': p === '...' }"
+            :disabled="loading || p === '...'" :aria-current="p === paginaAtual ? 'page' : undefined"
+            :aria-label="p === '...' ? 'Mais páginas' : `Página ${p}`" @click="irParaPagina(p)">
+            {{ p }}
+          </button>
+          <button type="button" class="btn-page-nav" :disabled="loading || paginaAtual === totalPaginas"
+            title="Próxima Página" aria-label="Próxima página" @click="irParaPagina(paginaAtual + 1)">
+            <i class="bi bi-chevron-right"></i>
+          </button>
+          <button type="button" class="btn-page-nav" :disabled="loading || paginaAtual === totalPaginas"
+            title="Última Página" aria-label="Última página" @click="irParaPagina(totalPaginas)">
+            <i class="bi bi-chevron-double-right"></i>
+          </button>
         </div>
       </div>
     </div>

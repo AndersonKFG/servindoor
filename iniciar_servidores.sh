@@ -13,7 +13,11 @@ echo "========================================================"
 
 # 1. Inicia o Banco de Dados PostgreSQL e o Backend FastAPI via Docker
 echo "📦 Subindo containers do Banco de Dados (PostgreSQL) e Backend (FastAPI)..."
-docker compose up -d db web
+# O backend é copiado para a imagem: reconstrói para incluir alterações da API.
+if ! docker compose up -d --build db web; then
+    echo "❌ Falha ao atualizar o backend. Corrija o erro do Docker antes de iniciar o frontend."
+    exit 1
+fi
 
 # Aguarda 2 segundos para o healthcheck
 sleep 2

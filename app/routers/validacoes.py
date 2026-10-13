@@ -6,7 +6,7 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import String, bindparam, case, cast, false, func, literal, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, desc
 from sqlalchemy.orm import selectinload
@@ -29,7 +29,10 @@ async def listar_solicitacoes_validacao(
     status_filtro: Optional[str] = "pendente_analise",
     secretaria_id: Optional[int] = None,
     session: AsyncSession = Depends(get_session),
-    validador: Usuario = Depends(get_current_validador)
+    validador: Usuario = Depends(get_current_validador),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=25, ge=1, le=50),
+    busca: str = Query(default="", max_length=200),
 ):
     """
     Lista solicitações de validação de servidores.
@@ -39,8 +42,75 @@ async def listar_solicitacoes_validacao(
     is_superadmin = "admin_geral" in validador.get_roles_list() or validador.role == UserRole.admin_geral
     allowed_sec_ids = validador.get_secretarias_validador_ids()
 
+    # Permissões são aplicadas no banco antes de contar, filtrar ou paginar.
+    secretaria_efetiva = func.coalesce(SolicitacaoValidacao.secretaria_id, Usuario.secretaria_id)
+    escopo_stmt = (
+        select(
+            SolicitacaoValidacao.id, SolicitacaoValidacao.status,
+            SolicitacaoValidacao.identificado_api, SolicitacaoValidacao.comunicado,
+            secretaria_efetiva.label("secretaria_id"),
+            Secretaria.nome.label("secretaria_nome"), Usuario.nome, Usuario.cpf,
+        )
+        .select_from(SolicitacaoValidacao)
+        .outerjoin(Usuario, Usuario.id == SolicitacaoValidacao.usuario_id)
+        .outerjoin(Secretaria, Secretaria.id == secretaria_efetiva)
+    )
+    if not is_superadmin:
+        escopo_stmt = escopo_stmt.where(or_(
+            SolicitacaoValidacao.secretaria_id.in_(allowed_sec_ids),
+            Usuario.secretaria_id.in_(allowed_sec_ids),
+        ) if allowed_sec_ids else false())
+    escopo = escopo_stmt.subquery()
+
+    def contar(condicao):
+        return func.coalesce(func.sum(case((condicao, 1), else_=0)), 0)
+
+    kpis = dict((await session.execute(select(
+        contar(escopo.c.status == "pendente_analise").label("total_pendentes"),
+        contar((escopo.c.status == "pendente_analise") & escopo.c.identificado_api.is_(True)).label("total_confirmados_api"),
+        contar(escopo.c.status == "aprovado").label("total_aprovados"),
+        contar(escopo.c.status == "rejeitado").label("total_rejeitados"),
+        func.count().label("total_geral"),
+        contar(escopo.c.status.in_(["aprovado", "rejeitado"]) & escopo.c.comunicado.is_(False)).label("total_comunicacao_pendente"),
+        contar(escopo.c.comunicado.is_(True)).label("total_comunicados"),
+    ).select_from(escopo))).mappings().one())
+
+    secretarias_disponiveis = [dict(row) for row in (await session.execute(
+        select(escopo.c.secretaria_id.label("id"), escopo.c.secretaria_nome.label("nome"))
+        .where(escopo.c.secretaria_id.is_not(None)).distinct().order_by(escopo.c.secretaria_nome)
+    )).mappings().all()]
+
+    ids_filtrados = select(escopo.c.id)
+    if status_filtro == "confirmados_api":
+        ids_filtrados = ids_filtrados.where(
+            escopo.c.status == "pendente_analise", escopo.c.identificado_api.is_(True)
+        )
+    elif status_filtro and status_filtro != "todos":
+        ids_filtrados = ids_filtrados.where(escopo.c.status == status_filtro)
+    if secretaria_id:
+        ids_filtrados = ids_filtrados.where(escopo.c.secretaria_id == secretaria_id)
+    termo = busca.strip()
+    if termo:
+        id_texto = cast(escopo.c.id, String)
+        # Mesmo protocolo VAL-000001 exibido no card, incluindo buscas parciais.
+        protocolo = literal("val-") + case(
+            (func.length(id_texto) < 6, func.substr(literal("000000") + id_texto, func.length(id_texto) + 1, 6)),
+            else_=id_texto,
+        )
+        ids_filtrados = ids_filtrados.where(or_(
+            escopo.c.nome.icontains(termo, autoescape=True),
+            escopo.c.cpf.icontains(termo, autoescape=True),
+            escopo.c.secretaria_nome.icontains(termo, autoescape=True),
+            protocolo.icontains(termo, autoescape=True),
+        ))
+    total = (await session.execute(select(func.count()).select_from(ids_filtrados.subquery()))).scalar_one()
+    total_pages = max(1, (total + limit - 1) // limit)
+    page = min(page, total_pages)
+    ids_pagina = ids_filtrados.order_by(
+        escopo.c.status == "pendente_analise", desc(escopo.c.id)
+    ).offset((page - 1) * limit).limit(limit)
     stmt = (
-        select(SolicitacaoValidacao)
+        select(SolicitacaoValidacao).where(SolicitacaoValidacao.id.in_(ids_pagina))
         .options(
             selectinload(SolicitacaoValidacao.usuario).selectinload(Usuario.secretaria),
             selectinload(SolicitacaoValidacao.lote),
@@ -54,42 +124,14 @@ async def listar_solicitacoes_validacao(
     )
 
     res = await session.execute(stmt)
-    todas = res.scalars().all()
-
-    # Aplica restrição de secretarias do validador (a menos que seja superadmin) (SEC-08)
-    if not is_superadmin:
-        if not allowed_sec_ids:
-            todas = []
-        else:
-            todas = [
-                s for s in todas
-                if (s.secretaria_id in allowed_sec_ids or (s.usuario and s.usuario.secretaria_id in allowed_sec_ids))
-            ]
-
-    # KPIs de contagem
-    kpis = {
-        "total_pendentes": sum(1 for s in todas if s.status == "pendente_analise"),
-        "total_confirmados_api": sum(1 for s in todas if s.status == "pendente_analise" and getattr(s, "identificado_api", False)),
-        "total_aprovados": sum(1 for s in todas if s.status == "aprovado"),
-        "total_rejeitados": sum(1 for s in todas if s.status == "rejeitado"),
-        "total_geral": len(todas),
-        "total_comunicacao_pendente": sum(1 for s in todas if s.status in ["aprovado", "rejeitado"] and not getattr(s, "comunicado", False)),
-        "total_comunicados": sum(1 for s in todas if getattr(s, "comunicado", False))
-    }
-
-    # Filtragem por status e secretaria
-    selecionadas = [
-        s for s in todas
-        if (not status_filtro or status_filtro == "todos" or s.status == status_filtro)
-        and (not secretaria_id or s.secretaria_id == secretaria_id)
-    ]
+    selecionadas = res.scalars().all()
     estados_externos = {}
     if selecionadas:
         estados_externos = dict((await session.execute(text("""
             SELECT solicitacao_id, status FROM resgate_jobs
             WHERE job_type = 'external_validation'
-              AND solicitacao_id = ANY(CAST(:ids AS INTEGER[]))
-        """), {"ids": [s.id for s in selecionadas]})).all())
+              AND solicitacao_id IN :ids
+        """).bindparams(bindparam("ids", expanding=True)), {"ids": [s.id for s in selecionadas]})).all())
     lista_filtrada = []
     for s in selecionadas:
         u = s.usuario
@@ -128,6 +170,8 @@ async def listar_solicitacoes_validacao(
         "sucesso": True,
         "kpis": kpis,
         "solicitacoes": lista_filtrada,
+        "pagination": {"page": page, "limit": limit, "total": total, "total_pages": total_pages},
+        "secretarias_disponiveis": secretarias_disponiveis,
         "is_superadmin": is_superadmin,
         "allowed_secretarias": allowed_sec_ids
     })

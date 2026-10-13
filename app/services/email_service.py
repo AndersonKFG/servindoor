@@ -3,6 +3,7 @@ import base64
 import smtplib
 import asyncio
 import logging
+from html import escape
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
@@ -13,6 +14,37 @@ from app.core.config import settings
 from app.services.email_queue import enqueue_email
 
 logger = logging.getLogger(__name__)
+
+
+async def send_photo_correction_email_async(
+    usuario_nome: str, usuario_email: str, link: str, motivo: Optional[str],
+    validade_horas: int, *, session: AsyncSession,
+) -> bool:
+    """Enfileira a mensagem na mesma transação da solicitação de correção."""
+    nome_html = escape(usuario_nome)
+    link_html = escape(link, quote=True)
+    motivo_html = ""
+    if motivo:
+        texto = escape(motivo).replace("\n", "<br>")
+        motivo_html = f'<p><strong>Mensagem da organização:</strong></p><p>{texto}</p>'
+    html = f"""
+    <!doctype html><html lang="pt-BR"><body style="font-family:Arial,sans-serif;line-height:1.6;color:#172033;background:#f4f7fa;padding:24px">
+      <div style="max-width:560px;margin:auto;background:#fff;padding:28px;border-radius:16px">
+        <h1 style="font-size:24px">Solicitação de correção de foto</h1>
+        <p>Olá, {nome_html}!</p>
+        <p>A organização do Serv indoor solicita que você atualize sua foto de identificação.</p>
+        {motivo_html}
+        <p>Envie uma foto nítida, com boa iluminação e o rosto visível.</p>
+        <p style="margin:28px 0"><a href="{link_html}" style="display:inline-block;background:#0891b2;color:#fff;padding:14px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Corrigir minha foto</a></p>
+        <p>O link é pessoal, válido por {validade_horas} horas e permite uma única atualização.</p>
+        <p>Se o botão não abrir, copie o link abaixo para o navegador:</p>
+        <p style="word-break:break-all"><a href="{link_html}">{link_html}</a></p>
+        <p>Esta solicitação altera apenas a foto do cadastro.</p>
+        <p>Organização Serv indoor</p>
+      </div>
+    </body></html>"""
+    return await enqueue_email(usuario_email, "Solicitação de correção de foto - Serv indoor",
+                               html, "communications", session=session)
 
 def gerar_qrcode_png_bytes(data: str) -> Optional[bytes]:
     """Gera imagem de QR Code em bytes PNG puros localmente"""

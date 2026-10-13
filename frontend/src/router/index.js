@@ -22,9 +22,16 @@ import MeusPremiosView from '../views/MeusPremiosView.vue'
 import MeuIngressoView from '../views/MeuIngressoView.vue'
 import AdminCancelamentosView from '../views/AdminCancelamentosView.vue'
 import AdminValidacoesView from '../views/AdminValidacoesView.vue'
+import CorrigirFotoView from '../views/CorrigirFotoView.vue'
 
 const routes = [
   // Rotas Públicas (Sem necessidade de Login)
+  {
+    path: '/corrigir-foto',
+    name: 'corrigir-foto',
+    component: CorrigirFotoView,
+    meta: { hideNav: true }
+  },
   {
     path: '/acesso',
     name: 'acesso',
@@ -108,6 +115,9 @@ let gatekeeperChecked = false
 let gatekeeperEnabled = true
 
 router.beforeEach(async (to, from, next) => {
+  // O token pessoal recebido por e-mail autoriza exclusivamente a troca de foto.
+  if (to.name === 'corrigir-foto') return next()
+
   // 1. REGRA ESTRITA DO TELÃO: sempre exige autenticação pelo SITE_ACCESS_PIN
   if (to.path === '/telao') {
     const telaoAuth = sessionStorage.getItem('servindoor_telao_pin_autorizado') || localStorage.getItem('servindoor_telao_pin_autorizado')

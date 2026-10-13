@@ -16,7 +16,7 @@ from app.db.session import async_session, init_db
 from app.models.all_models import Ingresso, SolicitacaoCancelamento, SolicitacaoValidacao, Usuario
 
 # Importando as rotas separadas
-from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq, sponsor_logos
+from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq, sponsor_logos, correcao_foto
 
 _MAX_RESGATE_BODY_BYTES = 6 * 1024 * 1024
 
@@ -246,6 +246,7 @@ app.include_router(cancelamento.router)
 app.include_router(validacoes.router)
 app.include_router(faq.router)
 app.include_router(sponsor_logos.router)
+app.include_router(correcao_foto.router)
 
 # Fallback Catch-all para SPA Vue Router (Evita 404 em recarregamento F5)
 VUE_INDEX_PATH = 'app/static/dist/index.html'

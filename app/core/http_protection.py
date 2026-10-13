@@ -36,6 +36,7 @@ class HttpProtectionMiddleware:
         path = scope.get("path", "")
         public_api = (
             path.startswith(("/api/gatekeeper/", "/api/meu-ingresso/", "/api/lote/live-status", "/api/lote/stream", "/api/faq", "/api/sponsor-logos"))
+            or path.startswith("/api/correcao-foto/")
             or path in ("/api/sorteios/meus-premios", "/api/time")
         )
         if settings.GATEKEEPER_ENABLED and path.startswith("/api/") and not public_api:
@@ -48,6 +49,7 @@ class HttpProtectionMiddleware:
         form_post = scope.get("method") == "POST" and (
             (path.startswith("/api/lote/") and path.endswith("/resgatar"))
             or path.startswith("/resgate/")
+            or path.startswith("/api/correcao-foto/")
         )
         if not form_post:
             return await self.app(scope, receive, send)

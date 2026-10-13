@@ -77,7 +77,7 @@ async def migrar_fuso_reservas(conn: AsyncConnection) -> None:
 async def init_db():
     """Inicializa automaticamente todas as tabelas oficiais do sistema"""
     from app.models.all_models import (
-        Usuario, Lote, Ingresso, Secretaria, ReservaIngresso, LogAcesso,
+        Usuario, Lote, Ingresso, Secretaria, ReservaIngresso, LogAcesso, SolicitacaoCorrecaoFoto,
         Eixo, Premio, Ganhador, EstadoSorteio, GatekeeperTentativa, SolicitacaoCancelamento, BackupLote, TokenExclusaoLote, SolicitacaoValidacao, RateLimitTentativa, FaqItem, SponsorLogo
     )
     async with engine.begin() as conn:
