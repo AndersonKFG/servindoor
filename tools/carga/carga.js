@@ -314,7 +314,8 @@ export default function (data) {
 
   // O estado é lido primeiro pelo SSE, como no site. Nunca usa live-status.
   if (!stream(fingerprint, data.gateToken, { snapshotOnly: true })) { sleep(5); return; }
-  const url = `${base}/api/lote/${lot}/reservar?device_fingerprint=${encodeURIComponent(fingerprint)}&device_id=${encodeURIComponent(fingerprint)}`;
+  const loadKey = __ENV.LOAD_TEST_SECRET ? `&load_test_key=${encodeURIComponent(__ENV.LOAD_TEST_SECRET)}` : '';
+  const url = `${base}/api/lote/${lot}/reservar?device_fingerprint=${encodeURIComponent(fingerprint)}&device_id=${encodeURIComponent(fingerprint)}${loadKey}`;
   const reserved = http.post(url, null, params('reservar', headers));
   reservationTime.add(reserved.timings.duration);
   let response = null;

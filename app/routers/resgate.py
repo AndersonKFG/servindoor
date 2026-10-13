@@ -138,7 +138,7 @@ def _chave_rate_limit_reserva(request: Request, lote_id: int, fingerprint: Optio
         return ip
     if not fingerprint or not fingerprint.startswith("loadtest_") or len(fingerprint) > 100:
         return ip
-    fornecida = request.headers.get("x-load-test-key", "")
+    fornecida = request.headers.get("x-load-test-key", "") or request.query_params.get("load_test_key", "")
     if not secrets.compare_digest(fornecida.encode("utf-8"), chave.encode("utf-8")):
         return ip
     try:
