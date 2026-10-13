@@ -20,6 +20,21 @@
   -webkit-backdrop-filter: blur(16px);
 }
 
+/* CHAMADA PARA ACOMPANHAR CANAIS OFICIAIS */
+.channel-callout {
+  background: var(--bg-card);
+  border: 1px solid var(--success-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+}
+
+.channel-callout__title {
+  color: var(--text-main);
+  font-size: 1.15rem;
+  line-height: 1.35;
+  font-weight: 700;
+}
+
 /* GRID DE KPIS CANÔNICA */
 .kpi-grid {
   display: grid;

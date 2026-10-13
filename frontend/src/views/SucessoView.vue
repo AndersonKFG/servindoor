@@ -142,6 +142,28 @@ onMounted(() => {
   <div class="sucesso-page">
     <div class="app-container">
       <div class="sucesso-wrapper">
+        <aside v-if="!loading && !acessoNegado" class="channel-callout p-4 mb-4 text-center no-print" aria-labelledby="channel-callout-title">
+          <h2 id="channel-callout-title" class="channel-callout__title font-outfit mb-2">
+            Acompanhe as atualizações da festa
+          </h2>
+          <p class="text-muted small mb-3">
+            Siga o canal oficial da Servindoor no WhatsApp e fique atento a todos os avisos e novidades da festa.
+          </p>
+          <a
+            href="https://whatsapp.com/channel/0029VbDEW8KBFLgMTmjdco0C"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-channel w-100 font-outfit"
+          >
+            <i class="bi bi-whatsapp" aria-hidden="true"></i>
+            <span>Acessar canal do WhatsApp</span>
+            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+          </a>
+          <p class="text-muted small mt-2 mb-0">
+            No WhatsApp, toque em <strong>Seguir</strong> para acompanhar o canal.
+          </p>
+        </aside>
+
         <div class="vip-card ticket-card" :class="{ 'ticket-card--analysis': isAnalise }">
           
           <!-- ============================================================= -->

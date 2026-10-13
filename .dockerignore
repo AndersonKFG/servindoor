@@ -22,7 +22,8 @@ frontend/dist/
 htmlcov/
 .pytest_cache/
 app/static/dist/
-app/static/uploads/fotos/*
-!app/static/uploads/fotos/.gitkeep
-app/static/uploads/entregas/*
-!app/static/uploads/entregas/.gitkeep
+app/static/uploads/**
+!app/static/uploads/**/
+!app/static/uploads/**/.gitkeep
+app/static/*_teste*.png
+app/static/ingresso_final_ajustado.png

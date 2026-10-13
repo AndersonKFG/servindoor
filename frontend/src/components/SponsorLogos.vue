@@ -37,18 +37,23 @@ function drawCrop() {
   const image = sourceImage.value
   if (!canvas || !image) return
   const context = canvas.getContext('2d')
-  const aspect = canvas.width / canvas.height
-  const baseWidth = Math.min(image.naturalWidth, image.naturalHeight * aspect)
-  const baseHeight = baseWidth / aspect
-  const cropWidth = baseWidth / zoom.value
-  const cropHeight = baseHeight / zoom.value
-  const left = (image.naturalWidth - cropWidth) * centerX.value
-  const top = (image.naturalHeight - cropHeight) * centerY.value
+  const scale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight) * zoom.value
+  const width = image.naturalWidth * scale
+  const height = image.naturalHeight * scale
+  const left = (canvas.width - width) * centerX.value
+  const top = (canvas.height - height) * centerY.value
   context.clearRect(0, 0, canvas.width, canvas.height)
-  context.drawImage(image, left, top, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height)
+  // Desenha a imagem inteira; o espaço livre permanece transparente no PNG.
+  context.drawImage(image, left, top, width, height)
 }
 
 watch([zoom, centerX, centerY, sourceImage], () => nextTick(drawCrop))
+
+function resetCrop() {
+  zoom.value = 1
+  centerX.value = 0.5
+  centerY.value = 0.5
+}
 
 async function chooseFile(event) {
   const file = event.target.files?.[0]
@@ -64,17 +69,22 @@ async function chooseFile(event) {
   }
   errorMessage.value = ''
   selectedFile.value = file
-  zoom.value = 1
-  centerX.value = 0.5
-  centerY.value = 0.5
+  sourceImage.value = null
+  resetCrop()
   const image = new Image()
+  const objectUrl = URL.createObjectURL(file)
   image.onload = async () => {
+    URL.revokeObjectURL(objectUrl)
+    if (selectedFile.value !== file) return
     sourceImage.value = image
     await nextTick()
     drawCrop()
   }
-  image.onerror = () => { errorMessage.value = 'Não foi possível abrir essa imagem.' }
-  image.src = URL.createObjectURL(file)
+  image.onerror = () => {
+    URL.revokeObjectURL(objectUrl)
+    if (selectedFile.value === file) errorMessage.value = 'Não foi possível abrir essa imagem.'
+  }
+  image.src = objectUrl
 }
 
 function startDrag(event) {
@@ -88,11 +98,17 @@ function moveCrop(event) {
   if (!dragging.value || !pointerStart.value) return
   const image = sourceImage.value
   const canvas = cropCanvas.value
-  const aspect = canvas.width / canvas.height
-  const baseWidth = Math.min(image.naturalWidth, image.naturalHeight * aspect) / zoom.value
-  const baseHeight = baseWidth / aspect
-  centerX.value = Math.min(1, Math.max(0, pointerStart.value.centerX - (event.clientX - pointerStart.value.x) * zoom.value / (canvas.clientWidth || 1) * canvas.width / (image.naturalWidth - baseWidth || 1)))
-  centerY.value = Math.min(1, Math.max(0, pointerStart.value.centerY - (event.clientY - pointerStart.value.y) * zoom.value / (canvas.clientHeight || 1) * canvas.height / (image.naturalHeight - baseHeight || 1)))
+  const scale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight) * zoom.value
+  const freeWidth = canvas.width - image.naturalWidth * scale
+  const freeHeight = canvas.height - image.naturalHeight * scale
+  if (freeWidth) {
+    const deltaX = (event.clientX - pointerStart.value.x) * canvas.width / (canvas.clientWidth || canvas.width)
+    centerX.value = Math.min(1, Math.max(0, pointerStart.value.centerX + deltaX / freeWidth))
+  }
+  if (freeHeight) {
+    const deltaY = (event.clientY - pointerStart.value.y) * canvas.height / (canvas.clientHeight || canvas.height)
+    centerY.value = Math.min(1, Math.max(0, pointerStart.value.centerY + deltaY / freeHeight))
+  }
 }
 
 function stopDrag() {
@@ -101,10 +117,12 @@ function stopDrag() {
 }
 
 async function saveLogo() {
-  if (!cropCanvas.value) return
+  if (!cropCanvas.value || !sourceImage.value) return
   saving.value = true
   errorMessage.value = ''
   try {
+    await nextTick()
+    drawCrop()
     const response = await fetch('/api/sponsor-logos', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -151,7 +169,7 @@ onMounted(loadLogos)
 <template>
   <section v-if="logos.length || isAdminGeral" class="sponsor-strip" aria-label="Patrocinadores">
     <div v-if="logos.length" class="sponsor-strip-track-wrap">
-      <div class="sponsor-strip-track" :class="{ 'sponsor-strip-track-static': logos.length < 2 }">
+      <div class="sponsor-strip-track" :class="{ 'sponsor-strip-track-static': logos.length < 2 }" :style="{ '--sponsor-logo-count': repeatedLogos.length }">
         <div v-for="(logo, index) in repeatedLogos" :key="`${logo.id}-${index}`" class="sponsor-strip-item">
           <img :src="logo.url" :alt="`Logo de patrocinador ${index % logos.length + 1}`" />
         </div>
@@ -164,7 +182,7 @@ onMounted(loadLogos)
     </button>
 
     <Modal :show="showManager" title="Logos dos patrocinadores" icon="bi-images" :max-width="'680px'" @close="closeManager">
-      <p class="sponsor-manager-help">Adicione logos e arraste a imagem para ajustar o enquadramento; todas ficam no mesmo quadro horizontal.</p>
+      <p class="sponsor-manager-help">A logo é ajustada inteira por padrão, sem cortes e com a proporção original. Prefira PNG com fundo transparente. Você pode ajustar o tamanho e a posição se quiser.</p>
       <div class="sponsor-upload-area">
         <label class="sponsor-file-label">
           <i class="bi bi-upload"></i>
@@ -173,10 +191,13 @@ onMounted(loadLogos)
         </label>
         <template v-if="selectedFile">
           <div class="sponsor-crop-viewport" @pointerdown="startDrag" @pointermove="moveCrop" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag">
-            <canvas ref="cropCanvas" width="900" height="600" aria-label="Prévia do recorte da logo"></canvas>
-            <span class="sponsor-crop-hint"><i class="bi bi-arrows-move"></i> Arraste para enquadrar</span>
+            <canvas ref="cropCanvas" width="900" height="600" aria-label="Prévia da logo para envio"></canvas>
+            <span class="sponsor-crop-hint"><i class="bi bi-arrows-move"></i> Arraste para posicionar</span>
           </div>
-          <label class="sponsor-zoom-control">Zoom <input v-model.number="zoom" type="range" min="1" max="3" step="0.05" /></label>
+          <label class="sponsor-zoom-control">Zoom <input v-model.number="zoom" type="range" min="0.25" max="3" step="0.05" /></label>
+          <button type="button" class="btn-secondary" :disabled="!sourceImage || saving" @click="resetCrop">
+            <i class="bi bi-arrows-angle-contract" aria-hidden="true"></i> Mostrar logo inteira
+          </button>
           <button type="button" class="btn-sponsor-save" :disabled="saving || !sourceImage" @click="saveLogo">
             <i class="bi bi-check2"></i>{{ saving ? 'Salvando...' : 'Salvar logo' }}
           </button>

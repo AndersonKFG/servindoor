@@ -773,9 +773,9 @@ async def recuperar_confirmacao_resgate(
 
 async def _preparar_foto_resgate(foto_base64):
     if not foto_base64 or not foto_base64.startswith("data:image/jpeg;base64,"):
-        raise HTTPException(status_code=400, detail="A foto facial ao vivo é obrigatória para validação.")
+        raise HTTPException(status_code=400, detail="A foto de identificação é obrigatória para validação.")
     if len(foto_base64) > 6 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="A selfie excede o limite permitido de 4 MB.")
+        raise HTTPException(status_code=413, detail="A foto excede o limite permitido de 4 MB.")
 
     def gravar():
         foto_bytes = base64.b64decode(foto_base64.split(",", 1)[1], validate=True)

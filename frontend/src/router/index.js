@@ -179,6 +179,13 @@ router.beforeEach(async (to, from, next) => {
       })
     }
 
+    if (user.deve_trocar_senha) {
+      return next({
+        path: '/login',
+        query: { redirect: to.fullPath }
+      })
+    }
+
     // Validação estrita de papéis (Role-Based Access Control)
     const requiredRoles = to.meta.roles
     if (requiredRoles && requiredRoles.length > 0) {
@@ -202,6 +209,7 @@ router.beforeEach(async (to, from, next) => {
     const { checkAuth, isAuthenticated } = useAuth()
     const user = await checkAuth()
     if (user && isAuthenticated.value) {
+      if (user.deve_trocar_senha) return next()
       const redirect = to.query.redirect
       if (redirect && typeof redirect === 'string' && redirect.startsWith('/') && redirect !== '/login') {
         return next({ path: redirect })

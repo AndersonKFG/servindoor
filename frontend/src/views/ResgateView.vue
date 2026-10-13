@@ -871,7 +871,7 @@ function validarFormularioParaEnvio() {
   }
 
   if (!form.value.foto_base64) {
-    errorMessage.value = 'A selfie ao vivo é obrigatória para emissão do ingresso nominal.'
+    errorMessage.value = 'A foto de identificação é obrigatória. Tire uma foto pela câmera ou envie um arquivo.'
     return false
   }
 
@@ -1282,16 +1282,16 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- SEÇÃO 4: SELFIE AO VIVO -->
+            <!-- SEÇÃO 4: FOTO DE IDENTIFICAÇÃO -->
             <div class="form-section">
               <h3 class="section-title font-outfit">
-                <i class="bi bi-camera-fill text-primary me-2"></i> 4. Validação Facial Obrigatória (Selfie ao Vivo)
+                <i class="bi bi-camera-fill text-primary me-2"></i> 4. Foto de Identificação Obrigatória
               </h3>
               <p class="section-desc">
-                Para garantir a segurança e a validação na portaria, tire uma foto sua agora mesmo através da câmera do seu aparelho.
+                Para sua identificação na portaria, tire uma foto pela câmera ou envie uma foto sua já salva no computador ou celular. Escolha uma imagem nítida, com o rosto visível e sem outras pessoas.
               </p>
 
-              <WebcamCapture v-model="form.foto_base64" />
+              <WebcamCapture v-model="form.foto_base64" allow-upload />
             </div>
 
             <!-- BOTÕES DE AÇÃO: CONCLUIR OU DESISTIR -->
@@ -1333,7 +1333,7 @@ onUnmounted(() => {
     >
       <div class="modal-info-box">
         <p class="text-light mb-0">
-          Ao clicar em "Resgatar Ingresso", o sistema <strong>reserva uma vaga exclusivamente para você por 5 minutos</strong>, garantindo que ninguém pegue seu lugar enquanto você preenche seus dados e tira a selfie.
+          Ao clicar em "Resgatar Ingresso", o sistema <strong>reserva uma vaga exclusivamente para você por 5 minutos</strong>, garantindo que ninguém pegue seu lugar enquanto você preenche seus dados e tira ou envia sua foto.
         </p>
       </div>
 

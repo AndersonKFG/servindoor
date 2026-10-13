@@ -72,6 +72,10 @@ const props = defineProps({
   maxWidth: {
     type: String,
     default: '540px'
+  },
+  dismissible: {
+    type: Boolean,
+    default: true
   }
 })
 
@@ -79,7 +83,7 @@ const emit = defineEmits(['close'])
 const modalContentRef = ref(null)
 
 function handleBackdropClick(e) {
-  if (e.target === e.currentTarget) {
+  if (props.dismissible && e.target === e.currentTarget) {
     emit('close')
   }
 }
@@ -95,7 +99,7 @@ function handleKeyDown(e) {
     }
     e.preventDefault()
     e.stopPropagation()
-    emit('close')
+    if (props.dismissible) emit('close')
     return
   }
 
@@ -204,7 +208,7 @@ onUnmounted(() => {
             <i v-if="icon" :class="[ icon, iconColor, 'me-2' ]"></i>
             <span>{{ title }}</span>
           </h3>
-          <button type="button" class="btn-close-custom" aria-label="Fechar" @click="emit('close')">
+          <button v-if="dismissible" type="button" class="btn-close-custom" aria-label="Fechar" @click="emit('close')">
             <i class="bi bi-x-lg"></i>
           </button>
         </div>

@@ -17,8 +17,7 @@
 
 .sponsor-strip-track {
   display: flex;
-  width: max-content;
-  gap: 20px;
+  width: calc(100% * var(--sponsor-logo-count) / 5);
   animation: sponsor-logo-flow 62s linear infinite;
 }
 
@@ -31,16 +30,13 @@
 }
 
 .sponsor-strip-item {
-  flex: 0 0 calc((min(100vw - 40px, 1000px) - 80px) / 5);
-  height: 82px;
+  flex: 0 0 calc(100% / var(--sponsor-logo-count));
+  min-width: 0;
+  height: clamp(48px, 10vw, 96px);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 14px;
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-lg, 16px);
-  background: var(--bg-card, rgba(255, 255, 255, 0.04));
-  backdrop-filter: blur(8px);
+  padding: 4px clamp(4px, 1.5vw, 14px);
 }
 
 .sponsor-strip-item img {
@@ -48,6 +44,7 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
+  filter: drop-shadow(0 4px 8px var(--bg-base));
 }
 
 .sponsor-strip-empty,
@@ -217,13 +214,7 @@
 }
 
 @media (max-width: 640px) {
-  .sponsor-strip-item {
-    flex-basis: calc((100vw - 64px) / 2);
-    height: 72px;
-  }
-
   .sponsor-strip-track {
-    gap: 12px;
     animation-duration: 48s;
   }
 }

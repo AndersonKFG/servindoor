@@ -17,12 +17,12 @@ router = APIRouter(prefix="/api/faq", tags=["Perguntas Frequentes - FAQ"])
 INITIAL_FAQS = [
     {
         "pergunta": "Como funciona o resgate dos ingressos?",
-        "resposta": "Após o lote abrir, cada servidor poderá resgatar 1 ingresso por CPF, inserindo as informações no formulário e tirando sua foto ao vivo.",
+        "resposta": "Após o lote abrir, cada servidor poderá resgatar 1 ingresso por CPF, preenchendo o formulário e tirando uma foto pela câmera ou enviando uma foto sua salva no computador ou celular.",
         "ordem": 1
     },
     {
         "pergunta": "Preciso mesmo tirar a foto?",
-        "resposta": "Sim, a foto é essencial para que a equipe da Servindoor possa identificar o servidor caso necessário.",
+        "resposta": "Sim, a foto é essencial para que a equipe da Servindoor possa identificar o servidor caso necessário. Você pode tirar a foto pela câmera ou enviar um arquivo JPG, PNG ou WebP de até 10 MB, com seu rosto nítido e visível.",
         "ordem": 2
     },
     {

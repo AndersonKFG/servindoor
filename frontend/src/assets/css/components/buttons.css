@@ -61,6 +61,26 @@
   transform: translateY(-1px);
 }
 
+/* ACESSO EM DESTAQUE A CANAIS OFICIAIS */
+.btn-channel {
+  min-height: 52px;
+  background: var(--success-color);
+  color: var(--bg-base);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.btn-channel:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.btn-channel:focus-visible {
+  outline: 2px solid var(--text-main);
+  outline-offset: 3px;
+}
+
 /* BOTÃO SECUNDÁRIO (GLASS / NEUTRO) */
 .btn-secondary {
   background: rgba(255, 255, 255, 0.06);

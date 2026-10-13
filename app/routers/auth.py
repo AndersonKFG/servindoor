@@ -142,6 +142,10 @@ async def login_page(request: Request, session: AsyncSession = Depends(get_sessi
                     result = await session.execute(statement)
                     user = result.scalars().first()
                     if user and (not user.session_id or not token_sid or user.session_id == token_sid):
+                        if user.deve_trocar_senha:
+                            if os.path.exists(VUE_INDEX_PATH):
+                                return FileResponse(VUE_INDEX_PATH)
+                            return templates.TemplateResponse(request=request, name='login.html')
                         roles_list = user.get_roles_list()
                         if 'admin_geral' in roles_list:
                             return RedirectResponse(url='/admin', status_code=status.HTTP_303_SEE_OTHER)
@@ -417,7 +421,9 @@ async def login_action(
         expires_delta=access_token_expires
     )
 
-    if 'admin_geral' in roles_list:
+    if usuario.deve_trocar_senha:
+        destino = '/login'
+    elif 'admin_geral' in roles_list:
         destino = '/admin'
     elif 'admin' in roles_list:
         destino = '/admin/participantes'
@@ -432,12 +438,14 @@ async def login_action(
         response = JSONResponse(content={
             'sucesso': True,
             'redirect_url': destino,
+            'deve_trocar_senha': bool(usuario.deve_trocar_senha),
             'usuario': {
                 'id': usuario.id,
                 'cpf': usuario.cpf,
                 'nome': usuario.nome,
                 'role': role_str,
-                'roles': roles_list
+                'roles': roles_list,
+                'deve_trocar_senha': bool(usuario.deve_trocar_senha)
             }
         })
     else:

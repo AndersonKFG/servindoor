@@ -8,6 +8,7 @@ import Modal from '../components/Modal.vue'
 const router = useRouter()
 const route = useRoute()
 const { currentUser, isStaff, checkAuth } = useAuth()
+const { toast } = useToast()
 
 const username = ref('')
 const password = ref('')
@@ -59,7 +60,9 @@ onMounted(async () => {
   }
 
   const user = await checkAuth()
-  if (user && !sessaoSubstituidaAlerta.value) {
+  if (user?.deve_trocar_senha) {
+    showModalTrocarSenhaObrigatoria.value = true
+  } else if (user && !sessaoSubstituidaAlerta.value) {
     redirecionarPorRoles(user.roles || [user.role])
   }
 })
@@ -117,8 +120,14 @@ async function handleSalvarSenhaObrigatoria() {
     const data = await res.json()
     if (res.ok && data.sucesso) {
       toast.success('Senha definitiva cadastrada com sucesso!')
-      showModalTrocarSenhaObrigatoria.value = false
       const user = await checkAuth(true)
+      if (user?.deve_trocar_senha) {
+        erroNovaSenha.value = 'A troca de senha ainda está pendente. Tente novamente.'
+        return
+      }
+      showModalTrocarSenhaObrigatoria.value = false
+      novaSenhaObrigatoria.value = ''
+      confirmacaoSenhaObrigatoria.value = ''
       if (user) {
         redirecionarPorRoles(user.roles || [user.role])
       } else {
@@ -198,6 +207,11 @@ async function handleLogin(forcar = false) {
     }
 
     const user = await checkAuth(true)
+    if (user?.deve_trocar_senha) {
+      showModalTrocarSenhaObrigatoria.value = true
+      loading.value = false
+      return
+    }
     if (user) {
       const redirect = route.query.redirect
       if (redirect && typeof redirect === 'string' && redirect.startsWith('/')) {
@@ -356,6 +370,64 @@ async function handleLogin(forcar = false) {
       </template>
     </Modal>
 
+    <Modal
+      :show="showModalTrocarSenhaObrigatoria"
+      title="Defina sua nova senha"
+      icon="bi-shield-lock-fill"
+      :dismissible="false"
+    >
+      <div class="modal-hero-card">
+        <p class="mb-0">Sua senha é provisória. Cadastre uma nova senha pessoal para continuar acessando o sistema.</p>
+      </div>
+
+      <form id="form-senha-obrigatoria" class="modal-section" @submit.prevent="handleSalvarSenhaObrigatoria">
+        <div v-if="erroNovaSenha" class="alert-danger-box mb-3" role="alert">
+          {{ erroNovaSenha }}
+        </div>
+        <div class="modal-info-grid">
+          <div class="modal-field-card">
+            <label class="form-label" for="nova-senha-obrigatoria">Nova senha</label>
+            <input
+              id="nova-senha-obrigatoria"
+              v-model="novaSenhaObrigatoria"
+              class="form-control"
+              type="password"
+              autocomplete="new-password"
+              minlength="6"
+              placeholder="Pelo menos 6 caracteres"
+              :disabled="salvandoNovaSenha"
+              required
+            />
+          </div>
+          <div class="modal-field-card">
+            <label class="form-label" for="confirmacao-senha-obrigatoria">Confirme a nova senha</label>
+            <input
+              id="confirmacao-senha-obrigatoria"
+              v-model="confirmacaoSenhaObrigatoria"
+              class="form-control"
+              type="password"
+              autocomplete="new-password"
+              minlength="6"
+              :disabled="salvandoNovaSenha"
+              required
+            />
+          </div>
+        </div>
+      </form>
+
+      <template #footer>
+        <div class="modal-footer-grid w-100">
+          <button
+            type="submit"
+            form="form-senha-obrigatoria"
+            class="btn-primary w-100"
+            :disabled="salvandoNovaSenha"
+          >
+            {{ salvandoNovaSenha ? 'Salvando...' : 'Salvar nova senha e continuar' }}
+          </button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
