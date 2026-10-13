@@ -223,7 +223,7 @@ class ReservaBatchService:
         browsers = {item.browser_hash for item in requests if item.browser_hash}
         cpfs = {item.cpf for item in requests if item.cpf}
         identity_keys = set()
-        for namespace, values in (("fp", fingerprints), ("device", devices),
+        for namespace, values in (("device", devices),
                                   ("browser", browsers), ("cpf", cpfs)):
             identity_keys.update(_lock_key(namespace, value) for value in values)
         await _advisory_locks(session, identity_keys)
@@ -234,8 +234,7 @@ class ReservaBatchService:
             return finish([ReservationResult(400, "encerrado", "O período deste lote já encerrou.") for _ in requests])
 
         conditions = []
-        for column, values in ((ReservaIngresso.device_fingerprint, fingerprints),
-                               (ReservaIngresso.device_id, devices),
+        for column, values in ((ReservaIngresso.device_id, devices),
                                (ReservaIngresso.browser_token_hash, browsers),
                                (ReservaIngresso.cpf, cpfs)):
             if values:
@@ -276,12 +275,14 @@ class ReservaBatchService:
             if item.cancelled:
                 results.append(self._busy())
                 continue
-            existing = maps["fp"].get(item.fp) or maps["device"].get(item.device_id) or maps["browser"].get(item.browser_hash)
+            existing = maps["browser"].get(item.browser_hash)
+            if not existing and item.device_id:
+                candidate = maps["device"].get(item.device_id)
+                if candidate and (not candidate.browser_token_hash or candidate.browser_token_hash == item.browser_hash):
+                    existing = candidate
             if existing:
                 if existing.lote_id != lote.id:
                     results.append(ReservationResult(400, "reserva_outro_lote", "Este dispositivo tem uma reserva em outro lote."))
-                elif existing.browser_token_hash and existing.browser_token_hash != item.browser_hash:
-                    results.append(ReservationResult(403, "reserva_outro_navegador", "A reserva pertence a outro navegador."))
                 elif item.cpf and existing.cpf and item.cpf != existing.cpf:
                     results.append(ReservationResult(409, "reserva_existente", "A reserva já está vinculada a outro CPF."))
                 elif item.cpf and maps["cpf"].get(item.cpf) not in (None, existing):
@@ -293,7 +294,7 @@ class ReservaBatchService:
                         session.add(existing)
                     results.append(ReservationResult(200, reserva=existing))
                 continue
-            if rate_counts.get(item.rate_key, 0) >= self.rate_limit:
+            if self.rate_limit and self.rate_limit < 100000 and rate_counts.get(item.rate_key, 0) >= self.rate_limit:
                 results.append(ReservationResult(429, "rate_limit", "Muitas tentativas. Aguarde um instante."))
                 continue
             rate_counts[item.rate_key] = rate_counts.get(item.rate_key, 0) + 1

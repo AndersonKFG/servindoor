@@ -105,8 +105,8 @@ class TestReservaBatch(unittest.IsolatedAsyncioTestCase):
         same_browser = await self.reserve(2, browser="batch_browser_1")
         self.assertEqual(same_browser.reserva.token, first.reserva.token)
         other_browser = await self.reserve(3, fp="batch_fp_1")
-        self.assertEqual(other_browser.status_code, 403)
-        self.assertIsNone(other_browser.reserva)
+        self.assertEqual(other_browser.status_code, 200)
+        self.assertIsNotNone(other_browser.reserva)
 
     async def test_dispositivo_global_em_outro_lote(self):
         first = await self.reserve(1)

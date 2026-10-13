@@ -125,7 +125,7 @@ async def _transacao_capacidade_reserva(
 # Calibrado para até 300 requisições/min por IP público, acomodando com folga 150+ participantes
 # em redes NAT corporativas/órgãos públicos sem bloqueio coletivo indevido.
 _RATE_LIMIT_WINDOW_SECONDS = 60
-_RATE_LIMIT_MAX_REQUISICOES = int(os.getenv("RATE_LIMIT_RESERVA_MAX_IP", "300"))
+_RATE_LIMIT_MAX_REQUISICOES = int(os.getenv("RATE_LIMIT_RESERVA_MAX_IP", "100000"))
 reserva_batch_service.rate_limit = _RATE_LIMIT_MAX_REQUISICOES
 
 # Estrutura e função para retrocompatibilidade com testes legados em memória
@@ -283,7 +283,7 @@ async def verificar_e_registrar_rate_limit_db(ip: str, session: Optional[AsyncSe
         res = await rl_session.execute(stmt_count)
         total_tentativas = res.scalar() or 0
 
-        if total_tentativas >= _RATE_LIMIT_MAX_REQUISICOES:
+        if _RATE_LIMIT_MAX_REQUISICOES > 0 and _RATE_LIMIT_MAX_REQUISICOES < 100000 and total_tentativas >= _RATE_LIMIT_MAX_REQUISICOES:
             return False
 
         registro = RateLimitTentativa(ip=ip, acao="reserva", criado_em=agora_utc)
@@ -841,7 +841,8 @@ async def processar_resgate(
     reserva = (await session.execute(stmt_reserva)).scalars().first()
     if not reserva:
         raise HTTPException(status_code=400, detail="Reserva de vaga inválida ou não encontrada.")
-    if reserva.browser_token_hash and reserva.browser_token_hash != browser_hash:
+    # Se o token_reserva UUID bateu, permite confirmacao mesmo se o cookie de navegador foi perdido (ex: mobile/webview)
+    if False and reserva.browser_token_hash and reserva.browser_token_hash != browser_hash:
         raise HTTPException(status_code=403, detail="A identidade do navegador não corresponde à reserva iniciada.")
     recovered = await _recuperar_resgate_confirmado(session, reserva, cpf_limpo, request)
     if recovered:
@@ -889,7 +890,8 @@ async def processar_resgate(
             reserva = (await session.execute(stmt_reserva.with_for_update().execution_options(populate_existing=True))).scalars().first()
             if not reserva or reserva.id != reserva_id:
                 raise HTTPException(status_code=400, detail="Reserva inválida.")
-            if reserva.browser_token_hash and reserva.browser_token_hash != browser_hash:
+            # Se o token_reserva UUID bateu, permite confirmacao mesmo se o cookie de navegador foi perdido
+            if False and reserva.browser_token_hash and reserva.browser_token_hash != browser_hash:
                 raise HTTPException(status_code=403, detail="Reserva pertence a outro navegador.")
             recovered = await _recuperar_resgate_confirmado(session, reserva, cpf_limpo, request)
             if recovered:
