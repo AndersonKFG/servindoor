@@ -35,6 +35,48 @@ const totalPaginasServer = ref(1)
 const totalRegistrosServer = ref(0)
 const lotesServer = ref([])
 const secretariasServer = ref([])
+const showModalExportacao = ref(false)
+const modoExportacao = ref('unico')
+const agrupamentoExportacao = ref('secretaria')
+const exportandoPlanilha = ref(false)
+const erroExportacao = ref('')
+
+function abrirExportacaoPlanilha() {
+  if (exportandoPlanilha.value) return
+  erroExportacao.value = ''
+  showModalExportacao.value = true
+}
+
+async function exportarPlanilhaParticipantes() {
+  if (exportandoPlanilha.value) return
+  exportandoPlanilha.value = true
+  erroExportacao.value = ''
+  const modo = modoExportacao.value
+  const agrupamento = agrupamentoExportacao.value
+  try {
+    const params = new URLSearchParams({ modo, agrupar: agrupamento })
+    const response = await fetch(`/api/admin/participantes/exportar-planilha?${params}`)
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      throw new Error(typeof data.detail === 'string' ? data.detail : 'Não foi possível exportar os participantes.')
+    }
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = modo === 'unico' ? 'participantes.xlsx' : `participantes_por_${agrupamento}.${modo === 'arquivos' ? 'zip' : 'xlsx'}`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    showModalExportacao.value = false
+    toast.success('Exportação gerada. Download iniciado.')
+  } catch (err) {
+    erroExportacao.value = err.message || 'Erro de conexão ao exportar os participantes.'
+  } finally {
+    exportandoPlanilha.value = false
+  }
+}
 
 // Modais
 const showModalFoto = ref(false)
@@ -576,7 +618,7 @@ function exportarCSV() {
 onMounted(() => {
   carregarParticipantes()
   pollInterval = setInterval(() => {
-    if (!document.hidden && !showModalIngresso.value && !showModalEmail.value && !showModalCancelar.value && !showModalFoto.value && !showModalExplicacaoStatus.value && !showModalDetalhesStatus.value && !showModalEditar.value && !showModalInfo.value) {
+    if (!document.hidden && !showModalIngresso.value && !showModalEmail.value && !showModalCancelar.value && !showModalFoto.value && !showModalExplicacaoStatus.value && !showModalDetalhesStatus.value && !showModalEditar.value && !showModalInfo.value && !showModalExportacao.value) {
       carregarParticipantes(true)
     }
   }, 2500)
@@ -605,6 +647,10 @@ onUnmounted(() => {
         </div>
 
         <div class="admin-header-actions">
+          <button type="button" class="btn btn-secondary" :disabled="exportandoPlanilha" @click="abrirExportacaoPlanilha">
+            <i class="bi bi-file-earmark-excel text-success me-2"></i>
+            <span>Exportar Planilha</span>
+          </button>
           <button type="button" class="btn btn-secondary" @click="exportarCSV">
             <i class="bi bi-file-earmark-spreadsheet-fill text-success me-2"></i>
             <span>Exportar CSV</span>
@@ -1730,6 +1776,44 @@ onUnmounted(() => {
     </Modal>
 
     <!-- MODAL 8: FOTO ZOOM -->
+    <Modal :show="showModalExportacao" title="Exportar participantes" icon="bi-file-earmark-excel" max-width="680px" :dismissible="!exportandoPlanilha" @close="!exportandoPlanilha && (showModalExportacao = false)">
+      <div class="modal-hero-card">
+        <div class="modal-hero-info">
+          <strong>Cadastro completo e situação no evento</strong>
+          <p class="mb-0 small text-muted">Todos os participantes não excluídos, inclusive inativos, com uma linha por pessoa. Usuários da equipe ficam de fora. Os filtros e a paginação da tela não limitam a exportação.</p>
+        </div>
+      </div>
+      <div class="modal-section">
+        <div class="modal-info-grid modal-info-grid--single">
+          <div class="modal-field-card">
+            <label for="exportacao-modo" class="form-label">Organização dos arquivos</label>
+            <select id="exportacao-modo" v-model="modoExportacao" class="form-select" :disabled="exportandoPlanilha">
+              <option value="unico">1 arquivo Excel, 1 aba com todos</option>
+              <option value="abas">1 arquivo Excel, 1 aba por grupo</option>
+              <option value="arquivos">Vários arquivos Excel, 1 aba cada (ZIP)</option>
+            </select>
+          </div>
+          <div v-if="modoExportacao !== 'unico'" class="modal-field-card">
+            <label for="exportacao-agrupamento" class="form-label">Separar por</label>
+            <select id="exportacao-agrupamento" v-model="agrupamentoExportacao" class="form-select" :disabled="exportandoPlanilha">
+              <option value="secretaria">Secretaria</option>
+              <option value="lote">Lote</option>
+            </select>
+          </div>
+        </div>
+        <p class="small text-muted mt-3 mb-0">Inclui CPF, contato, vínculo, secretaria, homologação, comunicação registrada, ingresso, cancelamento e presença. Datas e horários no fuso de São Paulo.</p>
+        <p v-if="modoExportacao !== 'unico' && agrupamentoExportacao === 'lote'" class="small text-muted mt-2 mb-0">O lote vem do ingresso ativo ou, sem ele, da última solicitação de validação ou do histórico do ingresso. Participantes sem vínculo com um lote ficam em “Sem lote”.</p>
+        <p v-if="modoExportacao !== 'unico' && agrupamentoExportacao === 'secretaria'" class="small text-muted mt-2 mb-0">Cada participante fica na secretaria do seu cadastro. Cadastros sem secretaria ficam em “Sem secretaria”.</p>
+      </div>
+      <div v-if="erroExportacao" class="modal-alert-card modal-alert-card--danger" role="alert">{{ erroExportacao }}</div>
+      <template #footer>
+        <div class="modal-footer-grid">
+          <button type="button" class="btn-secondary" :disabled="exportandoPlanilha" @click="showModalExportacao = false">Fechar</button>
+          <button type="button" class="btn-primary" :disabled="exportandoPlanilha" @click="exportarPlanilhaParticipantes">{{ exportandoPlanilha ? 'Gerando exportação...' : 'Baixar exportação' }}</button>
+        </div>
+      </template>
+    </Modal>
+
     <Modal :show="showModalFoto" :title="fotoZoomNome" icon="bi-image" @close="showModalFoto = false">
       <div class="text-center p-3">
         <img :src="fotoZoomUrl" alt="Foto do Participante" class="modal-photo-zoom" />

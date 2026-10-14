@@ -7,6 +7,8 @@ import io
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
+from typing import Literal
+from starlette.concurrency import run_in_threadpool
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, status, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, FileResponse, Response
 import json
@@ -1408,6 +1410,24 @@ async def exportar_todos_ingressos_csv(
 # ==========================================
 # GESTÃO DE USUÁRIOS E PERMISSÕES (ADMIN)
 # ==========================================
+
+@router.get("/api/admin/participantes/exportar-planilha")
+async def exportar_participantes_planilha(
+    modo: Literal["unico", "abas", "arquivos"] = Query("unico"),
+    agrupar: Literal["lote", "secretaria"] = Query("secretaria"),
+    session: AsyncSession = Depends(get_session),
+    admin: Usuario = Depends(get_current_admin),
+):
+    from app.services.participantes_export import coletar_participantes, gerar_exportacao
+
+    registros = await coletar_participantes(session)
+    conteudo, nome, media_type = await run_in_threadpool(gerar_exportacao, registros, modo, agrupar)
+    return Response(content=conteudo, media_type=media_type, headers={
+        "Content-Disposition": f'attachment; filename="{nome}"',
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+    })
+
 
 @router.get("/api/admin/participantes")
 async def listar_participantes_admin(

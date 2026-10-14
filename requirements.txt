@@ -14,3 +14,4 @@ passlib[argon2]
 argon2-cffi
 qrcode[pil]
 pillow
+openpyxl==3.1.5
