@@ -37,9 +37,10 @@ async def listar_solicitacoes_validacao(
     """
     Lista solicitações de validação de servidores.
     Validadores com 'secretarias_validador' definidas só têm acesso às suas secretarias atribuídas.
-    Admin Geral tem acesso irrestrito.
+    Administradores (admin e admin_geral) podem consultar todas as secretarias.
     """
     is_superadmin = "admin_geral" in validador.get_roles_list() or validador.role == UserRole.admin_geral
+    acesso_global = is_superadmin or validador.has_role("admin")
     allowed_sec_ids = validador.get_secretarias_validador_ids()
 
     # Permissões são aplicadas no banco antes de contar, filtrar ou paginar.
@@ -55,7 +56,7 @@ async def listar_solicitacoes_validacao(
         .outerjoin(Usuario, Usuario.id == SolicitacaoValidacao.usuario_id)
         .outerjoin(Secretaria, Secretaria.id == secretaria_efetiva)
     )
-    if not is_superadmin:
+    if not acesso_global:
         escopo_stmt = escopo_stmt.where(or_(
             SolicitacaoValidacao.secretaria_id.in_(allowed_sec_ids),
             Usuario.secretaria_id.in_(allowed_sec_ids),

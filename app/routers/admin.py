@@ -1730,7 +1730,8 @@ async def editar_participante_admin(
 ):
     """
     Permite que Administradores (admin) e Administradores Gerais (admin_geral)
-    atualizem secretaria, setor, telefone, data de nascimento e e-mail de um participante.
+    atualizem nome completo, vínculo, secretaria, setor, telefone,
+    data de nascimento e e-mail de um participante.
     """
     try:
         data = await request.json()
@@ -1755,6 +1756,18 @@ async def editar_participante_admin(
             status_code=403,
             detail="Apenas o Administrador Geral pode editar dados de outros administradores."
         )
+
+    if "nome" in data:
+        nome = data.get("nome")
+        if not isinstance(nome, str) or not nome.strip():
+            raise HTTPException(status_code=400, detail="O nome completo do participante é obrigatório.")
+        usuario.nome = nome.strip()
+
+    if "vinculo" in data:
+        vinculo = data.get("vinculo")
+        if vinculo is not None and not isinstance(vinculo, str):
+            raise HTTPException(status_code=400, detail="Vínculo inválido.")
+        usuario.vinculo = (vinculo.strip() or None) if vinculo is not None else None
 
     # 1. Secretaria
     if "secretaria_id" in data:
@@ -1847,6 +1860,7 @@ async def editar_participante_admin(
         "participante": {
             "id": usuario.id,
             "nome": usuario.nome,
+            "vinculo": usuario.vinculo,
             "cpf": usuario.cpf,
             "email": usuario.email,
             "telefone": usuario.telefone,

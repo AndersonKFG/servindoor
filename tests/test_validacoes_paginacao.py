@@ -106,6 +106,33 @@ class TestValidacoesPaginacao(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(vazio["solicitacoes"], [])
         self.assertEqual(vazio["secretarias_disponiveis"], [])
 
+    async def test_admin_consulta_todas_as_secretarias_com_ou_sem_atribuicoes(self):
+        for roles in (None, "admin", "validador, admin"):
+            for atribuicoes in (None, "1"):
+                with self.subTest(roles=roles, atribuicoes=atribuicoes):
+                    admin = Usuario(
+                        cpf="52998224725", nome="Administrador",
+                        role=UserRole.admin if roles is None else UserRole.validador,
+                        roles=roles, secretaria_id=1, secretarias_validador=atribuicoes,
+                    )
+                    pendentes = await self.listar(usuario=admin)
+                    self.assertEqual(pendentes["pagination"]["total"], 45)
+                    primeira = await self.listar(usuario=admin, status="todos", limit=50)
+                    segunda = await self.listar(usuario=admin, status="todos", limit=50, page=2)
+                    self.assertEqual(primeira["pagination"]["total"], 61)
+                    self.assertEqual(
+                        {s["id"] for s in primeira["solicitacoes"] + segunda["solicitacoes"]},
+                        set(range(1, 62)),
+                    )
+                    self.assertEqual(primeira["kpis"]["total_geral"], 61)
+                    self.assertEqual(primeira["kpis"]["total_pendentes"], 45)
+                    self.assertEqual({s["id"] for s in primeira["secretarias_disponiveis"]}, {1, 2, 3})
+                    self.assertFalse(primeira["is_superadmin"])
+                    filtrada = await self.listar(usuario=admin, status="todos", secretaria=3)
+                    self.assertEqual([s["id"] for s in filtrada["solicitacoes"]], [61])
+                    busca = await self.listar(usuario=admin, status="todos", busca="Pessoa 61")
+                    self.assertEqual([s["id"] for s in busca["solicitacoes"]], [61])
+
     async def test_pagina_fora_do_intervalo_e_ajustada_apos_remocao_do_ultimo_card(self):
         data = await self.listar(page=999, limit=10)
         self.assertEqual(data["pagination"]["page"], 5)

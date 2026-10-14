@@ -85,7 +85,13 @@ const participanteInfo = ref(null)
 const showModalEditar = ref(false)
 const participanteEditar = ref(null)
 const salvandoEditar = ref(false)
+const vinculosDisponiveis = [
+  'Efetivo', 'Comissionado', 'Contrato Temporário', 'Estagiário',
+  'Terceirizado', 'Prestador de Serviço', 'Aposentado'
+]
 const formEditar = ref({
+  nome: '',
+  vinculo: '',
   secretaria_id: null,
   setor: '',
   telefone: '',
@@ -131,6 +137,8 @@ function onTelefoneInput(event) {
 function abrirModalEditar(p) {
   participanteEditar.value = p
   formEditar.value = {
+    nome: p.nome || '',
+    vinculo: p.vinculo || '',
     secretaria_id: p.secretaria ? p.secretaria.id : null,
     setor: p.setor || '',
     telefone: p.telefone || '',
@@ -147,7 +155,12 @@ function fecharModalEditar() {
 }
 
 async function salvarEdicaoParticipante() {
-  if (!participanteEditar.value) return
+  if (!participanteEditar.value || salvandoEditar.value) return
+
+  if (!formEditar.value.nome.trim()) {
+    toast.warning('Por favor, informe o nome completo do participante.')
+    return
+  }
 
   if (formEditar.value.email && formEditar.value.email.trim()) {
     const em = formEditar.value.email.trim()
@@ -168,6 +181,8 @@ async function salvarEdicaoParticipante() {
   try {
     salvandoEditar.value = true
     const payload = {
+      nome: formEditar.value.nome.trim(),
+      vinculo: formEditar.value.vinculo.trim() || null,
       secretaria_id: formEditar.value.secretaria_id,
       setor: formEditar.value.setor ? formEditar.value.setor.trim() : null,
       telefone: formEditar.value.telefone ? formEditar.value.telefone.trim() : null,
@@ -195,6 +210,8 @@ async function salvarEdicaoParticipante() {
       const secAtualizada = secretariasServer.value.find(s => s.id === formEditar.value.secretaria_id)
       participantes.value[idx] = {
         ...participantes.value[idx],
+        nome: data.participante?.nome ?? payload.nome,
+        vinculo: data.participante?.vinculo ?? payload.vinculo,
         secretaria: secAtualizada ? { id: secAtualizada.id, nome: secAtualizada.nome } : null,
         setor: payload.setor,
         telefone: data.participante?.telefone || payload.telefone,
@@ -207,6 +224,8 @@ async function salvarEdicaoParticipante() {
       const secAtualizada = secretariasServer.value.find(s => s.id === formEditar.value.secretaria_id)
       participanteInfo.value = {
         ...participanteInfo.value,
+        nome: data.participante?.nome ?? payload.nome,
+        vinculo: data.participante?.vinculo ?? payload.vinculo,
         secretaria: secAtualizada ? { id: secAtualizada.id, nome: secAtualizada.nome } : null,
         setor: payload.setor,
         telefone: data.participante?.telefone || payload.telefone,
@@ -215,6 +234,7 @@ async function salvarEdicaoParticipante() {
       }
     }
 
+    salvandoEditar.value = false
     fecharModalEditar()
   } catch (err) {
     toast.error('Erro de conexão ao atualizar dados do participante.')
@@ -1581,6 +1601,37 @@ onUnmounted(() => {
         </div>
 
         <form @submit.prevent="salvarEdicaoParticipante">
+          <div class="form-group mb-3">
+            <label for="editar-participante-nome" class="form-label text-muted small mb-1">
+              <i class="bi bi-person-fill me-1 text-cyan"></i> Nome Completo
+            </label>
+            <input
+              id="editar-participante-nome"
+              v-model="formEditar.nome"
+              type="text"
+              class="form-control"
+              autocomplete="name"
+              placeholder="Digite o nome completo do participante"
+              required
+            />
+          </div>
+
+          <div class="form-group mb-3">
+            <label for="editar-participante-vinculo" class="form-label text-muted small mb-1">
+              <i class="bi bi-briefcase-fill me-1 text-cyan"></i> Vínculo
+            </label>
+            <select id="editar-participante-vinculo" v-model="formEditar.vinculo" class="form-select">
+              <option value="">-- Não informado --</option>
+              <option
+                v-if="formEditar.vinculo && !vinculosDisponiveis.includes(formEditar.vinculo)"
+                :value="formEditar.vinculo"
+              >{{ formEditar.vinculo }}</option>
+              <option v-for="vinculo in vinculosDisponiveis" :key="vinculo" :value="vinculo">
+                {{ vinculo }}
+              </option>
+            </select>
+          </div>
+
           <div class="form-group mb-3">
             <label class="form-label text-muted small mb-1">
               <i class="bi bi-building me-1 text-warning"></i> Secretaria / Órgão
