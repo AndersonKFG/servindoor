@@ -188,7 +188,7 @@ async def aprovar_solicitacao_validacao(
     Aprova a solicitação de validação:
     - Marca solicitação como 'aprovado'
     - Gera o Ingresso oficial com token QR Code UUID
-    - Dispara e-mail com QR Code ao participante
+    - Aguarda liberação do Administrador Geral para enfileirar o e-mail
     """
     stmt = (
         select(SolicitacaoValidacao)
@@ -266,7 +266,7 @@ async def aprovar_todos_verificados_api(
 ):
     """
     Aprova em lote todas as solicitações pendentes já identificadas pela API oficial.
-    Emite os ingressos e envia os e-mails com QR Code automaticamente.
+    Emite os ingressos e aguarda liberação do Administrador Geral para o e-mail.
     """
     is_superadmin = "admin_geral" in validador.get_roles_list() or validador.role == UserRole.admin_geral
     allowed_ids = validador.get_secretarias_validador_ids()
@@ -359,7 +359,7 @@ async def rejeitar_solicitacao_validacao(
     - Marca solicitação como 'rejeitado'
     - Bloqueia usuário para resgates futuros (não é servidor)
     - Mantém a vaga consumida no lote
-    - Dispara e-mail formal de negativa
+    - Aguarda liberação do Administrador Geral para enfileirar a negativa
     """
     stmt = (
         select(SolicitacaoValidacao)
@@ -429,8 +429,9 @@ async def comunicar_solicitacao_validacao(
     stmt = (
         select(SolicitacaoValidacao)
         .where(SolicitacaoValidacao.id == solicitacao_id)
+        .with_for_update()
         .options(
-            selectinload(SolicitacaoValidacao.usuario),
+            selectinload(SolicitacaoValidacao.usuario).selectinload(Usuario.secretaria),
             selectinload(SolicitacaoValidacao.lote),
             selectinload(SolicitacaoValidacao.secretaria)
         )
@@ -443,6 +444,28 @@ async def comunicar_solicitacao_validacao(
     if solic.status not in ["aprovado", "rejeitado"]:
         raise HTTPException(status_code=400, detail="Esta solicitação ainda está pendente de homologação.")
 
+    if solic.comunicado:
+        return JSONResponse(content={
+            "sucesso": True,
+            "mensagem": "Esta comunicação já foi registrada na fila de e-mails.",
+            "comunicado": True,
+            "comunicado_em": formatar_data_sp(solic.comunicado_em),
+        })
+
+    async with session.begin_nested():
+        msg = await _enfileirar_comunicacao_validacao(solic, session)
+    await session.commit()
+
+    return JSONResponse(content={
+        "sucesso": True,
+        "mensagem": msg,
+        "comunicado": True,
+        "comunicado_em": formatar_data_sp(solic.comunicado_em),
+    })
+
+
+async def _enfileirar_comunicacao_validacao(solic: SolicitacaoValidacao, session: AsyncSession) -> str:
+    """Fila e liberação são persistidas juntas, sem confirmar entrega pelo SMTP."""
     if not solic.usuario or not solic.usuario.email:
         raise HTTPException(status_code=400, detail="O servidor não possui e-mail cadastrado para comunicação.")
 
@@ -470,7 +493,8 @@ async def comunicar_solicitacao_validacao(
             lote_nome=l.nome if l else "Lote Oficial",
             secretaria_nome=sec.nome if sec else None,
             setor=u.setor,
-            cpf_formatado=cpf_fmt
+            cpf_formatado=cpf_fmt,
+            session=session,
         )
         msg = f"Ingresso enfileirado para envio ao e-mail {u.email}."
     else:
@@ -478,7 +502,8 @@ async def comunicar_solicitacao_validacao(
             usuario_nome=u.nome,
             usuario_email=u.email,
             lote_nome=l.nome if l else "Lote Oficial",
-            motivo=solic.motivo_rejeicao or "Vínculo de servidor público municipal não confirmado pela secretaria."
+            motivo=solic.motivo_rejeicao or "Vínculo de servidor público municipal não confirmado pela secretaria.",
+            session=session,
         )
         msg = f"Notificação de indeferimento enfileirada para o e-mail {u.email}."
 
@@ -488,111 +513,72 @@ async def comunicar_solicitacao_validacao(
     solic.comunicado = True
     solic.comunicado_em = agora
     session.add(solic)
-    await session.commit()
-
-    return JSONResponse(content={
-        "sucesso": True,
-        "mensagem": msg,
-        "comunicado": True,
-        "comunicado_em": formatar_data_sp(agora)
-    })
+    return msg
 
 
 @router.post("/comunicar-em-lote")
 async def comunicar_em_lote_admin(
     tipo_filtro: str = Query("todos", description="todos, aprovados ou rejeitados"),
     session: AsyncSession = Depends(get_session),
-    admin: Usuario = Depends(get_current_validador)
+    admin: Usuario = Depends(get_current_validador),
+    limit: int = Query(default=25, ge=1, le=50),
+    after_id: int = Query(default=0, ge=0),
 ):
     """
-    Dispara em lote as comunicações pendentes para todas as solicitações homologadas.
+    Enfileira uma página de comunicações pendentes, retornando cursor para continuar.
     Exclusivo para o Administrador Geral.
     """
     is_superadmin = "admin_geral" in admin.get_roles_list() or admin.role == UserRole.admin_geral
     if not is_superadmin:
         raise HTTPException(status_code=403, detail="Apenas o Administrador Geral pode liberar o envio de comunicações.")
 
+    if tipo_filtro not in ("todos", "aprovados", "rejeitados"):
+        raise HTTPException(status_code=400, detail="Filtro de comunicação inválido.")
+
+    condicoes = [
+        SolicitacaoValidacao.comunicado.is_(False),
+        SolicitacaoValidacao.status.in_(["aprovado", "rejeitado"]),
+    ]
+    if tipo_filtro == "aprovados":
+        condicoes.append(SolicitacaoValidacao.status == "aprovado")
+    elif tipo_filtro == "rejeitados":
+        condicoes.append(SolicitacaoValidacao.status == "rejeitado")
+
     query = (
         select(SolicitacaoValidacao)
-        .where(
-            SolicitacaoValidacao.comunicado.is_(False),
-            SolicitacaoValidacao.status.in_(["aprovado", "rejeitado"])
-        )
+        .where(*condicoes, SolicitacaoValidacao.id > after_id)
+        .order_by(SolicitacaoValidacao.id)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
         .options(
-            selectinload(SolicitacaoValidacao.usuario),
+            selectinload(SolicitacaoValidacao.usuario).selectinload(Usuario.secretaria),
             selectinload(SolicitacaoValidacao.lote),
             selectinload(SolicitacaoValidacao.secretaria)
         )
     )
 
-    if tipo_filtro == "aprovados":
-        query = query.where(SolicitacaoValidacao.status == "aprovado")
-    elif tipo_filtro == "rejeitados":
-        query = query.where(SolicitacaoValidacao.status == "rejeitado")
-
     res = await session.execute(query)
     solicitacoes = res.scalars().all()
 
-    if not solicitacoes:
-        return JSONResponse(content={
-            "sucesso": True,
-            "total": 0,
-            "mensagem": "Nenhuma solicitação pendente de comunicação encontrada."
-        })
-
-    agora = datetime.now(timezone.utc)
+    proximo_id = solicitacoes[-1].id if solicitacoes else after_id
     total_enfileirados = 0
     total_falhas = 0
+    falhas_por_motivo = {"sem_email": 0, "sem_ingresso": 0, "fila": 0}
 
     for solic in solicitacoes:
-        u = solic.usuario
-        if not u or not u.email:
-            continue
-
-        l = solic.lote
-        sec = solic.secretaria or (u.secretaria if u else None)
-        cpf_fmt = formatar_cpf(u.cpf)
-
-        if solic.status == "aprovado":
-            stmt_ing = select(Ingresso).where(
-                Ingresso.usuario_id == solic.usuario_id,
-                Ingresso.lote_id == solic.lote_id,
-                Ingresso.deleted_at.is_(None)
-            ).order_by(desc(Ingresso.id))
-            res_ing = await session.execute(stmt_ing)
-            ingresso = res_ing.scalars().first()
-            if ingresso:
-                enfileirado = await send_ticket_email_async(
-                    usuario_nome=u.nome,
-                    usuario_email=u.email,
-                    ingresso_token=ingresso.qr_code_token,
-                    lote_nome=l.nome if l else "Lote Oficial",
-                    secretaria_nome=sec.nome if sec else None,
-                    setor=u.setor,
-                    cpf_formatado=cpf_fmt
-                )
-                if not enfileirado:
-                    total_falhas += 1
-                    continue
-                solic.comunicado = True
-                solic.comunicado_em = agora
-                session.add(solic)
-                total_enfileirados += 1
-        elif solic.status == "rejeitado":
-            enfileirado = await send_validation_rejection_email_async(
-                usuario_nome=u.nome,
-                usuario_email=u.email,
-                lote_nome=l.nome if l else "Lote Oficial",
-                motivo=solic.motivo_rejeicao or "Vínculo de servidor público municipal não confirmado pela secretaria."
-            )
-            if not enfileirado:
-                total_falhas += 1
-                continue
-            solic.comunicado = True
-            solic.comunicado_em = agora
-            session.add(solic)
+        try:
+            async with session.begin_nested():
+                await _enfileirar_comunicacao_validacao(solic, session)
             total_enfileirados += 1
+        except HTTPException as exc:
+            total_falhas += 1
+            motivo = {400: "sem_email", 404: "sem_ingresso"}.get(exc.status_code, "fila")
+            falhas_por_motivo[motivo] += 1
 
+    tem_mais = (await session.execute(
+        select(SolicitacaoValidacao.id)
+        .where(*condicoes, SolicitacaoValidacao.id > proximo_id).limit(1)
+    )).first() is not None
     await session.commit()
 
     return JSONResponse(content={
@@ -600,5 +586,8 @@ async def comunicar_em_lote_admin(
         "total": total_enfileirados,
         "total_enfileirados": total_enfileirados,
         "falhas": total_falhas,
+        "falhas_por_motivo": falhas_por_motivo,
+        "proximo_id": proximo_id,
+        "tem_mais": tem_mais,
         "mensagem": f"{total_enfileirados} comunicação(ões) registrada(s) na fila; {total_falhas} falha(s) ao enfileirar."
     })

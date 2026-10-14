@@ -73,9 +73,10 @@ const zoomImgTitulo = ref('')
 
 const enviandoComunicacaoId = ref(null)
 const processandoComunicacaoLote = ref(false)
+const comunicacoesEnfileiradas = ref(0)
 
 async function dispararComunicacaoIndividual(solic) {
-  if (!solic || !solic.id) return
+  if (!solic || !solic.id || enviandoComunicacaoId.value || processandoComunicacaoLote.value) return
   const isAprov = solic.status === 'aprovado'
   const acaoTexto = isAprov ? 'o ingresso oficial com QR Code' : 'a notificação de indeferimento'
   const servidorNome = solic.usuario?.nome || 'Servidor'
@@ -97,12 +98,10 @@ async function dispararComunicacaoIndividual(solic) {
     })
     const data = await res.json()
     if (res.ok && data.sucesso) {
-      toast.success(data.mensagem || 'Comunicação enviada com sucesso!')
+      toast.success(data.mensagem || 'Comunicação registrada na fila de e-mails!')
       solic.comunicado = true
       solic.comunicado_em = data.comunicado_em || 'Agora'
-      if (kpis.value.total_comunicacao_pendente > 0) {
-        kpis.value.total_comunicacao_pendente -= 1
-      }
+      await carregarValidacoes()
     } else {
       toast.error(data.detail || 'Erro ao disparar comunicação.')
     }
@@ -114,6 +113,7 @@ async function dispararComunicacaoIndividual(solic) {
 }
 
 async function dispararComunicacoesLote() {
+  if (processandoComunicacaoLote.value || enviandoComunicacaoId.value) return
   const total = kpis.value.total_comunicacao_pendente || 0
   if (total === 0) {
     toast.info('Não há comunicações pendentes de envio no momento.')
@@ -132,21 +132,48 @@ async function dispararComunicacoesLote() {
   if (!confirmado) return
 
   processandoComunicacaoLote.value = true
+  comunicacoesEnfileiradas.value = 0
+  let afterId = 0
+  let falhas = 0
+  const motivos = { sem_email: 0, sem_ingresso: 0, fila: 0 }
   try {
-    const res = await fetch('/api/admin/validacoes/comunicar-em-lote?tipo_filtro=todos', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    })
-    const data = await res.json()
-    if (res.ok && data.sucesso) {
-      toast.success(data.mensagem || 'Comunicações disparadas com sucesso!')
-      await carregarValidacoes()
+    while (!unmounted) {
+      const params = new URLSearchParams({ tipo_filtro: 'todos', limit: '25', after_id: String(afterId) })
+      const res = await fetch(`/api/admin/validacoes/comunicar-em-lote?${params.toString()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      })
+      const data = await res.json()
+      if (!res.ok || !data.sucesso) {
+        throw new Error(typeof data.detail === 'string' ? data.detail : 'Erro ao processar envio em lote.')
+      }
+      comunicacoesEnfileiradas.value += data.total_enfileirados || 0
+      falhas += data.falhas || 0
+      for (const motivo of Object.keys(motivos)) motivos[motivo] += data.falhas_por_motivo?.[motivo] || 0
+      if (!data.tem_mais) break
+      if (!Number.isInteger(data.proximo_id) || data.proximo_id <= afterId) {
+        throw new Error('Não foi possível continuar o processamento do lote.')
+      }
+      afterId = data.proximo_id
+    }
+    if (unmounted) return
+    const resumo = `${comunicacoesEnfileiradas.value} comunicação(ões) registrada(s) na fila de e-mails.`
+    if (falhas > 0) {
+      const detalhes = [
+        motivos.sem_email && `${motivos.sem_email} sem e-mail cadastrado`,
+        motivos.sem_ingresso && `${motivos.sem_ingresso} sem ingresso ativo correspondente`,
+        motivos.fila && `${motivos.fila} com falha ao preparar ou enfileirar o e-mail`
+      ].filter(Boolean).join('; ')
+      toast.warning(`${resumo} ${falhas} pendência(s): ${detalhes || 'falha no processamento'}.`)
     } else {
-      toast.error(data.detail || 'Erro ao processar envio em lote.')
+      toast.success(resumo)
     }
   } catch (err) {
-    toast.error('Erro de conexão com o servidor.')
+    if (!unmounted) {
+      toast.error(`${err.message || 'Erro de conexão com o servidor.'} O processamento foi interrompido; confira as pendências atualizadas. Os lotes já confirmados foram preservados.`)
+    }
   } finally {
+    if (!unmounted) await carregarValidacoes()
     processandoComunicacaoLote.value = false
   }
 }
@@ -424,11 +451,11 @@ async function confirmarRejeicao() {
           v-if="isAdminGeral && (kpis.total_comunicacao_pendente > 0)"
           type="button"
           class="btn-secondary"
-          :disabled="processandoComunicacaoLote || loading"
+          :disabled="processandoComunicacaoLote || enviandoComunicacaoId !== null || loading"
           @click="dispararComunicacoesLote()"
         >
           <i class="bi bi-send-check-fill me-1" :class="{ 'spin-anim': processandoComunicacaoLote }"></i>
-          <span>Disparar E-mails ({{ kpis.total_comunicacao_pendente }})</span>
+          <span>{{ processandoComunicacaoLote ? `Registrando e-mails (${comunicacoesEnfileiradas})...` : `Disparar E-mails (${kpis.total_comunicacao_pendente})` }}</span>
         </button>
 
         <button type="button" class="btn-secondary" :disabled="loading" @click="carregarValidacoes()">
@@ -575,8 +602,8 @@ async function confirmarRejeicao() {
 
               <!-- Status de Comunicação por E-mail -->
               <template v-if="s.status !== 'pendente_analise'">
-                <span v-if="s.comunicado" class="badge badge-secondary" :title="'Enviado em ' + (s.comunicado_em || '')">
-                  <i class="bi bi-check-all me-1 text-emerald"></i> Comunicado
+                <span v-if="s.comunicado" class="badge badge-secondary" :title="'Registrado na fila em ' + (s.comunicado_em || '')">
+                  <i class="bi bi-check-all me-1 text-emerald"></i> Liberado para envio
                 </span>
                 <span v-else class="badge badge-secondary" title="Comunicação por e-mail aguardando liberação do Administrador Geral">
                   <i class="bi bi-clock-history me-1 text-warning"></i> Envio Pendente
@@ -689,7 +716,7 @@ async function confirmarRejeicao() {
                 v-if="isAdminGeral && s.status !== 'pendente_analise' && !s.comunicado"
                 type="button"
                 class="btn-action-icon btn-action-icon--blue"
-                :disabled="enviandoComunicacaoId === s.id"
+                :disabled="enviandoComunicacaoId !== null || processandoComunicacaoLote"
                 title="Disparar e-mail ao servidor agora"
                 @click="dispararComunicacaoIndividual(s)"
               >
@@ -830,8 +857,8 @@ async function confirmarRejeicao() {
             <div class="d-flex align-items-start gap-2">
               <i class="bi bi-check-all fs-5 text-emerald"></i>
               <div>
-                <strong class="text-emerald d-block">Comunicação Realizada</strong>
-                <p class="mb-0 small text-muted">A notificação oficial foi enviada ao e-mail do servidor em {{ solicitacaoSelecionada.comunicado_em }}.</p>
+                <strong class="text-emerald d-block">Comunicação Liberada para Envio</strong>
+                <p class="mb-0 small text-muted">A notificação oficial foi registrada na fila de e-mails em {{ solicitacaoSelecionada.comunicado_em }}. A entrega depende do processamento da fila.</p>
               </div>
             </div>
           </div>
@@ -889,7 +916,7 @@ async function confirmarRejeicao() {
             <button
               type="button"
               class="btn-primary"
-              :disabled="enviandoComunicacaoId === solicitacaoSelecionada.id"
+              :disabled="enviandoComunicacaoId !== null || processandoComunicacaoLote"
               @click="dispararComunicacaoIndividual(solicitacaoSelecionada)"
             >
               <i class="bi bi-send-fill me-1" :class="{ 'spin-anim': enviandoComunicacaoId === solicitacaoSelecionada.id }"></i>

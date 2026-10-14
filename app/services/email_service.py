@@ -147,7 +147,9 @@ async def send_ticket_email_async(
     lote_nome: str,
     secretaria_nome: str = None,
     setor: str = None,
-    cpf_formatado: str = None
+    cpf_formatado: str = None,
+    *,
+    session: Optional[AsyncSession] = None,
 ) -> bool:
     """Envia o ingresso digital 9:16 por e-mail em background com apresentação limpa e focada exclusivamente no ingresso"""
     if not usuario_email or "@" not in usuario_email:
@@ -159,7 +161,8 @@ async def send_ticket_email_async(
     cpf_mascarado = mask_cpf(cpf_formatado)
     
     try:
-        ticket_bytes = generate_ticket_png_bytes(
+        ticket_bytes = await asyncio.to_thread(
+            generate_ticket_png_bytes,
             nome=usuario_nome,
             cpf=cpf_mascarado,
             ingresso_token=ingresso_token,
@@ -204,7 +207,7 @@ async def send_ticket_email_async(
 </html>
 """
 
-    return await enqueue_email(usuario_email, subject, html, "ticket", ticket_image=ticket_bytes)
+    return await enqueue_email(usuario_email, subject, html, "ticket", ticket_image=ticket_bytes, session=session)
 
 
 async def send_custom_message_email_async(
@@ -719,7 +722,9 @@ async def send_validation_rejection_email_async(
     usuario_nome: str,
     usuario_email: str,
     lote_nome: str,
-    motivo: str = None
+    motivo: str = None,
+    *,
+    session: Optional[AsyncSession] = None,
 ) -> bool:
     """Informa ao participante que sua solicitação de ingresso foi indeferida na validação manual"""
     if not usuario_email or "@" not in usuario_email:
@@ -785,7 +790,7 @@ async def send_validation_rejection_email_async(
 </body>
 </html>
 """
-    return await enqueue_email(usuario_email, assunto, html, "communications")
+    return await enqueue_email(usuario_email, assunto, html, "communications", session=session)
 
 
 async def send_team_credentials_email_async(
