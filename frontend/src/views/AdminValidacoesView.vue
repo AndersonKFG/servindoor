@@ -74,6 +74,71 @@ const zoomImgTitulo = ref('')
 const enviandoComunicacaoId = ref(null)
 const processandoComunicacaoLote = ref(false)
 const comunicacoesEnfileiradas = ref(0)
+const showModalListaCpfs = ref(false)
+const listaCpfsTexto = ref('')
+const listaCpfsConferida = ref('')
+const conferenciaCpfs = ref(null)
+const resultadoListaCpfs = ref(null)
+const processandoListaCpfs = ref(false)
+const erroListaCpfs = ref('')
+
+watch(listaCpfsTexto, () => {
+  conferenciaCpfs.value = null
+  resultadoListaCpfs.value = null
+  listaCpfsConferida.value = ''
+  erroListaCpfs.value = ''
+})
+
+function abrirModalListaCpfs() {
+  if (!isAdminGeral.value || processandoListaCpfs.value) return
+  listaCpfsTexto.value = ''
+  conferenciaCpfs.value = null
+  resultadoListaCpfs.value = null
+  listaCpfsConferida.value = ''
+  erroListaCpfs.value = ''
+  showModalListaCpfs.value = true
+}
+
+async function processarListaCpfs(confirmar = false) {
+  if (!isAdminGeral.value || processandoListaCpfs.value) return
+  const texto = listaCpfsTexto.value.trim()
+  if (!texto) {
+    erroListaCpfs.value = 'Informe a lista de CPFs para conferir.'
+    return
+  }
+  if (confirmar && (!conferenciaCpfs.value || listaCpfsConferida.value !== texto || resultadoListaCpfs.value)) return
+  if (confirmar && conferenciaCpfs.value.pendentes_encontrados === 0) return
+  erroListaCpfs.value = ''
+  processandoListaCpfs.value = true
+  try {
+    const res = await fetch('/api/admin/validacoes/homologar-por-cpfs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lista_cpfs: texto, confirmar })
+    })
+    const data = await res.json()
+    if (!res.ok || !data.sucesso) {
+      throw new Error(typeof data.detail === 'string' ? data.detail : 'Não foi possível processar a lista de CPFs.')
+    }
+    if (confirmar) {
+      resultadoListaCpfs.value = data
+      conferenciaCpfs.value = null
+      toast.success(data.mensagem)
+      await carregarValidacoes()
+    } else if (listaCpfsTexto.value.trim() === texto) {
+      conferenciaCpfs.value = data
+      listaCpfsConferida.value = texto
+    }
+  } catch (err) {
+    erroListaCpfs.value = confirmar
+      ? `${err.message} Confira as solicitações atualizadas antes de tentar novamente.`
+      : err.message || 'Erro de conexão ao conferir a lista.'
+    conferenciaCpfs.value = null
+    if (confirmar) await carregarValidacoes()
+  } finally {
+    processandoListaCpfs.value = false
+  }
+}
 
 async function dispararComunicacaoIndividual(solic) {
   if (!solic || !solic.id || enviandoComunicacaoId.value || processandoComunicacaoLote.value) return
@@ -436,6 +501,17 @@ async function confirmarRejeicao() {
       </div>
 
       <div class="admin-header-actions d-flex flex-wrap gap-2">
+        <button
+          v-if="isAdminGeral"
+          type="button"
+          class="btn-secondary"
+          :disabled="loading || processandoListaCpfs || processandoLote || processandoComunicacaoLote"
+          @click="abrirModalListaCpfs"
+        >
+          <i class="bi bi-person-check-fill me-1"></i>
+          <span>Homologar por CPFs</span>
+        </button>
+
         <button
           v-if="kpis.total_confirmados_api > 0"
           type="button"
@@ -989,6 +1065,81 @@ async function confirmarRejeicao() {
             <span v-if="!processandoRejeicao">Confirmar Rejeição</span>
             <span v-else>Processando...</span>
           </button>
+        </div>
+      </template>
+    </Modal>
+
+    <Modal
+      v-if="isAdminGeral"
+      :show="showModalListaCpfs"
+      title="Homologar servidores por lista de CPFs"
+      icon="bi-person-check-fill"
+      max-width="680px"
+      :dismissible="!processandoListaCpfs"
+      @close="!processandoListaCpfs && (showModalListaCpfs = false)"
+    >
+      <div class="modal-hero-card">
+        <div class="modal-hero-info">
+          <strong>Confirmação pelo Administrador Geral</strong>
+          <p class="mb-0 small text-muted">A lista será comparada com todas as solicitações pendentes de usuários ativos, em todas as páginas, lotes e secretarias, independentemente dos filtros da tela.</p>
+        </div>
+      </div>
+      <div class="modal-section">
+        <label for="lista-cpfs-validacao" class="form-label">Lista de CPFs</label>
+        <textarea
+          id="lista-cpfs-validacao"
+          v-model="listaCpfsTexto"
+          class="form-control font-monospace"
+          rows="8"
+          maxlength="200000"
+          :disabled="processandoListaCpfs"
+          placeholder="Cole os CPFs aqui, um por linha"
+          aria-describedby="lista-cpfs-ajuda"
+        ></textarea>
+        <p id="lista-cpfs-ajuda" class="small text-muted mt-2 mb-0">Até 10.000 CPFs por vez, com 11 dígitos ou no formato 000.000.000-00. Separe por linhas, espaços, vírgulas ou ponto e vírgula. CPFs repetidos serão considerados uma única vez.</p>
+      </div>
+      <div v-if="erroListaCpfs" class="modal-alert-card modal-alert-card--danger" role="alert">{{ erroListaCpfs }}</div>
+      <div v-if="conferenciaCpfs" class="modal-section" aria-live="polite">
+        <h3 class="modal-section-title">Conferência da lista</h3>
+        <div class="modal-info-grid">
+          <div class="modal-field-card">
+            <span class="modal-field-label">CPFs válidos e únicos</span>
+            <strong>{{ conferenciaCpfs.cpfs_validos }}</strong>
+          </div>
+          <div class="modal-field-card">
+            <span class="modal-field-label">Solicitações a homologar</span>
+            <strong>{{ conferenciaCpfs.pendentes_encontrados }}</strong>
+          </div>
+          <div class="modal-field-card">
+            <span class="modal-field-label">CPFs sem pendência elegível</span>
+            <strong>{{ conferenciaCpfs.cpfs_sem_pendencia }}</strong>
+          </div>
+          <div class="modal-field-card">
+            <span class="modal-field-label">Inválidos / Repetidos</span>
+            <strong>{{ conferenciaCpfs.cpfs_invalidos }} / {{ conferenciaCpfs.cpfs_duplicados }}</strong>
+          </div>
+        </div>
+        <p v-if="conferenciaCpfs.cpfs_invalidos > 0" class="small text-warning mt-2">Os CPFs inválidos serão ignorados. Você pode corrigir a lista e conferir novamente.</p>
+        <p v-if="conferenciaCpfs.pendentes_encontrados === 0" class="small text-muted mt-2">Nenhuma solicitação pendente foi encontrada para os CPFs válidos desta lista.</p>
+      </div>
+      <div v-if="resultadoListaCpfs" class="modal-alert-card modal-alert-card--success" role="status">
+        {{ resultadoListaCpfs.mensagem }}
+      </div>
+      <div class="modal-alert-card modal-alert-card--warning">
+        Serão homologadas apenas as solicitações ainda pendentes que correspondam à lista. Os ingressos serão emitidos sem duplicar ingressos ativos. O envio por e-mail continuará aguardando o botão “Disparar E-mails” do Administrador Geral.
+      </div>
+      <template #footer>
+        <div class="modal-footer-grid">
+          <button type="button" class="btn-secondary" :disabled="processandoListaCpfs" @click="showModalListaCpfs = false">Fechar</button>
+          <button type="button" class="btn-secondary" :disabled="processandoListaCpfs || !listaCpfsTexto.trim()" @click="processarListaCpfs(false)">
+            {{ processandoListaCpfs ? 'Processando...' : 'Conferir Lista' }}
+          </button>
+          <button
+            type="button"
+            class="btn-primary"
+            :disabled="processandoListaCpfs || !conferenciaCpfs || conferenciaCpfs.pendentes_encontrados === 0 || listaCpfsConferida !== listaCpfsTexto.trim()"
+            @click="processarListaCpfs(true)"
+          >Homologar Correspondentes</button>
         </div>
       </template>
     </Modal>

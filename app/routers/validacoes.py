@@ -1,11 +1,13 @@
 import os
 import uuid
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import String, bindparam, case, cast, false, func, literal, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, desc
@@ -13,8 +15,8 @@ from sqlalchemy.orm import selectinload
 
 from app.db.session import get_session
 from app.models.all_models import Usuario, Lote, Ingresso, Secretaria, SolicitacaoValidacao, UserRole
-from app.core.deps import get_current_validador
-from app.core.cpf import formatar_cpf
+from app.core.deps import get_current_admin_geral, get_current_validador
+from app.core.cpf import formatar_cpf, validar_cpf_matematico
 from app.core.security import formatar_data_sp
 from app.services.email_service import (
     send_ticket_email_async,
@@ -22,6 +24,108 @@ from app.services.email_service import (
 )
 
 router = APIRouter(prefix="/api/admin/validacoes", tags=["Validação de Servidores"])
+
+
+class HomologarListaCpfsRequest(BaseModel):
+    lista_cpfs: str = Field(min_length=1, max_length=200000)
+    confirmar: bool = False
+
+
+@router.post("/homologar-por-cpfs")
+async def homologar_por_lista_cpfs(
+    body: HomologarListaCpfsRequest,
+    session: AsyncSession = Depends(get_session),
+    admin: Usuario = Depends(get_current_admin_geral),
+):
+    """Confere ou homologa apenas pendências da lista; não enfileira e-mails."""
+    entradas = [item for item in re.split(r"[\s,;]+", body.lista_cpfs.strip()) if item]
+    if not entradas or len(entradas) > 10000:
+        raise HTTPException(status_code=400, detail="Informe entre 1 e 10.000 CPFs por lista.")
+
+    cpfs = set()
+    invalidos = duplicados = 0
+    for entrada in entradas:
+        if not re.fullmatch(r"(?:[0-9]{11}|[0-9]{3}\.[0-9]{3}\.[0-9]{3}-[0-9]{2})", entrada):
+            invalidos += 1
+            continue
+        cpf = entrada.replace(".", "").replace("-", "")
+        if not validar_cpf_matematico(cpf):
+            invalidos += 1
+        elif cpf in cpfs:
+            duplicados += 1
+        else:
+            cpfs.add(cpf)
+    if not cpfs:
+        raise HTTPException(status_code=400, detail="Nenhum CPF válido encontrado. Use 11 dígitos, com ou sem pontuação.")
+
+    # O lock por usuário serializa listas concorrentes, inclusive com pendências em lotes diferentes.
+    usuarios_stmt = (
+        select(Usuario).where(
+            Usuario.cpf.in_(cpfs), Usuario.ativo.is_(True), Usuario.deleted_at.is_(None),
+            Usuario.id.in_(select(SolicitacaoValidacao.usuario_id).where(
+                SolicitacaoValidacao.status == "pendente_analise"
+            )),
+        ).order_by(Usuario.id)
+    )
+    if body.confirmar:
+        usuarios_stmt = usuarios_stmt.with_for_update()
+    usuarios = (await session.execute(usuarios_stmt)).scalars().all()
+    usuarios_por_id = {u.id: u for u in usuarios}
+    solicitacoes_stmt = (
+        select(SolicitacaoValidacao).where(
+            SolicitacaoValidacao.status == "pendente_analise",
+            SolicitacaoValidacao.usuario_id.in_(usuarios_por_id),
+        ).order_by(SolicitacaoValidacao.id)
+    )
+    if body.confirmar:
+        solicitacoes_stmt = solicitacoes_stmt.with_for_update()
+    solicitacoes = (await session.execute(solicitacoes_stmt)).scalars().all()
+    ids_encontrados = {s.usuario_id for s in solicitacoes}
+    resultado = {
+        "sucesso": True,
+        "confirmado": body.confirmar,
+        "total_informados": len(entradas),
+        "cpfs_validos": len(cpfs),
+        "cpfs_invalidos": invalidos,
+        "cpfs_duplicados": duplicados,
+        "cpfs_com_pendencia": len(ids_encontrados),
+        "cpfs_sem_pendencia": len(cpfs) - len(ids_encontrados),
+        "pendentes_encontrados": len(solicitacoes),
+        "aprovados": 0,
+        "ingressos_emitidos": 0,
+    }
+    if not body.confirmar:
+        return JSONResponse(content=resultado)
+
+    usuarios_com_ingresso = set((await session.execute(select(Ingresso.usuario_id).where(
+        Ingresso.usuario_id.in_(ids_encontrados), Ingresso.deleted_at.is_(None),
+    ))).scalars().all())
+    agora = datetime.now(timezone.utc)
+    for solic in solicitacoes:
+        solic.status = "aprovado"
+        solic.analisado_em = agora
+        solic.analisado_por_id = admin.id
+        solic.comunicado = False
+        solic.comunicado_em = None
+        session.add(solic)
+        usuario = usuarios_por_id[solic.usuario_id]
+        usuario.validado = True
+        session.add(usuario)
+        if solic.usuario_id not in usuarios_com_ingresso:
+            session.add(Ingresso(
+                usuario_id=solic.usuario_id, lote_id=solic.lote_id,
+                qr_code_token=str(uuid.uuid4()), data_resgate=agora,
+            ))
+            usuarios_com_ingresso.add(solic.usuario_id)
+            resultado["ingressos_emitidos"] += 1
+        resultado["aprovados"] += 1
+    await session.commit()
+    resultado["mensagem"] = (
+        f"{resultado['aprovados']} solicitação(ões) homologada(s); "
+        f"{resultado['ingressos_emitidos']} ingresso(s) emitido(s). "
+        "O envio por e-mail aguarda liberação pelo Administrador Geral."
+    )
+    return JSONResponse(content=resultado)
 
 
 @router.get("")
