@@ -162,6 +162,7 @@ async function carregarBackups() {
 // AÇÕES DE LOTES
 // ==========================================
 async function handleCriarLote() {
+  if (!isAdminGeral.value) return
   try {
     const formData = new FormData()
     formData.append('nome', novoLote.value.nome)
@@ -196,6 +197,7 @@ async function handleCriarLote() {
 }
 
 function abrirEditarLote(l) {
+  if (!isAdminGeral.value) return
   loteEditando.value = {
     id: l.model.id,
     nome: l.model.nome,
@@ -209,6 +211,7 @@ function abrirEditarLote(l) {
 }
 
 async function handleSalvarEdicao() {
+  if (!isAdminGeral.value) return
   if (!loteEditando.value) return
   try {
     const formData = new FormData()
@@ -240,6 +243,7 @@ async function handleSalvarEdicao() {
 }
 
 async function handleToggleLote(loteId) {
+  if (!isAdminGeral.value) return
   try {
     const response = await fetch(`/admin/lote/${loteId}/toggle`, { method: 'POST' })
     if (!response.ok) {
@@ -256,6 +260,7 @@ async function handleToggleLote(loteId) {
 // FLUXO DE EXCLUSÃO CRÍTICA E DIFICULTOSA
 // ==========================================
 async function iniciarExclusaoLote(loteItem) {
+  if (!isAdminGeral.value) return
   erroExclusao.value = ''
   excluirConfirmacaoTexto.value = ''
   excluirSenha.value = ''
@@ -290,6 +295,7 @@ async function iniciarExclusaoLote(loteItem) {
 }
 
 async function handleSolicitarCodigoExclusao() {
+  if (!isAdminGeral.value) return
   if (!loteParaExcluir.value) return
   enviandoCodigoEmail.value = true
   erroExclusao.value = ''
@@ -313,6 +319,7 @@ async function handleSolicitarCodigoExclusao() {
 }
 
 async function handleConfirmarExclusao() {
+  if (!isAdminGeral.value) return
   if (!loteParaExcluir.value || !podeConfirmarExclusao.value) return
   processandoExclusao.value = true
   erroExclusao.value = ''
@@ -354,6 +361,7 @@ async function handleConfirmarExclusao() {
 // AÇÕES DE BACKUPS (RESTAURAR, EXPORTAR, IMPORTAR)
 // ==========================================
 function abrirModalRestaurar(b) {
+  if (!isAdminGeral.value) return
   backupParaRestaurar.value = b
   senhaRestaurar.value = ''
   erroRestaurar.value = ''
@@ -361,6 +369,7 @@ function abrirModalRestaurar(b) {
 }
 
 async function handleConfirmarRestauracao() {
+  if (!isAdminGeral.value) return
   if (!backupParaRestaurar.value || !senhaRestaurar.value.trim()) return
   processandoRestauracao.value = true
   erroRestaurar.value = ''
@@ -392,10 +401,12 @@ async function handleConfirmarRestauracao() {
 }
 
 function handleExportarBackup(b) {
+  if (!isAdminGeral.value) return
   window.open(`/api/admin/lotes/backups/${b.id}/exportar`, '_blank')
 }
 
 function abrirModalImportar() {
+  if (!isAdminGeral.value) return
   arquivoBackupSelecionado.value = null
   dadosBackupJson.value = null
   previewBackup.value = null
@@ -439,6 +450,7 @@ function onArquivoSelecionado(e) {
 }
 
 async function handleConfirmarImportacao() {
+  if (!isAdminGeral.value) return
   if (!dadosBackupJson.value || !senhaImportar.value.trim()) return
   processandoImportacao.value = true
   erroImportar.value = ''
@@ -521,7 +533,7 @@ onUnmounted(() => {
           <h1 class="page-title font-quattrocento">Painel de Gestão VIP</h1>
           <p class="admin-subtitle">Monitoramento de resgates, liberação de lotes e controle de participantes.</p>
         </div>
-        <div class="header-actions">
+        <div v-if="isAdminGeral" class="header-actions">
           <button type="button" class="btn-primary font-outfit" @click="showModalNovo = true">
             <i class="bi bi-plus-circle-fill me-1"></i> Criar Novo Lote
           </button>
@@ -585,13 +597,13 @@ onUnmounted(() => {
                 <th>Abertura / Fechamento</th>
                 <th>Status</th>
                 <th>Ocupação</th>
-                <th class="text-end">Ações</th>
+                <th v-if="isAdminGeral" class="text-end">Ações</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="lotes.length === 0">
-                <td colspan="6" class="text-center py-4 text-subtle">
-                  Nenhum lote cadastrado no momento. Clique em <strong>Criar Novo Lote</strong>.
+                <td :colspan="isAdminGeral ? 6 : 5" class="text-center py-4 text-subtle">
+                  Nenhum lote cadastrado no momento.<template v-if="isAdminGeral"> Clique em <strong>Criar Novo Lote</strong>.</template>
                 </td>
               </tr>
               <tr v-for="item in lotes" :key="item.model.id">
@@ -622,7 +634,7 @@ onUnmounted(() => {
                     <span class="progress-text">{{ item.model.quantidade_resgatada }} / {{ item.model.quantidade_total }} ({{ item.pct }}%)</span>
                   </div>
                 </td>
-                <td class="text-end">
+                <td v-if="isAdminGeral" class="text-end">
                   <div class="action-buttons-group">
                     <router-link :to="'/admin/lote/' + item.model.id + '/ingressos'" class="btn-action-icon btn-action-icon--blue" title="Ver Ingressos Resgatados">
                       <i class="bi bi-people-fill"></i>
@@ -670,7 +682,7 @@ onUnmounted(() => {
               Lotes excluídos ficam salvos por <strong>3 dias com retenção blindada</strong>. O backup não pode ser excluído manualmente.
             </p>
           </div>
-          <div class="backup-header-actions">
+          <div v-if="isAdminGeral" class="backup-header-actions">
             <button type="button" class="btn-secondary-sm me-2" @click="carregarBackups" :disabled="carregandoBackups" title="Atualizar Backups">
               <i :class="['bi bi-arrow-clockwise', { 'spin-icon': carregandoBackups }]"></i> Atualizar
             </button>
@@ -698,12 +710,12 @@ onUnmounted(() => {
                 <th>Excluído Por</th>
                 <th>Retenção Obrigatória</th>
                 <th>Estado</th>
-                <th class="text-end">Ações Protegidas</th>
+                <th v-if="isAdminGeral" class="text-end">Ações Protegidas</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="backups.length === 0">
-                <td colspan="7" class="text-center py-4 text-subtle">
+                <td :colspan="isAdminGeral ? 7 : 6" class="text-center py-4 text-subtle">
                   <i class="bi bi-shield-check text-success me-2"></i> Nenhum lote na lixeira de proteção. O histórico de backups está vazio.
                 </td>
               </tr>
@@ -737,7 +749,7 @@ onUnmounted(() => {
                     <i class="bi bi-archive-fill me-1"></i> Ativo no Backup
                   </span>
                 </td>
-                <td class="text-end">
+                <td v-if="isAdminGeral" class="text-end">
                   <div class="action-buttons-group">
                     <!-- Restaurar Lote -->
                     <button
@@ -781,6 +793,7 @@ onUnmounted(() => {
 
     <!-- MODAL: Criar Novo Lote -->
     <Modal
+      v-if="isAdminGeral"
       :show="showModalNovo"
       title="Criar Novo Lote"
       icon="bi-plus-circle-fill"
@@ -826,6 +839,7 @@ onUnmounted(() => {
 
     <!-- MODAL: Editar Lote -->
     <Modal
+      v-if="isAdminGeral"
       :show="showModalEditar"
       title="Editar Lote"
       icon="bi-pencil-square"
@@ -871,6 +885,7 @@ onUnmounted(() => {
 
     <!-- MODAL: EXCLUSÃO DIFICULTOSA E SEGURA DE LOTE -->
     <Modal
+      v-if="isAdminGeral"
       :show="showModalExcluirLote"
       :title="loteParaExcluir?.tem_participantes ? 'Exclusão Crítica: Lote com Ingressos' : 'Confirmação de Exclusão de Lote'"
       :icon="loteParaExcluir?.tem_participantes ? 'bi-exclamation-triangle-fill' : 'bi-trash-fill'"
@@ -1045,6 +1060,7 @@ onUnmounted(() => {
 
     <!-- MODAL: Restaurar Backup -->
     <Modal
+      v-if="isAdminGeral"
       :show="showModalRestaurarBackup"
       title="Restaurar Lote e Ingressos"
       icon="bi-arrow-counterclockwise"
@@ -1100,6 +1116,7 @@ onUnmounted(() => {
 
     <!-- MODAL: Importar Backup (.json) -->
     <Modal
+      v-if="isAdminGeral"
       :show="showModalImportarBackup"
       title="Importar Backup em Arquivo (.json)"
       icon="bi-file-earmark-arrow-up-fill"
@@ -1186,6 +1203,7 @@ onUnmounted(() => {
 
     <!-- MODAL: Regra de Ouro (Retenção Inviolável de 3 Dias) -->
     <Modal
+      v-if="isAdminGeral"
       :show="showModalRegraRetencao"
       title="Ação Estritamente Proibida"
       icon="bi-shield-slash-fill"

@@ -266,7 +266,7 @@ async def criar_lote(
     secretaria_id: Optional[str] = Form(None),
     ativo: Optional[str] = Form(None),
     session: AsyncSession = Depends(get_session),
-    current_user: Usuario = Depends(get_current_admin)
+    current_user: Usuario = Depends(get_current_admin_geral)
 ):
     agora = datetime.now(timezone.utc)
     dt_abertura = _datetime_utc(data_abertura, security.TZ_SAO_PAULO)
@@ -318,7 +318,7 @@ async def editar_lote(
     secretaria_id: Optional[str] = Form(None),
     ativo: Optional[str] = Form(None),
     session: AsyncSession = Depends(get_session),
-    current_user: Usuario = Depends(get_current_admin)
+    current_user: Usuario = Depends(get_current_admin_geral)
 ):
     lote = await session.get(Lote, lote_id)
     if not lote:
@@ -367,7 +367,7 @@ async def editar_lote(
 async def toggle_lote(
     lote_id: int,
     session: AsyncSession = Depends(get_session),
-    current_user: Usuario = Depends(get_current_admin)
+    current_user: Usuario = Depends(get_current_admin_geral)
 ):
     lote = await session.get(Lote, lote_id)
     if not lote:
@@ -399,7 +399,7 @@ async def toggle_lote(
 async def encerrar_lote_agora(
     lote_id: int,
     session: AsyncSession = Depends(get_session),
-    current_user: Usuario = Depends(get_current_admin)
+    current_user: Usuario = Depends(get_current_admin_geral)
 ):
     lote = await session.get(Lote, lote_id)
     if not lote:
@@ -443,7 +443,7 @@ def normalizar_cpf(cpf: str) -> str:
 async def verificar_exclusao_lote(
     lote_id: int,
     session: AsyncSession = Depends(get_session),
-    admin: Usuario = Depends(get_current_admin)
+    admin: Usuario = Depends(get_current_admin_geral)
 ):
     """
     Verifica se o lote possui participantes e se requer as etapas avançadas de confirmação:
@@ -480,7 +480,7 @@ async def verificar_exclusao_lote(
 async def solicitar_codigo_exclusao_lote(
     lote_id: int,
     session: AsyncSession = Depends(get_session),
-    admin: Usuario = Depends(get_current_admin)
+    admin: Usuario = Depends(get_current_admin_geral)
 ):
     """
     Envia código de segurança para o e-mail do administrador quando o lote tem participantes
@@ -541,7 +541,7 @@ async def confirmar_exclusao_lote(
     lote_id: int,
     request: Request,
     session: AsyncSession = Depends(get_session),
-    admin: Usuario = Depends(get_current_admin)
+    admin: Usuario = Depends(get_current_admin_geral)
 ):
     """
     Processa a exclusão segura do lote aplicando as regras estritas:
@@ -782,7 +782,7 @@ async def restaurar_backup_lote(
     backup_id: int,
     request: Request,
     session: AsyncSession = Depends(get_session),
-    admin: Usuario = Depends(get_current_admin)
+    admin: Usuario = Depends(get_current_admin_geral)
 ):
     """
     Restaura um lote e todos os seus ingressos a partir do backup protegido.
@@ -900,7 +900,7 @@ async def restaurar_backup_lote(
 async def exportar_backup_lote_json(
     backup_id: int,
     session: AsyncSession = Depends(get_session),
-    admin: Usuario = Depends(get_current_admin)
+    admin: Usuario = Depends(get_current_admin_geral)
 ):
     """
     Exporta o arquivo JSON do backup do lote para download.
@@ -926,7 +926,7 @@ async def exportar_backup_lote_json(
 async def importar_backup_lote_json(
     request: Request,
     session: AsyncSession = Depends(get_session),
-    admin: Usuario = Depends(get_current_admin)
+    admin: Usuario = Depends(get_current_admin_geral)
 ):
     """
     Importa um arquivo JSON de backup previamente exportado, restaurando o lote e os ingressos.
@@ -1040,7 +1040,7 @@ async def importar_backup_lote_json(
 @router.delete("/api/admin/lotes/backups/{backup_id}")
 async def proibir_exclusao_backup(
     backup_id: int,
-    admin: Usuario = Depends(get_current_admin)
+    admin: Usuario = Depends(get_current_admin_geral)
 ):
     """
     Regra inviolável: Os backups de lotes possuem retenção obrigatória de 3 dias e NÃO podem ser excluídos.

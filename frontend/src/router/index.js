@@ -53,7 +53,7 @@ const routes = [
     path: '/admin',
     name: 'admin',
     component: AdminView,
-    meta: { requiresAuth: true, roles: ['admin_geral'] }
+    meta: { requiresAuth: true, roles: ['admin_geral', 'admin'] }
   },
   {
     path: '/admin/participantes',

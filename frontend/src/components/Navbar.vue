@@ -236,8 +236,8 @@ function toggleMobileMenu() {
 
             <!-- LINKS PARA EQUIPE / USUÁRIO LOGADO -->
             <ul v-else class="navbar-center-list staff-links">
-              <!-- Gestão de Lotes (Admin Geral) -->
-              <li v-if="isAdminGeral">
+              <!-- Consulta de Lotes (Admin e Admin Geral) -->
+              <li v-if="isAdmin">
                 <router-link to="/admin" class="nav-center-link" exact>
                   <i class="bi bi-speedometer2"></i>
                   <span>Lotes</span>
@@ -406,7 +406,7 @@ function toggleMobileMenu() {
                 <span>PAINEL OPERACIONAL</span>
               </li>
 
-              <li v-if="isAdminGeral">
+              <li v-if="isAdmin">
                 <router-link to="/admin" class="mobile-nav-link" exact @click="mobileMenuOpen = false">
                   <i class="bi bi-speedometer2 me-2 text-magenta"></i>
                   <span>Gestão de Lotes</span>
