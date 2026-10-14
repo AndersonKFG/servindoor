@@ -145,7 +145,7 @@ async def init_db():
         # Restrição Global Nova Regra de Negócio: Cada participante só pode ganhar no máximo uma premiação válida
         await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_ganhador_usuario_ativo ON ganhadores (usuario_id) WHERE anulado = FALSE;"))
 
-        # Migracoes e Indices de Exclusividade de Reserva por Participante e Dispositivo
+        # Identificação e ciclo de vida das reservas temporárias
         await conn.execute(text("ALTER TABLE reservas_ingressos ADD COLUMN IF NOT EXISTS cpf VARCHAR;"))
         await conn.execute(text("ALTER TABLE reservas_ingressos ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'ativa';"))
         await conn.execute(text("ALTER TABLE reservas_ingressos ADD COLUMN IF NOT EXISTS browser_token_hash VARCHAR;"))
@@ -170,8 +170,10 @@ async def init_db():
 
         # Indices estaticos para integridade no PostgreSQL e SQLite
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reservas_status_expira ON reservas_ingressos (status, expira_em);"))
-        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_reserva_cpf_ativa ON reservas_ingressos (cpf) WHERE status = 'ativa';"))
-        await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_reserva_browser_ativa ON reservas_ingressos (browser_token_hash) WHERE status = 'ativa';"))
+        # Permite múltiplas reservas abertas por CPF e navegador em bancos existentes.
+        await conn.execute(text("DROP INDEX IF EXISTS uq_reserva_cpf_ativa;"))
+        await conn.execute(text("DROP INDEX IF EXISTS uq_reserva_browser_ativa;"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reserva_browser_ativa ON reservas_ingressos (browser_token_hash, expira_em DESC) WHERE status = 'ativa';"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_rate_limit_ip_acao_ts ON rate_limit_tentativas (ip, acao, criado_em);"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reserva_capacidade_ativa ON reservas_ingressos (lote_id, expira_em) WHERE status = 'ativa';"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reserva_fingerprint_ativa ON reservas_ingressos (device_fingerprint, expira_em DESC) WHERE status = 'ativa';"))

@@ -41,8 +41,29 @@ class TestResgateMigrations(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await conn.scalar(text("SELECT COUNT(*) FROM resgate_jobs")), 0)
             indexes = (await conn.execute(text("SELECT indexname FROM pg_indexes WHERE schemaname=:schema"), {"schema": self.schema})).scalars().all()
             for name in ("uq_solicitacao_reserva", "idx_resgate_jobs_pending",
-                         "idx_reserva_capacidade_ativa", "idx_reserva_fingerprint_ativa", "idx_reserva_device_ativa"):
+                         "idx_reserva_capacidade_ativa", "idx_reserva_fingerprint_ativa", "idx_reserva_device_ativa", "idx_reserva_browser_ativa"):
                 self.assertIn(name, indexes)
+            self.assertNotIn("uq_reserva_cpf_ativa", indexes)
+            self.assertNotIn("uq_reserva_browser_ativa", indexes)
+
+    async def test_migracao_remove_unicidade_existente_sem_cancelar_reservas(self):
+        await self.migrate()
+        async with self.pool.begin() as conn:
+            await conn.execute(text("CREATE UNIQUE INDEX uq_reserva_cpf_ativa ON reservas_ingressos (cpf) WHERE status = 'ativa'"))
+            await conn.execute(text("CREATE UNIQUE INDEX uq_reserva_browser_ativa ON reservas_ingressos (browser_token_hash) WHERE status = 'ativa'"))
+            await conn.execute(text("INSERT INTO lotes(id, nome, quantidade_total, quantidade_resgatada, ativo) VALUES (1, 'Teste', 20, 0, TRUE)"))
+            await conn.execute(text("""
+                INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, utilizada, cpf, browser_token_hash)
+                VALUES ('original', 1, NOW(), NOW() + INTERVAL '5 minutes', 'ativa', FALSE, '52998224725', 'browser')
+            """))
+        await self.migrate()
+        await self.migrate()
+        async with self.pool.begin() as conn:
+            await conn.execute(text("""
+                INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, utilizada, cpf, browser_token_hash)
+                VALUES ('segunda', 1, NOW(), NOW() + INTERVAL '5 minutes', 'ativa', FALSE, '52998224725', 'browser')
+            """))
+            self.assertEqual(await conn.scalar(text("SELECT COUNT(*) FROM reservas_ingressos WHERE status='ativa'")), 2)
 
     async def test_migracao_adiciona_vinculo_reserva_em_banco_existente(self):
         await self.migrate()

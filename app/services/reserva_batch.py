@@ -1,7 +1,7 @@
 """Agrupa reservas do mesmo lote para confirmar várias vagas em um único commit.
 
-Cada processo tem seu próprio actor. O lock PostgreSQL do lote e locks globais
-das identidades continuam coordenando os processos; a fila não decide capacidade.
+Cada processo tem seu próprio actor. O lock PostgreSQL do lote coordena a
+capacidade entre processos; identidades não limitam a quantidade de reservas.
 """
 
 import asyncio
@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import func, or_, select, update
+from sqlmodel import func, select, update
 
 from app.db.session import async_session
 from app.models.all_models import Lote, RateLimitTentativa, ReservaIngresso
@@ -41,6 +41,7 @@ class _Request:
     cpf: str | None
     ip: str
     rate_key: str
+    token: str | None
     future: asyncio.Future
     cancelled: bool = False
 
@@ -94,7 +95,7 @@ class ReservaBatchService:
         self._task = None
 
     async def reserve(self, *, lote_id, fp=None, device_id=None, browser_hash=None,
-                      cpf=None, ip, rate_key=None):
+                      cpf=None, ip, rate_key=None, token=None):
         if self._stopping:
             return self._busy("O serviço de reservas está reiniciando. Tente novamente.")
         if self._task is None or self._task.done():
@@ -103,7 +104,7 @@ class ReservaBatchService:
             return self._busy("Muitos pedidos de reserva em andamento. Tente novamente.")
         future = asyncio.get_running_loop().create_future()
         request = _Request(lote_id, fp, device_id or fp, browser_hash, cpf, ip,
-                           rate_key or ip, future)
+                           rate_key or ip, token, future)
         self._waiting.add(future)
         try:
             self._queue.put_nowait(request)
@@ -199,7 +200,7 @@ class ReservaBatchService:
 
     async def _transaction(self, session, requests):
         keys = {item.rate_key for item in requests}
-        # Locks de rate sempre vêm antes de lote/identidades, em ordem global.
+        # Locks de rate sempre vêm antes do lote, em ordem global.
         await _advisory_locks(session, {_lock_key("rate", key) for key in keys})
         lote = (await session.execute(select(Lote).where(
             Lote.id == requests[0].lote_id, Lote.deleted_at.is_(None),
@@ -218,47 +219,18 @@ class ReservaBatchService:
         if lote.data_fechamento and now > lote.data_fechamento:
             return finish([ReservationResult(400, "encerrado", "O período deste lote já encerrou.") for _ in requests])
 
-        fingerprints = {item.fp for item in requests if item.fp}
-        devices = {item.device_id for item in requests if item.device_id}
-        browsers = {item.browser_hash for item in requests if item.browser_hash}
-        cpfs = {item.cpf for item in requests if item.cpf}
-        identity_keys = set()
-        for namespace, values in (("device", devices),
-                                  ("browser", browsers), ("cpf", cpfs)):
-            identity_keys.update(_lock_key(namespace, value) for value in values)
-        await _advisory_locks(session, identity_keys)
-        # Outro lote pode ter retido a identidade; o relógio anterior à espera
-        # não pode renovar uma reserva que venceu enquanto o pedido aguardava.
-        now = datetime.now(timezone.utc)
-        if lote.data_fechamento and now > lote.data_fechamento:
-            return finish([ReservationResult(400, "encerrado", "O período deste lote já encerrou.") for _ in requests])
-
-        conditions = []
-        for column, values in ((ReservaIngresso.device_id, devices),
-                               (ReservaIngresso.browser_token_hash, browsers),
-                               (ReservaIngresso.cpf, cpfs)):
-            if values:
-                conditions.append(column.in_(values))
-        identities = or_(*conditions) if conditions else text("FALSE")
-        # Libera unicidade de CPF/browser vencidos antes das novas inserções.
+        # A expiração mantém o estoque correto, independentemente da identidade.
         await session.execute(update(ReservaIngresso).where(
             ReservaIngresso.status == "ativa", ReservaIngresso.expira_em <= now,
-            identities,
+            ReservaIngresso.lote_id == lote.id,
         ).values(status="expirada"))
+        tokens = {item.token for item in requests if item.token}
         active = (await session.execute(select(ReservaIngresso).where(
             ReservaIngresso.status == "ativa", ReservaIngresso.utilizada == False,
-            ReservaIngresso.expira_em > now, identities,
+            ReservaIngresso.expira_em > now, ReservaIngresso.lote_id == lote.id,
+            ReservaIngresso.token.in_(tokens),
         ).order_by(ReservaIngresso.expira_em.desc()))).scalars().all()
-        maps = {"fp": {}, "device": {}, "browser": {}, "cpf": {}}
-
-        def remember(reserva):
-            for name, value in (("fp", reserva.device_fingerprint), ("device", reserva.device_id),
-                                ("browser", reserva.browser_token_hash), ("cpf", reserva.cpf)):
-                if value:
-                    maps[name].setdefault(value, reserva)
-
-        for reserva in active:
-            remember(reserva)
+        by_token = {reserva.token: reserva for reserva in active}
         count = await session.scalar(select(func.count(ReservaIngresso.id)).where(
             ReservaIngresso.lote_id == lote.id, ReservaIngresso.status == "ativa",
             ReservaIngresso.expira_em > now,
@@ -275,22 +247,15 @@ class ReservaBatchService:
             if item.cancelled:
                 results.append(self._busy())
                 continue
-            existing = maps["browser"].get(item.browser_hash)
-            if not existing and item.device_id:
-                candidate = maps["device"].get(item.device_id)
-                if candidate and (not candidate.browser_token_hash or candidate.browser_token_hash == item.browser_hash):
-                    existing = candidate
+            existing = by_token.get(item.token)
             if existing:
-                if existing.lote_id != lote.id:
-                    results.append(ReservationResult(400, "reserva_outro_lote", "Este dispositivo tem uma reserva em outro lote."))
+                if existing.browser_token_hash and existing.browser_token_hash != item.browser_hash:
+                    results.append(ReservationResult(403, "reserva_nao_autorizada", "Esta reserva pertence a outro navegador."))
                 elif item.cpf and existing.cpf and item.cpf != existing.cpf:
                     results.append(ReservationResult(409, "reserva_existente", "A reserva já está vinculada a outro CPF."))
-                elif item.cpf and maps["cpf"].get(item.cpf) not in (None, existing):
-                    results.append(ReservationResult(409, "reserva_existente", "Este CPF já possui uma reserva ativa."))
                 else:
                     if item.cpf and not existing.cpf:
                         existing.cpf = item.cpf
-                        maps["cpf"][item.cpf] = existing
                         session.add(existing)
                     results.append(ReservationResult(200, reserva=existing))
                 continue
@@ -299,9 +264,6 @@ class ReservaBatchService:
                 continue
             rate_counts[item.rate_key] = rate_counts.get(item.rate_key, 0) + 1
             additions.append(RateLimitTentativa(ip=item.rate_key, acao="reserva", criado_em=now))
-            if item.cpf and item.cpf in maps["cpf"]:
-                results.append(ReservationResult(409, "reserva_existente", "Este CPF já possui uma reserva ativa."))
-                continue
             if remaining <= 0:
                 code = "esgotado" if lote.quantidade_resgatada >= lote.quantidade_total else "em_preenchimento"
                 results.append(ReservationResult(400, code, "Todas as vagas estão ocupadas ou em preenchimento."))
@@ -311,7 +273,6 @@ class ReservaBatchService:
                 status="ativa", cpf=item.cpf, browser_token_hash=item.browser_hash,
                 device_fingerprint=item.fp, device_id=item.device_id, ip_origem=item.ip)
             additions.append(reserva)
-            remember(reserva)
             remaining -= 1
             results.append(ReservationResult(200, reserva=reserva, created=True))
         session.add_all(additions)

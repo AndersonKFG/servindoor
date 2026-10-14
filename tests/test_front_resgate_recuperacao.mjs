@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import * as reservationStorage from '../frontend/src/utils/reservationStorage.js';
 
 const source = fs.readFileSync('frontend/src/views/ResgateView.vue', 'utf8')
   .split('<script setup>')[1].split('</script>')[0]
@@ -18,9 +19,12 @@ function create(local = storage(), session = storage()) {
   let responder = async () => { throw new TypeError('network interrupted'); };
   const context = vm.createContext({ ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }),
     watch: () => {}, onMounted: () => {}, onUnmounted: () => {},
-    useRoute: () => ({ params: { loteId: 1 } }), useRouter: () => ({ push: route => routes.push(route) }),
+    useRoute: () => ({ params: { loteId: 1 }, query: {} }), useRouter: () => ({ push: route => routes.push(route) }),
     useServerTime: () => ({ calibrarComResposta() {}, getSynchronizedServerTime: () => Date.now() }),
     getDeviceFingerprint: () => 'device-fp', getDeviceId: () => 'device-id',
+    getTabReservationToken: id => reservationStorage.getTabReservationToken(id, session),
+    saveTabReservationToken: (id, token) => reservationStorage.saveTabReservationToken(id, token, session),
+    clearTabReservationToken: id => reservationStorage.clearTabReservationToken(id, session),
     localStorage: local, sessionStorage: session, document: { cookie: '', getElementById: () => null },
     window: { location: { protocol: 'https:' } }, console, FormData, URL, Date, Math, setTimeout, clearTimeout, setInterval, clearInterval,
     fetch: async (url, options) => { calls.push({ url, options }); return responder(url, options); },
@@ -91,7 +95,7 @@ assert.equal(validationRace.api.form.value.cpf, '529.982.247-25');
 // Um commit já confirmado é recuperado mesmo sem rascunho/foto no navegador.
 const lostDraft = create();
 await lostDraft.api.handleSubmit();
-lostDraft.local.removeItem('festa_resgate_draft_1');
+lostDraft.session.removeItem('festa_resgate_draft_1');
 const reloadWithoutPhoto = create(lostDraft.local, lostDraft.session);
 reloadWithoutPhoto.api.form.value = { cpf: '', nome: '', data_nascimento: '', secretaria_id: '', setor: '', vinculo: 'Efetivo', telefone: '', email: '', foto_base64: '' };
 reloadWithoutPhoto.respond(success);

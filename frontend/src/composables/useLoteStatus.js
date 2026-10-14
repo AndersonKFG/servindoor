@@ -17,6 +17,7 @@ export function parseSaoPauloTimeToMs(isoStr, epochMs) {
 
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useServerTime } from './useServerTime'
+import { getTabReservationToken, clearTabReservationToken } from '../utils/reservationStorage'
 
 export function getDeviceFingerprint() {
   try {
@@ -184,20 +185,21 @@ export function useLoteStatus(loteIdParam = null) {
     if (data.data_festa_iso) dataFestaIso.value = data.data_festa_iso
     if (data.data_festa_formatada) dataFestaFormatada.value = data.data_festa_formatada
 
-    minhaReservaSegundos.value = data.minha_reserva_segundos
-    const restanteReservaMs = data.minha_reserva_milissegundos == null
+    const tabToken = getTabReservationToken(data.id || loteIdParam)
+    const reservaDaAba = tabToken && data.minha_reserva_token === tabToken ? data : {}
+    minhaReservaSegundos.value = reservaDaAba.minha_reserva_segundos ?? null
+    const restanteReservaMs = reservaDaAba.minha_reserva_milissegundos == null
       ? NaN
-      : Number(data.minha_reserva_milissegundos)
-    const restantePeloServidorMs = data.minha_reserva_expira_em_ms == null || data.server_time_ms == null
+      : Number(reservaDaAba.minha_reserva_milissegundos)
+    const restantePeloServidorMs = reservaDaAba.minha_reserva_expira_em_ms == null || data.server_time_ms == null
       ? NaN
-      : Number(data.minha_reserva_expira_em_ms) - Number(data.server_time_ms)
+      : Number(reservaDaAba.minha_reserva_expira_em_ms) - Number(data.server_time_ms)
     minhaReservaExpiraEmMs.value = Number.isFinite(restanteReservaMs) && restanteReservaMs >= 0
       ? Date.now() + restanteReservaMs
       : Number.isFinite(restantePeloServidorMs) && restantePeloServidorMs >= 0
         ? Date.now() + restantePeloServidorMs
-        : data.minha_reserva_expira_em_ms
-    if (data.minha_reserva_token) minhaReservaToken.value = data.minha_reserva_token
-    else if (data.minha_reserva_expira_em_ms == null) minhaReservaToken.value = null
+        : null
+    minhaReservaToken.value = reservaDaAba.minha_reserva_token || null
     loading.value = false
   }
 
@@ -219,7 +221,9 @@ export function useLoteStatus(loteIdParam = null) {
 
     try {
       const myDeviceFp = getDeviceFingerprint()
+      const subscribedToken = getTabReservationToken(loteIdParam || lote.value?.id) || getTabReservationToken()
       let streamUrl = `/api/lote/stream?device_fingerprint=${myDeviceFp}`
+      if (subscribedToken) streamUrl += `&token_reserva=${encodeURIComponent(subscribedToken)}`
       if (loteIdParam) streamUrl += `&lote_id=${loteIdParam}`
       if (lastStateVersion.value) streamUrl += `&last_version=${lastStateVersion.value}`
 
@@ -235,6 +239,9 @@ export function useLoteStatus(loteIdParam = null) {
         try {
           const data = JSON.parse(event.data)
           aplicarDadosCompletos(data)
+          // Compatibilidade com abas que já salvaram um token antes desta versão.
+          const tabToken = getTabReservationToken(data.id || loteIdParam)
+          if (tabToken && tabToken !== subscribedToken) connectSSE()
         } catch (e) {
           console.warn('Erro ao processar ESTADO_CONSOLIDADO SSE:', e)
         }
@@ -246,7 +253,6 @@ export function useLoteStatus(loteIdParam = null) {
       function handleStreamEvent(event) {
         try {
           const data = JSON.parse(event.data)
-          const myFp = getDeviceFingerprint()
           const tipoReserva = ['reserva_criada', 'reserva_liberada', 'resgate_concluido'].includes(data.tipo)
           const loteAtualId = lote.value?.id || lotePrevisaoId.value
 
@@ -280,19 +286,18 @@ export function useLoteStatus(loteIdParam = null) {
           if (!loteIdParam && data.lote_id && loteAtualId && String(data.lote_id) !== String(loteAtualId)) {
             return
           }
-          // 1. Sincronização direta de reserva para o próprio dispositivo em tempo real (<5ms)
-          const correspondeAoNavegador = (data.device_id && data.device_id === getDeviceId()) ||
-            (data.token_reserva && data.token_reserva === minhaReservaToken.value)
-          const correspondeAoFingerprint = data.device_fingerprint && data.device_fingerprint === myFp
-          if (correspondeAoNavegador || correspondeAoFingerprint) {
+          // Cada aba acompanha somente a reserva que ela iniciou ou retomou.
+          const tabToken = getTabReservationToken(data.lote_id || loteAtualId || loteIdParam)
+          if (tabToken && data.token_reserva === tabToken) {
             if (data.tipo === 'reserva_criada') {
-              if (correspondeAoNavegador && data.token_reserva) minhaReservaToken.value = data.token_reserva
+              minhaReservaToken.value = data.token_reserva
               minhaReservaSegundos.value = data.segundos_restantes
               const restanteReservaMs = Number(data.milissegundos_restantes)
               minhaReservaExpiraEmMs.value = Number.isFinite(restanteReservaMs) && restanteReservaMs >= 0
                 ? Date.now() + restanteReservaMs
                 : data.expira_em_ms
             } else if (data.tipo === 'reserva_liberada' || data.tipo === 'resgate_concluido') {
+              clearTabReservationToken(data.lote_id || loteAtualId || loteIdParam)
               minhaReservaToken.value = null
               minhaReservaExpiraEmMs.value = null
               minhaReservaSegundos.value = 0

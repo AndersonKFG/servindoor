@@ -154,6 +154,33 @@ class TestResgateConfirmation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.scalar("SELECT COUNT(*) FROM email_queue"), 1)
         self.assertEqual(await self.scalar("SELECT COUNT(*) FROM resgate_jobs"), 1)
 
+    async def test_multiplas_reservas_mesmo_browser_cpf_validam_e_cancelam_individualmente(self):
+        token, cookie = await self.reserve()
+        async with self.sessions() as session:
+            response = await resgate.pagina_resgate(
+                self.request("/api/lote/1/reservar", cookie), 1,
+                device_fingerprint="same", device_id="same", cpf=None, session=session,
+            )
+        second_token = json.loads(response.body)["token_reserva"]
+        self.assertNotEqual(token, second_token)
+        for current_token in (token, second_token):
+            async with self.sessions() as session:
+                validation = await resgate.validar_cpf_resgate(
+                    self.request(cookie=cookie), cpf=CPF_A, token_reserva=current_token, session=session,
+                )
+                self.assertTrue(json.loads(validation.body)["valido"])
+        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos WHERE status='ativa' AND cpf=:cpf", {"cpf": CPF_A}), 2)
+        await self.quit(second_token, cookie)
+        self.assertEqual(await self.scalar("SELECT status FROM reservas_ingressos WHERE token=:token", {"token": token}), "ativa")
+
+    async def test_duas_reservas_mesmo_cpf_confirmam_apenas_um_ingresso(self):
+        first_token, first_cookie = await self.reserve()
+        second_token, second_cookie = await self.reserve()
+        await self.confirm(first_token, first_cookie)
+        with self.assertRaises(HTTPException):
+            await self.confirm(second_token, second_cookie)
+        await self.assert_one_confirmation()
+
     async def test_confirma_grava_foto_email_job_sem_chamar_api_externa(self):
         token, cookie = await self.reserve()
         response = await self.confirm(token, cookie)

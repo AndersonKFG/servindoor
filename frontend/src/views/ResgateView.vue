@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useServerTime } from '../composables/useServerTime'
 import { getDeviceFingerprint, getDeviceId } from '../composables/useLoteStatus'
+import { getTabReservationToken, saveTabReservationToken, clearTabReservationToken } from '../utils/reservationStorage'
 import WebcamCapture from '../components/WebcamCapture.vue'
 import Modal from '../components/Modal.vue'
 
@@ -17,6 +18,14 @@ const secretarias = ref([])
 const buscaSecretaria = ref('')
 const showModalSecretaria = ref(false)
 const tokenReserva = ref('')
+try {
+  if (route.query.nova !== '1') {
+    tokenReserva.value = String(route.query.token_reserva || getTabReservationToken(loteId))
+  }
+} catch {}
+watch(tokenReserva, token => {
+  saveTabReservationToken(loteId, token)
+}, { immediate: true })
 const reservaExpiraEmMs = ref(null)
 const tempoRestanteSegundos = ref(0)
 const COOKIE_PRAZO_RESERVA = 'festa_reserva_prazo'
@@ -252,7 +261,7 @@ function salvarRascunhoFormulario(forcar = false) {
       foto_base64: form.value.foto_base64,
       salvoEm: Date.now()
     }
-    localStorage.setItem(DRAFT_STORAGE_PREFIX + loteId, JSON.stringify(rascunho))
+    sessionStorage.setItem(DRAFT_STORAGE_PREFIX + loteId, JSON.stringify(rascunho))
   } catch (e) {
     console.warn('Erro ao salvar rascunho local:', e)
   }
@@ -260,13 +269,13 @@ function salvarRascunhoFormulario(forcar = false) {
 
 function restaurarRascunhoFormulario() {
   try {
-    const raw = localStorage.getItem(DRAFT_STORAGE_PREFIX + loteId)
+    const raw = sessionStorage.getItem(DRAFT_STORAGE_PREFIX + loteId)
     if (!raw) return false
 
     const draft = JSON.parse(raw)
     // Se o rascunho foi salvo há mais de 10 minutos, descarta
     if (!envioPendente.value && Date.now() - (draft.salvoEm || 0) > 10 * 60 * 1000) {
-      limparRascunhoFormulario()
+      limparRascunhoFormulario(false)
       return false
     }
 
@@ -294,15 +303,10 @@ function restaurarRascunhoFormulario() {
   }
 }
 
-function limparRascunhoFormulario() {
+function limparRascunhoFormulario(limparToken = true) {
   try {
-    localStorage.removeItem(DRAFT_STORAGE_PREFIX + loteId)
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const key = localStorage.key(i)
-      if (key && key.startsWith(DRAFT_STORAGE_PREFIX)) {
-        localStorage.removeItem(key)
-      }
-    }
+    sessionStorage.removeItem(DRAFT_STORAGE_PREFIX + loteId)
+    if (limparToken) clearTabReservationToken(loteId)
   } catch (e) {
     // Ignore
   }
@@ -429,7 +433,7 @@ function aplicarEstadoConsolidadoDaStream(data) {
     lote.value = { id: data.id, nome: data.nome, secretaria_nome: data.secretaria_nome }
   }
   atualizarStatusLote(data)
-  aplicarPrazoReservaDaStream(data)
+  if (data.minha_reserva_token === tokenReserva.value) aplicarPrazoReservaDaStream(data)
 }
 
 function connectResgateSSE() {
@@ -440,7 +444,7 @@ function connectResgateSSE() {
   }
   try {
     const myFp = getDeviceFingerprint()
-    resgateEventSource = new EventSource(`/api/lote/stream?device_fingerprint=${myFp}&lote_id=${loteId}`)
+    resgateEventSource = new EventSource(`/api/lote/stream?device_fingerprint=${myFp}&lote_id=${loteId}&token_reserva=${encodeURIComponent(tokenReserva.value)}`)
     resgateEventSource.addEventListener('ESTADO_CONSOLIDADO', (event) => {
       try {
         aplicarEstadoConsolidadoDaStream(JSON.parse(event.data))
@@ -460,8 +464,7 @@ function connectResgateSSE() {
           receivedPrivateEvents.add(data.event_id)
           if (receivedPrivateEvents.size > 256) receivedPrivateEvents.delete(receivedPrivateEvents.values().next().value)
         }
-        const reservaDesteDispositivo = (data.token_reserva && data.token_reserva === tokenReserva.value) ||
-          data.device_fingerprint === myFp || (data.device_id && data.device_id === getDeviceId())
+        const reservaDesteDispositivo = data.token_reserva && data.token_reserva === tokenReserva.value
         atualizarStatusLote(data)
         if (data.tipo === 'reserva_criada' && reservaDesteDispositivo && !envioPendente.value) {
           if (data.token_reserva) tokenReserva.value = data.token_reserva
@@ -579,33 +582,6 @@ async function validarCpfNoServidor(digits) {
         return
       }
 
-      // Caso o CPF já possua reserva ativa em andamento:
-      if (data.tipo_erro === 'reserva_existente') {
-        if (timerInterval) clearInterval(timerInterval)
-        limparRascunhoFormulario()
-        form.value.cpf = ''
-
-        if (tokenReserva.value) {
-          const tok = tokenReserva.value
-          tokenReserva.value = ''
-          const formData = new FormData()
-          formData.append('token_reserva', tok)
-          fetch('/api/resgate/desistir', { method: 'POST', body: formData }).catch(() => {})
-        }
-
-        showModalDesistidaOutroNavegador.value = false
-        showModalDesistir.value = false
-        modalFeedback.value = {
-          show: true,
-          titulo: 'Reserva em Andamento',
-          subtitulo: data.mensagem || 'Este CPF já possui uma reserva ativa em andamento.',
-          icone: 'bi-hourglass-split',
-          corIcone: 'text-warning',
-          btnTexto: 'Voltar à Página Inicial',
-          btnIcone: 'bi-house-door'
-        }
-        return
-      }
     } else {
       const msgSucesso = data.mensagem || (data.nome_preview ? `CPF identificado: ${data.nome_preview}` : 'CPF apto para resgate!')
       cpfStatus.value = {
@@ -640,7 +616,7 @@ function onCpfInput(e) {
       return
     }
 
-    // 2. Consulta em segundo plano no servidor para equipe e unicidade
+    // 2. Consulta em segundo plano para elegibilidade e ingresso já emitido
     debounceCpfTimer = setTimeout(() => {
       validarCpfNoServidor(digits)
     }, 150)
@@ -700,6 +676,7 @@ async function carregarDadosResgate() {
 
     if (restaurarEnvioPendente()) {
       if (await consultarConfirmacaoPendente()) return
+      connectResgateSSE()
       try {
         const secRes = await fetch('/api/secretarias')
         if (secRes.ok) secretarias.value = await secRes.json()
@@ -711,6 +688,7 @@ async function carregarDadosResgate() {
       return
     }
 
+    if (route.query.nova === '1') limparRascunhoFormulario()
     const deviceFp = getDeviceFingerprint()
     const deviceId = getDeviceId()
     const res = await fetch(`/api/lote/${loteId}/reservar?device_fingerprint=${encodeURIComponent(deviceFp)}&device_id=${encodeURIComponent(deviceId)}`, {
@@ -718,7 +696,8 @@ async function carregarDadosResgate() {
       headers: {
         'Accept': 'application/json',
         'X-Device-Fingerprint': deviceFp,
-        'X-Device-ID': deviceId
+        'X-Device-ID': deviceId,
+        'X-Reserva-Token': tokenReserva.value
       }
     })
 
@@ -789,6 +768,10 @@ async function carregarDadosResgate() {
     if (dataRes.token_reserva) {
       tokenReserva.value = dataRes.token_reserva
     }
+    if (route.query.nova === '1' || route.query.token_reserva) {
+      await router.replace({ path: route.path, query: { ...route.query, nova: undefined, token_reserva: undefined } })
+    }
+    connectResgateSSE()
     try {
       const secRes = await fetch('/api/secretarias')
       if (secRes.ok) {
@@ -991,7 +974,6 @@ async function handleSubmit() {
 }
 
 onMounted(() => {
-  connectResgateSSE()
   carregarDadosResgate()
 })
 
@@ -1510,6 +1492,6 @@ onUnmounted(() => {
 
 <style scoped>
 .resgate-page {
-  padding: 24px 0 48px;
+  padding: var(--space-xl) 0 calc(var(--space-xl) * 2);
 }
 </style>

@@ -19,20 +19,19 @@ from app.routers.resgate import (
 from app.core.events import LoteEventHub
 
 
-class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
+class TestReservasMultiplasECicloDeVida(unittest.TestCase):
     """
-    Testes de Unidade e Integridade do Mecanismo de Exclusividade de Reserva:
-    1. Mesma sessão de navegador (mesmo cookie) reatacha à reserva ativa existente sem consumir nova vaga.
+    Testes de Unidade e Integridade das Reservas Temporárias:
+    1. Token explícito permite consultar a reserva existente.
     2. Navegadores distintos na mesma máquina (cookies diferentes) geram reservas independentes consumindo 2 vagas.
-    3. Bloqueio por participante: mesmo CPF não pode ter duas reservas ativas.
-    4. Bloqueio global cross-lote: participante com reserva no Lote 1 não pode reservar no Lote 2.
-    5. Bloqueio global cross-lote: navegador com reserva no Lote 1 não pode reservar no Lote 2.
+    3. Mesmo CPF pode ter múltiplas reservas ativas.
+    4. Participante pode manter reservas em lotes diferentes.
+    5. Navegador pode manter reservas em lotes diferentes.
     6. Suporte a NAT compartilhado (rede corporativa/prefeitura): múltiplos participantes com mesmo IP conseguem reservar simultaneamente.
     7. Rate limit deslizante de requisições por IP: bloqueia flood (>60 reqs/min) sem limitar vagas legítimas.
     8. Transição de estado de reservas expiradas para 'expirada'.
     9. Reutilização após expiração: participante e navegador podem abrir nova reserva após expiração da anterior.
-    10. Enforce do índice parcial único de CPF ativo.
-    11. Enforce do índice parcial único de navegador ativo.
+    10. CPF e navegador não impõem unicidade às reservas ativas.
     12. Não-conflito de reservas concluídas, canceladas e expiradas com o índice parcial ativo.
     13. Desistência voluntária: libera vaga e transiciona para 'cancelada'.
     14. Rejeição definitiva por idade menor de 18 anos: cancela reserva imediatamente e libera vaga.
@@ -104,9 +103,7 @@ class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
                 device_fingerprint TEXT
             );
 
-            -- Indices parciais estaticos identicos aos aplicados no PostgreSQL
-            CREATE UNIQUE INDEX uq_reserva_cpf_ativa ON reservas_ingressos (cpf) WHERE status = 'ativa';
-            CREATE UNIQUE INDEX uq_reserva_browser_ativa ON reservas_ingressos (browser_token_hash) WHERE status = 'ativa';
+            CREATE INDEX idx_reserva_browser_ativa ON reservas_ingressos (browser_token_hash, expira_em DESC) WHERE status = 'ativa';
             CREATE INDEX idx_reservas_status_expira ON reservas_ingressos (status, expira_em);
         """)
 
@@ -127,8 +124,8 @@ class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
         # 2. Nova consulta do mesmo navegador encontra a reserva ativa existente
         cur = self.conn.execute("""
             SELECT * FROM reservas_ingressos
-            WHERE browser_token_hash = ? AND status = 'ativa' AND expira_em > ?
-        """, (b_hash, agora.isoformat()))
+            WHERE token = ? AND browser_token_hash = ? AND status = 'ativa' AND expira_em > ?
+        """, ("tok-1", b_hash, agora.isoformat()))
         reserva = cur.fetchone()
 
         self.assertIsNotNone(reserva)
@@ -159,8 +156,8 @@ class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
         cur_count = self.conn.execute("SELECT COUNT(*) as c FROM reservas_ingressos WHERE status = 'ativa'")
         self.assertEqual(cur_count.fetchone()["c"], 2)
 
-    # --- CENÁRIO 3: Participante não pode ter duas reservas ativas (Índice CPF) ---
-    def test_03_bloqueio_dupla_reserva_por_cpf_participante(self):
+    # --- CENÁRIO 3: Participante pode ter duas reservas ativas ---
+    def test_03_permite_dupla_reserva_por_cpf_participante(self):
         cpf = "12345678901"
         b1_hash = hash_token("token-browser-1")
         b2_hash = hash_token("token-browser-2")
@@ -173,16 +170,15 @@ class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
         """, ("tok-1", agora.isoformat(), expira.isoformat(), cpf, b1_hash))
         self.conn.commit()
 
-        # Tentativa de criar segunda reserva com o mesmo CPF deve falhar pelo índice único parcial
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.conn.execute("""
-                INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, cpf, browser_token_hash)
-                VALUES (?, 1, ?, ?, 'ativa', ?, ?)
-            """, ("tok-2", agora.isoformat(), expira.isoformat(), cpf, b2_hash))
-            self.conn.commit()
+        self.conn.execute("""
+            INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, cpf, browser_token_hash)
+            VALUES (?, 1, ?, ?, 'ativa', ?, ?)
+        """, ("tok-2", agora.isoformat(), expira.isoformat(), cpf, b2_hash))
+        self.conn.commit()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reservas_ingressos WHERE cpf = ? AND status = 'ativa'", (cpf,)).fetchone()[0], 2)
 
     # --- CENÁRIO 4: Bloqueio global cross-lote para o participante ---
-    def test_04_bloqueio_cross_lote_para_mesmo_participante(self):
+    def test_04_permite_cross_lote_para_mesmo_participante(self):
         cpf = "12345678901"
         agora = datetime.now()
         expira = agora + timedelta(minutes=5)
@@ -204,12 +200,15 @@ class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
         self.assertIsNotNone(reserva)
         self.assertEqual(reserva["lote_id"], 1)
 
-        # Tentativa de adquirir reserva no Lote 2 é rejeitada (não pode ter 2 lotes simultâneos)
-        pode_reservar_lote_2 = (reserva is None) or (reserva["lote_id"] == 2)
-        self.assertFalse(pode_reservar_lote_2)
+        self.conn.execute("""
+            INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, cpf, browser_token_hash)
+            VALUES ('tok-lote2', 2, ?, ?, 'ativa', ?, 'hash-2')
+        """, (agora.isoformat(), expira.isoformat(), cpf))
+        self.conn.commit()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reservas_ingressos WHERE cpf = ? AND status = 'ativa'", (cpf,)).fetchone()[0], 2)
 
     # --- CENÁRIO 5: Bloqueio global cross-lote para o mesmo navegador ---
-    def test_05_bloqueio_cross_lote_para_mesmo_navegador(self):
+    def test_05_permite_cross_lote_para_mesmo_navegador(self):
         b_hash = hash_token("browser-token-xyz")
         agora = datetime.now()
         expira = agora + timedelta(minutes=5)
@@ -221,13 +220,12 @@ class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
         """, (agora.isoformat(), expira.isoformat(), b_hash))
         self.conn.commit()
 
-        # Tentativa de inserir nova reserva no Lote 2 falha no índice parcial uq_reserva_browser_ativa
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.conn.execute("""
-                INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, browser_token_hash)
-                VALUES ('tok-nav-2', 2, ?, ?, 'ativa', ?)
-            """, (agora.isoformat(), expira.isoformat(), b_hash))
-            self.conn.commit()
+        self.conn.execute("""
+            INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, browser_token_hash)
+            VALUES ('tok-nav-2', 2, ?, ?, 'ativa', ?)
+        """, (agora.isoformat(), expira.isoformat(), b_hash))
+        self.conn.commit()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reservas_ingressos WHERE browser_token_hash = ? AND status = 'ativa'", (b_hash,)).fetchone()[0], 2)
 
     # --- CENÁRIO 6: Suporte a NAT Compartilhado (Rede de Prefeitura/Corporativa) ---
     def test_06_nat_compartilhado_permite_multiplos_participantes_mesmo_ip(self):
@@ -325,8 +323,8 @@ class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
         cur = self.conn.execute("SELECT COUNT(*) as c FROM reservas_ingressos WHERE status = 'ativa'")
         self.assertEqual(cur.fetchone()["c"], 1)
 
-    # --- CENÁRIO 10 & 11: Índices Parciais Estáticos Garantem Unicidade no DB ---
-    def test_10_enforce_indice_parcial_unico_cpf_e_browser(self):
+    # --- CENÁRIO 10: CPF e navegador repetidos são permitidos ---
+    def test_10_permite_cpf_e_browser_repetidos(self):
         agora = datetime.now()
         expira = agora + timedelta(minutes=5)
 
@@ -336,21 +334,16 @@ class TestExclusividadeReservaDispositivoEParticipante(unittest.TestCase):
         """, (agora.isoformat(), expira.isoformat()))
         self.conn.commit()
 
-        # Duplicata de browser_token_hash com status='ativa'
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.conn.execute("""
-                INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, cpf, browser_token_hash)
-                VALUES ('tok-b', 1, ?, ?, 'ativa', '55544433322', 'hash-xyz')
-            """, (agora.isoformat(), expira.isoformat()))
-            self.conn.commit()
-
-        # Duplicata de CPF com status='ativa'
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.conn.execute("""
-                INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, cpf, browser_token_hash)
-                VALUES ('tok-c', 1, ?, ?, 'ativa', '99988877766', 'hash-novo')
-            """, (agora.isoformat(), expira.isoformat()))
-            self.conn.commit()
+        self.conn.execute("""
+            INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, cpf, browser_token_hash)
+            VALUES ('tok-b', 1, ?, ?, 'ativa', '55544433322', 'hash-xyz')
+        """, (agora.isoformat(), expira.isoformat()))
+        self.conn.execute("""
+            INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, cpf, browser_token_hash)
+            VALUES ('tok-c', 1, ?, ?, 'ativa', '99988877766', 'hash-novo')
+        """, (agora.isoformat(), expira.isoformat()))
+        self.conn.commit()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM reservas_ingressos WHERE status = 'ativa'").fetchone()[0], 3)
 
     # --- CENÁRIO 12: Concluída, Cancelada e Expirada NÃO Conflitam no Índice ---
     def test_12_status_nao_ativos_podem_coexistir_no_banco(self):

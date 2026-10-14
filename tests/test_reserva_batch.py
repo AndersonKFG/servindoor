@@ -17,8 +17,7 @@ from app.services.reserva_batch import ReservaBatchService
 
 
 BATCH_INDEXES = (
-    "CREATE UNIQUE INDEX uq_batch_cpf ON reservas_ingressos (cpf) WHERE status = 'ativa'",
-    "CREATE UNIQUE INDEX uq_batch_browser ON reservas_ingressos (browser_token_hash) WHERE status = 'ativa'",
+    "CREATE INDEX idx_batch_browser ON reservas_ingressos (browser_token_hash, expira_em DESC) WHERE status = 'ativa'",
     "CREATE INDEX idx_batch_rate ON rate_limit_tentativas (ip, acao, criado_em)",
     "CREATE INDEX idx_batch_cap ON reservas_ingressos (lote_id, expira_em) WHERE status = 'ativa'",
     "CREATE INDEX idx_batch_fp ON reservas_ingressos (device_fingerprint, expira_em DESC) WHERE status = 'ativa'",
@@ -58,11 +57,11 @@ class TestReservaBatch(unittest.IsolatedAsyncioTestCase):
         self.services.append(service)
         return service
 
-    async def reserve(self, number, *, service=None, lote_id=1, cpf=None, fp=None, browser=None, rate=None):
+    async def reserve(self, number, *, service=None, lote_id=1, cpf=None, fp=None, browser=None, rate=None, token=None):
         return await (service or self.service).reserve(lote_id=lote_id,
             fp=fp or f"batch_fp_{number}", device_id=f"batch_device_{number}",
             browser_hash=browser or f"batch_browser_{number}", cpf=cpf,
-            ip="192.0.2.33", rate_key=rate or f"batch_rate_{number}")
+            ip="192.0.2.33", rate_key=rate or f"batch_rate_{number}", token=token)
 
     async def scalar(self, sql):
         async with self.sessions() as session:
@@ -86,44 +85,54 @@ class TestReservaBatch(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(item.lote.nome == "Batch isolado" for item in results))
 
     async def test_f5_e_repetidos_no_batch_preservam_token_e_prazo(self):
-        results = await asyncio.gather(*(self.reserve(1) for _ in range(30)))
-        self.assertEqual(sum(item.created for item in results), 1)
+        first = await self.reserve(1)
+        results = await asyncio.gather(*(self.reserve(1, token=first.reserva.token) for _ in range(30)))
+        self.assertEqual(sum(item.created for item in results), 0)
         self.assertEqual(len({item.reserva.token for item in results}), 1)
         expiry = results[0].reserva.expira_em
-        again = await self.reserve(1)
+        again = await self.reserve(1, token=first.reserva.token)
         self.assertEqual(again.reserva.token, results[0].reserva.token)
         self.assertEqual(again.reserva.expira_em, expiry)
         self.assertEqual(await self.scalar("SELECT COUNT(*) FROM rate_limit_tentativas"), 1)
 
-    async def test_cpf_duplicado_no_batch_ocupa_uma_vaga(self):
+    async def test_cpf_duplicado_no_batch_permite_duas_reservas(self):
         results = await asyncio.gather(self.reserve(1, cpf="52998224725"), self.reserve(2, cpf="52998224725"))
-        self.assertEqual([item.status_code for item in results], [200, 409])
-        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 1)
+        self.assertEqual([item.status_code for item in results], [200, 200])
+        self.assertNotEqual(results[0].reserva.token, results[1].reserva.token)
+        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 2)
 
     async def test_mesmo_browser_recupera_reserva_e_outro_browser_nao(self):
         first = await self.reserve(1)
-        same_browser = await self.reserve(2, browser="batch_browser_1")
+        same_browser = await self.reserve(2, browser="batch_browser_1", token=first.reserva.token)
         self.assertEqual(same_browser.reserva.token, first.reserva.token)
+        unauthorized = await self.reserve(3, token=first.reserva.token)
+        self.assertEqual(unauthorized.status_code, 403)
         other_browser = await self.reserve(3, fp="batch_fp_1")
         self.assertEqual(other_browser.status_code, 200)
         self.assertIsNotNone(other_browser.reserva)
 
-    async def test_dispositivo_global_em_outro_lote(self):
+    async def test_dispositivo_permite_reservas_em_outro_lote(self):
         first = await self.reserve(1)
         result = await self.reserve(1, lote_id=2, service=self.new_service())
-        self.assertEqual(result.codigo, "reserva_outro_lote")
-        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 1)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 2)
         self.assertEqual(first.reserva.lote_id, 1)
 
-    async def test_mesmo_dispositivo_em_lotes_concorrentes_cria_uma_reserva(self):
+    async def test_mesmo_dispositivo_em_lotes_concorrentes_cria_duas_reservas(self):
         first_actor, second_actor = self.service, self.new_service()
         results = await asyncio.wait_for(asyncio.gather(
             self.reserve(1, lote_id=1, service=first_actor, rate="ip_a"),
             self.reserve(1, lote_id=2, service=second_actor, rate="ip_b"),
         ), 5)
-        self.assertEqual(sum(item.status_code == 200 for item in results), 1)
-        self.assertEqual(sum(item.codigo == "reserva_outro_lote" for item in results), 1)
-        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 1)
+        self.assertEqual(sum(item.status_code == 200 for item in results), 2)
+        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 2)
+
+    async def test_mesmo_cpf_browser_dispositivo_sem_limite_de_reservas(self):
+        results = await asyncio.gather(*(self.reserve(1, cpf="52998224725") for _ in range(30)))
+        self.assertTrue(all(item.created and item.status_code == 200 for item in results))
+        self.assertEqual(len({item.reserva.token for item in results}), 30)
+        self.assertTrue(all((item.reserva.expira_em - item.reserva.criada_em).total_seconds() == 300 for item in results))
+        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos WHERE status='ativa'"), 30)
 
     async def test_rate_limit_conta_batch_e_coordena_actors(self):
         await self.execute("UPDATE lotes SET quantidade_total=500 WHERE id=1")
@@ -132,11 +141,11 @@ class TestReservaBatch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(item.status_code == 200 for item in results), 300)
         self.assertEqual(sum(item.status_code == 429 for item in results), 50)
         self.assertEqual(await self.scalar("SELECT COUNT(*) FROM rate_limit_tentativas"), 300)
-        again = await self.reserve(1, rate="same_ip")
+        again = await self.reserve(1, rate="same_ip", token=results[1].reserva.token)
         self.assertEqual(again.status_code, 200)
         self.assertFalse(again.created)
 
-    async def test_expirada_libera_unicidade_cpf_browser_e_nao_renova_antiga(self):
+    async def test_expirada_nao_renova_antiga(self):
         first = await self.reserve(1, cpf="52998224725")
         await self.execute("UPDATE reservas_ingressos SET expira_em=NOW()-INTERVAL '1 second'")
         second = await self.reserve(1, cpf="52998224725")
@@ -167,7 +176,7 @@ class TestReservaBatch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 0)
         self.assertEqual((await self.reserve(3, service=service)).status_code, 503)
 
-    async def test_cancelamento_durante_commit_permite_recuperar_f5(self):
+    async def test_cancelamento_durante_commit_permite_nova_reserva(self):
         committing = asyncio.Event()
         release = asyncio.Event()
 
@@ -188,8 +197,8 @@ class TestReservaBatch(unittest.IsolatedAsyncioTestCase):
         release.set()
         recovered = await self.reserve(1, service=service)
         self.assertEqual(recovered.status_code, 200)
-        self.assertFalse(recovered.created)
-        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 1)
+        self.assertTrue(recovered.created)
+        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 2)
 
     async def test_falha_sql_reverte_batch_inteiro_sem_respostas_sucesso(self):
         service = self.new_service()
@@ -205,7 +214,7 @@ class TestReservaBatch(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 0)
         self.assertEqual(await self.scalar("SELECT COUNT(*) FROM rate_limit_tentativas"), 0)
 
-    async def test_commit_confirmado_sem_resposta_e_recuperavel_sem_duplicar(self):
+    async def test_commit_sem_resposta_permite_nova_reserva_com_expiracao_da_anterior(self):
         class UnknownCommit(AsyncSession):
             async def commit(self):
                 await super().commit()
@@ -218,9 +227,9 @@ class TestReservaBatch(unittest.IsolatedAsyncioTestCase):
         service.session_factory = self.sessions
         recovered = await self.reserve(1, service=service)
         self.assertEqual(recovered.status_code, 200)
-        self.assertFalse(recovered.created)
-        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 1)
-        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM rate_limit_tentativas"), 1)
+        self.assertTrue(recovered.created)
+        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM reservas_ingressos"), 2)
+        self.assertEqual(await self.scalar("SELECT COUNT(*) FROM rate_limit_tentativas"), 2)
 
     async def test_factory_expire_on_commit_entrega_dto_desanexado(self):
         service = self.new_service()

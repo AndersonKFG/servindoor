@@ -361,6 +361,10 @@ async def _obter_prazo_reserva_sse(
             or_(*condicoes),
         )
     )
+    # Cada aba pode acompanhar uma reserva diferente do mesmo navegador.
+    token_reserva = request.query_params.get("token_reserva")
+    if token_reserva:
+        stmt = stmt.where(ReservaIngresso.token == token_reserva)
     encontrados = (await session.execute(stmt)).scalars().all()
 
     # Filtra em UTC depois de normalizar os valores retornados pelo banco. Isso

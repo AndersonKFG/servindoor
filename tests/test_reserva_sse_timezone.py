@@ -128,6 +128,23 @@ class TestReservaSSETimezone(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(cancelada["minha_reserva_segundos"])
             self.assertIsNone(cancelada["minha_reserva_expira_em_ms"])
 
+    async def test_sse_seleciona_token_explicito_entre_reservas_do_mesmo_browser(self):
+        await migrar_fuso_reservas(self.conn)
+        async with AsyncSession(bind=self.conn) as session:
+            session.add_all([
+                ReservaIngresso(id=number, token=f"token-{number}", lote_id=10000,
+                    criada_em=self.agora, expira_em=self.agora + timedelta(seconds=seconds),
+                    device_fingerprint="same-fp", browser_token_hash="same-browser")
+                for number, seconds in ((1, 100), (2, 200))
+            ])
+            await session.flush()
+            for number, seconds in ((1, 100), (2, 200)):
+                request = Request({**self.request.scope, "query_string": f"token_reserva=token-{number}".encode()})
+                with patch("app.routers.public._obter_browser_token_hash_public", return_value="same-browser"):
+                    prazo = await _obter_prazo_reserva_sse(session, request, 10000, "same-fp", self.agora)
+                self.assertEqual(prazo["minha_reserva_token"], f"token-{number}")
+                self.assertEqual(prazo["minha_reserva_segundos"], seconds)
+
     async def test_rota_desistir_persiste_cancelamento_e_publica_liberacao(self):
         await self.inserir_legada()
         await migrar_fuso_reservas(self.conn)

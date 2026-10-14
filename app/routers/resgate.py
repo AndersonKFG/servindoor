@@ -456,20 +456,6 @@ async def validar_cpf_resgate(
     )
     await session.execute(stmt_expirar_direcionada)
 
-    # Helper seguro: Libera a reserva secundária desta chamada em caso de erro definitivo
-    async def _cancelar_reserva_secundaria_se_pertencer():
-        if not token_reserva:
-            return
-        stmt_sec = select(ReservaIngresso).where(
-            ReservaIngresso.token == token_reserva,
-            ReservaIngresso.status == "ativa"
-        )
-        r_sec = await session.execute(stmt_sec)
-        res_sec = r_sec.scalars().first()
-        # Cancela SOMENTE se a reserva secundária pertencer a este navegador ou não tiver hash
-        if res_sec and (res_sec.browser_token_hash == current_browser_hash or not res_sec.browser_token_hash):
-            await _cancelar_reserva_ativa(session, res_sec, "reserva_duplicada")
-
     valido, tipo_erro, mensagem, usuario = await verificar_elegibilidade_participante(cpf_limpo, session)
     if not valido:
         # Apenas reporta a inelegibilidade do CPF para o formulário exibir a mensagem amigável em tempo real.
@@ -481,26 +467,6 @@ async def validar_cpf_resgate(
         })
 
     agora = datetime.now(timezone.utc)
-    # Verifica se este CPF já possui outra reserva ativa R1 em andamento em QUALQUER lote
-    stmt_res_ativa = select(ReservaIngresso).where(
-        ReservaIngresso.cpf == cpf_limpo,
-        ReservaIngresso.status == "ativa",
-        ReservaIngresso.expira_em > agora
-    )
-    res_ativa = await session.execute(stmt_res_ativa)
-    reserva_ativa_cpf = res_ativa.scalars().first()
-
-    if reserva_ativa_cpf and (not token_reserva or reserva_ativa_cpf.token != token_reserva):
-        # O CPF já possui outra reserva ativa R1!
-        # A reserva secundária R2 deste navegador é cancelada para liberar a vaga para outros servidores.
-        # A reserva R1 original permanece intacta!
-        await _cancelar_reserva_secundaria_se_pertencer()
-        return JSONResponse(content={
-            "valido": False,
-            "tipo_erro": "reserva_existente",
-            "mensagem": "Este CPF já possui uma reserva ativa em andamento."
-        })
-
     # Se token_reserva foi fornecido, associa com segurança o CPF à reserva existente desta sessão
     if token_reserva:
         stmt_res_token = select(ReservaIngresso).where(
@@ -511,21 +477,12 @@ async def validar_cpf_resgate(
         res_token = await session.execute(stmt_res_token)
         reserva_token_obj = res_token.scalars().first()
         if reserva_token_obj and (reserva_token_obj.browser_token_hash == current_browser_hash or not reserva_token_obj.browser_token_hash):
-            try:
-                await session.execute(update(ReservaIngresso).where(
-                    ReservaIngresso.id == reserva_token_obj.id,
-                    ReservaIngresso.status == "ativa", ReservaIngresso.utilizada == False,
-                    ReservaIngresso.expira_em > datetime.now(timezone.utc)
-                ).values(cpf=cpf_limpo))
-                await session.commit()
-            except IntegrityError:
-                await session.rollback()
-                await _cancelar_reserva_secundaria_se_pertencer()
-                return JSONResponse(content={
-                    "valido": False,
-                    "tipo_erro": "reserva_existente",
-                    "mensagem": "Este CPF já possui uma reserva ativa em andamento."
-                })
+            await session.execute(update(ReservaIngresso).where(
+                ReservaIngresso.id == reserva_token_obj.id,
+                ReservaIngresso.status == "ativa", ReservaIngresso.utilizada == False,
+                ReservaIngresso.expira_em > datetime.now(timezone.utc)
+            ).values(cpf=cpf_limpo))
+            await session.commit()
 
     if usuario:
         partes = usuario.nome.strip().split()
@@ -672,7 +629,7 @@ async def pagina_resgate(
         if not valido:
             return JSONResponse(status_code=400, content={"codigo": codigo, "detail": mensagem, "mensagem": mensagem})
     # Nenhuma conexão do pedido permanece ocupada enquanto aguarda o batch.
-    # Recuperações F5 também compartilham buscas, preservando token e prazo.
+    # Recuperações F5 usam o token explícito da aba, preservando seu prazo.
     await session.close()
     client_ip = extrair_ip_cliente(request)
     with _medir_etapa_reserva(request, "batch_reserva"):
@@ -680,6 +637,7 @@ async def pagina_resgate(
             lote_id=lote_id, fp=fingerprint, device_id=device,
             browser_hash=browser_hash, cpf=cpf_limpo, ip=client_ip,
             rate_key=_chave_rate_limit_reserva(request, lote_id, fingerprint, client_ip),
+            token=request.headers.get("x-reserva-token"),
         )
     if result.status_code != 200:
         content = {"codigo": result.codigo, "detail": result.detail, "mensagem": result.detail}

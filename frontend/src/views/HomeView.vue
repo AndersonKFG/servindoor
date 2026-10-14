@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import confetti from 'canvas-confetti'
 import { useServerTime } from '../composables/useServerTime'
 import { useLoteStatus } from '../composables/useLoteStatus'
+import { clearTabReservationToken } from '../utils/reservationStorage'
 import Modal from '../components/Modal.vue'
 import FaqModal from '../components/FaqModal.vue'
 import SponsorLogos from '../components/SponsorLogos.vue'
@@ -590,7 +591,9 @@ async function desistirVagaPelaHome() {
     minhaReservaToken.value = null
     tempoReservaFormatado.value = ''
     try {
-      Object.keys(localStorage).filter(k => k.startsWith('festa_resgate_draft_')).forEach(k => localStorage.removeItem(k))
+      const loteAtualId = lote.value?.id || lotePrevisaoId.value
+      sessionStorage.removeItem('festa_resgate_draft_' + loteAtualId)
+      clearTabReservationToken(loteAtualId)
     } catch(e) {}
     showModalDesistirHome.value = false
   } catch (e) {
@@ -843,7 +846,7 @@ const cardClass = computed(() => {
               <!-- 1. Botão de Continuação de Reserva Ativa -->
               <div v-else-if="temReservaAtiva && (lote || lotePrevisaoId)" class="reserva-action-container">
               <router-link
-                :to="'/resgate/' + (lote?.id || lotePrevisaoId)"
+                :to="{ path: '/resgate/' + (lote?.id || lotePrevisaoId), query: { token_reserva: minhaReservaToken } }"
                 class="btn-vip-mega btn-reserva-continua font-outfit"
               >
                 <span>Continuar Meu Resgate</span>
@@ -851,6 +854,13 @@ const cardClass = computed(() => {
                   {{ tempoReservaFormatado }}
                 </span>
                 <i class="bi bi-arrow-right-circle-fill"></i>
+              </router-link>
+
+              <router-link
+                :to="'/resgate/' + (lote?.id || lotePrevisaoId) + '?nova=1'"
+                class="btn-desistir-home-link"
+              >
+                Abrir outra reserva
               </router-link>
 
               <button
