@@ -81,6 +81,25 @@ const conferenciaCpfs = ref(null)
 const resultadoListaCpfs = ref(null)
 const processandoListaCpfs = ref(false)
 const erroListaCpfs = ref('')
+const buscaConferenciaCpfs = ref('')
+const paginaConferenciaCpfs = ref(1)
+const servidoresConferenciaCpfs = computed(() => {
+  const termo = buscaConferenciaCpfs.value.trim().toLocaleLowerCase('pt-BR')
+  const digitos = termo.replace(/\D/g, '')
+  return (conferenciaCpfs.value?.servidores_a_homologar || []).filter(servidor =>
+    !termo || servidor.nome.toLocaleLowerCase('pt-BR').includes(termo) ||
+    (digitos && servidor.cpf.includes(digitos))
+  )
+})
+const paginasConferenciaCpfs = computed(() => Math.max(1, Math.ceil(servidoresConferenciaCpfs.value.length / 25)))
+const servidoresConferenciaPagina = computed(() =>
+  servidoresConferenciaCpfs.value.slice((paginaConferenciaCpfs.value - 1) * 25, paginaConferenciaCpfs.value * 25)
+)
+watch(buscaConferenciaCpfs, () => { paginaConferenciaCpfs.value = 1 })
+watch(conferenciaCpfs, () => {
+  buscaConferenciaCpfs.value = ''
+  paginaConferenciaCpfs.value = 1
+})
 
 watch(listaCpfsTexto, () => {
   conferenciaCpfs.value = null
@@ -1118,6 +1137,36 @@ async function confirmarRejeicao() {
             <span class="modal-field-label">Inválidos / Repetidos</span>
             <strong>{{ conferenciaCpfs.cpfs_invalidos }} / {{ conferenciaCpfs.cpfs_duplicados }}</strong>
           </div>
+        </div>
+        <div v-if="conferenciaCpfs.servidores_a_homologar?.length" class="table-card mt-3">
+          <div class="table-header-box">
+            <h4 class="table-title">CPFs que serão homologados <span class="table-badge-count">{{ conferenciaCpfs.cpfs_com_pendencia }}</span></h4>
+            <div class="search-box">
+              <i class="bi bi-search" aria-hidden="true"></i>
+              <input v-model="buscaConferenciaCpfs" type="search" class="form-control" placeholder="Buscar nome ou CPF" aria-label="Buscar nos CPFs que serão homologados" />
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="custom-table">
+              <caption class="visually-hidden">Servidores com pendência elegível na lista informada</caption>
+              <thead><tr><th scope="col">CPF</th><th scope="col">Servidor</th></tr></thead>
+              <tbody>
+                <tr v-for="servidor in servidoresConferenciaPagina" :key="servidor.usuario_id">
+                  <td><span class="table-code-pill font-monospace">{{ servidor.cpf_formatado }}</span></td>
+                  <td><div class="table-user-cell"><span class="table-user-name">{{ servidor.nome }}</span></div></td>
+                </tr>
+                <tr v-if="!servidoresConferenciaCpfs.length"><td colspan="2">Nenhum servidor corresponde à busca.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination-footer">
+            <span class="pagination-info">{{ servidoresConferenciaCpfs.length }} servidor(es) · Página {{ paginaConferenciaCpfs }} de {{ paginasConferenciaCpfs }}</span>
+            <div>
+              <button type="button" class="btn-page-nav" :disabled="paginaConferenciaCpfs <= 1" @click="paginaConferenciaCpfs--" aria-label="Página anterior dos CPFs">Anterior</button>
+              <button type="button" class="btn-page-nav" :disabled="paginaConferenciaCpfs >= paginasConferenciaCpfs" @click="paginaConferenciaCpfs++" aria-label="Próxima página dos CPFs">Próxima</button>
+            </div>
+          </div>
+          <p class="small text-muted p-3 mb-0">A busca apenas facilita a conferência. Todos os CPFs desta relação serão homologados, inclusive os das outras páginas. As pendências serão verificadas novamente ao confirmar.</p>
         </div>
         <p v-if="conferenciaCpfs.cpfs_invalidos > 0" class="small text-warning mt-2">Os CPFs inválidos serão ignorados. Você pode corrigir a lista e conferir novamente.</p>
         <p v-if="conferenciaCpfs.pendentes_encontrados === 0" class="small text-muted mt-2">Nenhuma solicitação pendente foi encontrada para os CPFs válidos desta lista.</p>

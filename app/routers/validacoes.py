@@ -95,6 +95,18 @@ async def homologar_por_lista_cpfs(
         "ingressos_emitidos": 0,
     }
     if not body.confirmar:
+        resultado["servidores_a_homologar"] = [
+            {
+                "usuario_id": usuario.id,
+                "nome": usuario.nome,
+                "cpf": usuario.cpf,
+                "cpf_formatado": formatar_cpf(usuario.cpf),
+            }
+            for usuario in sorted(
+                (usuarios_por_id[identifier] for identifier in ids_encontrados),
+                key=lambda usuario: (usuario.nome.casefold(), usuario.cpf),
+            )
+        ]
         return JSONResponse(content=resultado)
 
     usuarios_com_ingresso = set((await session.execute(select(Ingresso.usuario_id).where(
