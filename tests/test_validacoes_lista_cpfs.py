@@ -92,6 +92,11 @@ class TestValidacoesListaCpfs(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resultado["cpfs_sem_pendencia"], 1)
         self.assertEqual(resultado["pendentes_encontrados"], 2)
         self.assertFalse(resultado["confirmado"])
+        self.assertEqual(resultado["servidores_a_homologar"], [
+            {"usuario_id": i, "nome": f"Pessoa {i}", "cpf": cpf_valido(i),
+             "cpf_formatado": routes.formatar_cpf(cpf_valido(i))}
+            for i in (1, 2)
+        ])
         self.assertEqual(self.ingressos(), 0)
         self.assertFalse(self.db.get(Usuario, 1).validado)
         self.assertEqual(self.db.get(SolicitacaoValidacao, 1).status, "pendente_analise")
@@ -130,7 +135,10 @@ class TestValidacoesListaCpfs(unittest.IsolatedAsyncioTestCase):
             self.criar(i)
         self.salvar()
         lista = "\n".join(cpf_valido(i) for i in range(1, 1201))
-        self.assertEqual((await self.processar(lista))["pendentes_encontrados"], 1200)
+        conferencia = await self.processar(lista)
+        self.assertEqual(conferencia["pendentes_encontrados"], 1200)
+        self.assertEqual(len(conferencia["servidores_a_homologar"]), 1200)
+        self.assertEqual({s["cpf"] for s in conferencia["servidores_a_homologar"]}, set(lista.splitlines()))
         result = await self.processar(lista, True)
         self.assertEqual((result["aprovados"], self.ingressos()), (1200, 1200))
         self.assertEqual((await self.processar(lista, True))["aprovados"], 0)
@@ -143,6 +151,9 @@ class TestValidacoesListaCpfs(unittest.IsolatedAsyncioTestCase):
         self.db.add(Ingresso(usuario_id=1, lote_id=1, qr_code_token="token-preservado"))
         self.db.get(Usuario, 1).role = UserRole.portaria
         self.salvar()
+        conferencia = await self.processar(cpf_valido(1))
+        self.assertEqual(len(conferencia["servidores_a_homologar"]), 1)
+        self.assertEqual(conferencia["pendentes_encontrados"], 2)
         result = await self.processar(cpf_valido(1), True)
         self.assertEqual((result["aprovados"], result["ingressos_emitidos"]), (2, 0))
         self.assertEqual(self.ingressos(), 1)

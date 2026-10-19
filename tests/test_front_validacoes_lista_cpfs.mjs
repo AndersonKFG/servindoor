@@ -15,7 +15,11 @@ const render = new Function('Vue', compile(descriptor.template.content, { mode: 
 const Modal = { props: ['show'], render() { return this.show ? Vue.h('section', [this.$slots.default?.(), this.$slots.footer?.()]) : null; } };
 const KpiCard = { render: () => null };
 const DropdownSelect = { render: () => null };
-const preview = { sucesso: true, cpfs_validos: 1200, pendentes_encontrados: 1200, cpfs_sem_pendencia: 0, cpfs_invalidos: 1, cpfs_duplicados: 2 };
+const preview = { sucesso: true, cpfs_validos: 1200, cpfs_com_pendencia: 1200, pendentes_encontrados: 1200, cpfs_sem_pendencia: 0, cpfs_invalidos: 1, cpfs_duplicados: 2,
+  servidores_a_homologar: Array.from({ length: 1200 }, (_, i) => ({
+    usuario_id: i + 1, nome: `Servidor ${String(i + 1).padStart(4, '0')}`,
+    cpf: String(i + 1).padStart(11, '0'), cpf_formatado: `000.000.${String(i + 1).padStart(3, '0')}-00`
+  })) };
 
 function component(geral, responder) {
   const requests = [], successes = [];
@@ -68,8 +72,25 @@ assert.equal(JSON.parse(view.requests[0].options.body).confirmar, false);
 assert.equal(view.api.conferenciaCpfs.value.pendentes_encontrados, 1200);
 assert.match(await view.render(), /Solicitações a homologar/);
 assert.match(await view.render(), /CPFs inválidos serão ignorados/);
+assert.match(await view.render(), /CPFs que serão homologados/);
+assert.match(await view.render(), /Servidor 0001/);
+assert.doesNotMatch(await view.render(), /Servidor 0026/);
+view.api.paginaConferenciaCpfs.value = 2;
+assert.match(await view.render(), /Servidor 0026/);
+view.api.buscaConferenciaCpfs.value = 'Servidor 1200';
+await Vue.nextTick();
+assert.equal(view.api.paginaConferenciaCpfs.value, 1);
+assert.match(await view.render(), /Servidor 1200/);
+assert.equal(view.api.servidoresConferenciaCpfs.value.length, 1);
+view.api.buscaConferenciaCpfs.value = '00000001200';
+await Vue.nextTick();
+assert.equal(view.api.servidoresConferenciaCpfs.value[0].usuario_id, 1200);
+view.api.buscaConferenciaCpfs.value = 'Inexistente';
+await Vue.nextTick();
+assert.match(await view.render(), /Nenhum servidor corresponde à busca/);
 await view.api.processarListaCpfs(true);
 assert.equal(JSON.parse(view.requests[1].options.body).confirmar, true);
+assert.equal(JSON.parse(view.requests[1].options.body).lista_cpfs, '529.982.247-25\n11144477735', 'Busca não altera a lista enviada para homologação');
 assert.equal(view.api.resultadoListaCpfs.value.aprovados, 1200);
 assert.equal(view.successes.length, 1);
 assert.ok(view.requests[2].url.startsWith('/api/admin/validacoes?'), 'Atualiza a tela após homologação');
