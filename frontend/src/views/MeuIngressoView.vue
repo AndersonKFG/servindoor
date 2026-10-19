@@ -531,7 +531,7 @@ async function handleConcluirCancelamento() {
             <div>
               <h3 class="cancellation-demand-title">Não poderá comparecer ao evento?</h3>
               <p class="cancellation-demand-desc">
-                Caso não possa comparecer, você pode solicitar o cancelamento do ingresso para liberar a vaga.
+                Caso não possa comparecer, você pode solicitar o cancelamento do ingresso. A ocupação do lote será mantida.
                 <strong class="text-danger d-block mt-1">Atenção: Ao cancelar, seu CPF não poderá resgatar novo ingresso em outros lotes.</strong>
               </p>
               <div class="cancellation-reason-input mt-2 mb-3">
@@ -630,7 +630,7 @@ async function handleConcluirCancelamento() {
         <div class="badge-step-tag font-outfit">INGRESSO CANCELADO</div>
         <h2 class="step-title font-outfit">Ingresso Inativo</h2>
         <p class="step-desc">
-          O ingresso emitido para este CPF foi cancelado anteriormente e a vaga retornou ao lote do evento.
+          O ingresso emitido para este CPF foi cancelado anteriormente e continua contabilizado na ocupação do lote do evento.
         </p>
 
         <button type="button" class="btn btn-secondary font-outfit mt-3" @click="resetarConsulta">
@@ -764,7 +764,7 @@ async function handleConcluirCancelamento() {
           </div>
           <ul class="explanation-list">
             <li>Sua solicitação e foto facial foram encaminhadas para conferência com a foto cadastrada no resgate.</li>
-            <li>Após confirmação visual pelo administrador, seu ingresso será cancelado e a vaga liberada ao lote.</li>
+            <li>Após confirmação visual pelo administrador, seu ingresso será cancelado e continuará contabilizado na ocupação do lote.</li>
             <li>Você receberá a confirmação definitiva no seu e-mail cadastrado.</li>
           </ul>
         </div>

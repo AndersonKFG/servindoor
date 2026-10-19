@@ -1165,7 +1165,7 @@ onUnmounted(() => {
           <i class="bi bi-shield-lock-fill text-danger fs-4 flex-shrink-0"></i>
           <div class="small">
             <strong class="text-danger d-block">Ação Irreversível com Bloqueio de CPF</strong>
-            O ingresso será cancelado administrativamente como <strong>Ingresso Extraviado</strong>, a vaga será devolvida ao lote e o CPF será <strong>permanentemente bloqueado</strong> para resgate em outros lotes.
+            O ingresso será cancelado administrativamente como <strong>Ingresso Extraviado</strong>, continuará contabilizado na ocupação do lote e o CPF será <strong>permanentemente bloqueado</strong> para resgate em outros lotes.
           </div>
         </div>
 
@@ -1282,7 +1282,7 @@ onUnmounted(() => {
               <span class="badge-subtle-secondary small">Desistência Voluntária</span>
             </div>
             <p class="status-guide-text mb-0">
-              O participante solicitou o cancelamento voluntário do seu ingresso por meio do autoatendimento. A vaga foi liberada e o QR Code invalidado.
+              O participante solicitou o cancelamento voluntário do seu ingresso por meio do autoatendimento. A ocupação do lote foi mantida e o QR Code invalidado.
             </p>
           </div>
 

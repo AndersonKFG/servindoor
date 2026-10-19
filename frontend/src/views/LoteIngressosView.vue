@@ -56,7 +56,7 @@ const ingressosFiltrados = computed(() => {
 async function handleCancelarIngresso(ingressoId) {
   const confirmado = await confirmModal({
     title: 'Cancelar Ingresso',
-    message: 'Deseja realmente cancelar/estornar este ingresso? A vaga será devolvida ao lote.',
+    message: 'Deseja realmente cancelar este ingresso? Ele continuará contabilizado na ocupação do lote.',
     confirmText: 'Sim, Cancelar',
     variant: 'danger'
   })
@@ -208,7 +208,7 @@ onMounted(() => {
                   <button
                     type="button"
                     class="btn-danger-sm"
-                    title="Cancelar Ingresso e Devolver Vaga"
+                    title="Cancelar Ingresso e Manter Ocupação"
                     @click="handleCancelarIngresso(item.model.id)"
                   >
                     <i class="bi bi-x-circle me-1"></i> Cancelar

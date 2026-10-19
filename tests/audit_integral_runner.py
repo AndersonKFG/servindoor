@@ -832,7 +832,7 @@ async def test_cancelamento_e2e():
             r_aprov_canc = http_call("POST", f"/api/admin/cancelamentos/{solic_canc_id}/aprovar", identity="admin")
             ing_del_depois = await db_scalar("SELECT deleted_at FROM ingressos WHERE id = 909")
             qtd_resg_depois = await db_scalar("SELECT quantidade_resgatada FROM lotes WHERE id = :lid", {"lid": LOTE_TEST_ID})
-            record_call("/api/admin/cancelamentos/{solicitacao_id}/aprovar", "POST", "Aprovação do cancelamento com revogação do ingresso e liberação de vaga", "Admin", f"Solicitação {solic_canc_id}", {}, r_aprov_canc, f"Ingresso deleted_at={ing_del_depois}, Lote resgatada: {qtd_resg_antes}->{qtd_resg_depois}", "JSON com sucesso=true", "Vaga devolvida e ingresso invalidado", "HTTP 200 OK com ingresso revogado", expected_status=200)
+            record_call("/api/admin/cancelamentos/{solicitacao_id}/aprovar", "POST", "Aprovação do cancelamento com revogação do ingresso e preservação da ocupação", "Admin", f"Solicitação {solic_canc_id}", {}, r_aprov_canc, f"Ingresso deleted_at={ing_del_depois}, Lote resgatada: {qtd_resg_antes}->{qtd_resg_depois}", "JSON com sucesso=true", "Ocupação mantida e ingresso invalidado", "HTTP 200 OK com ingresso revogado", expected_status=200)
 
         await db_exec("""
             INSERT INTO solicitacoes_cancelamento (id, token, usuario_id, ingresso_id, codigo_verificacao, codigo_expira_em, status, criado_em)

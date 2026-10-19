@@ -631,18 +631,8 @@ class TestAuditSecurityFixes(unittest.TestCase):
         pode_cancelar = not ja_entrou
         self.assertFalse(pode_cancelar, "Não é permitido cancelar ingresso após entrada no evento")
 
-    # --- SEC-20: Transacionalidade na Aprovação de Cancelamento ---
-    def test_sec20_cancelamento_incrementa_lote_atomicamente(self):
-        """SEC-20: Aprovação de cancelamento marca ingresso como cancelado e devolve vaga ao lote"""
-        self.conn.execute("INSERT INTO lotes (id, nome, quantidade_total, quantidade_disponivel) VALUES (1, 'Lote 1', 100, 10)")
-        self.conn.execute("INSERT INTO ingressos (id, usuario_id, lote_id, deleted_at) VALUES (10, 50, 1, NULL)")
-
-        # Transação de cancelamento
-        self.conn.execute("UPDATE ingressos SET deleted_at = '2026-10-08', cancelado_por_id = 1 WHERE id = 10")
-        self.conn.execute("UPDATE lotes SET quantidade_disponivel = quantidade_disponivel + 1 WHERE id = 1")
-
-        lote = self.conn.execute("SELECT quantidade_disponivel FROM lotes WHERE id = 1").fetchone()
-        self.assertEqual(lote[0], 11)
+    # SEC-20: os fluxos reais e a preservação da cota são exercitados em
+    # tests/test_ocupacao_cancelamentos.py, com persistência SQLite isolada.
 
     # --- SEC-22: Índices Parciais no Banco ---
     def test_sec22_indices_parciais_existem_no_schema(self):

@@ -1222,15 +1222,14 @@ async def cancelar_ingresso(
         ingresso.usuario.bloqueado_resgate = True
         session.add(ingresso.usuario)
 
-    if ingresso.lote and ingresso.lote.quantidade_resgatada > 0:
-        ingresso.lote.quantidade_resgatada -= 1
-        session.add(ingresso.lote)
+    # O resgate consumiu a cota definitivamente, inclusive em caso de extravio.
+    # Invalidar o ingresso não devolve capacidade nem reabre o lote.
 
     await session.commit()
 
     return JSONResponse(content={
         "sucesso": True,
-        "mensagem": "Ingresso extraviado/cancelado com sucesso. Vaga devolvida ao lote e CPF bloqueado para novos resgates."
+        "mensagem": "Ingresso extraviado/cancelado com sucesso. Ocupação do lote mantida e CPF bloqueado para novos resgates."
     })
 
 @router.get("/admin/lote/{lote_id}/exportar-csv")

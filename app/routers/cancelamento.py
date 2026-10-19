@@ -888,7 +888,7 @@ async def aprovar_cancelamento(
 ):
     """
     Aprova o cancelamento do ingresso após conferência facial positiva pelo administrador.
-    Cancela automaticamente o ingresso (soft-delete), devolve a vaga ao lote,
+    Cancela automaticamente o ingresso (soft-delete), preserva a ocupação do lote,
     atualiza o status da solicitação e envia o e-mail de confirmação ao servidor.
     """
     stmt = (
@@ -945,14 +945,7 @@ async def aprovar_cancelamento(
         ingresso.deleted_at = agora
         session.add(ingresso)
 
-        # 2. Devolve a vaga para o lote correspondente com lock
-        if ingresso.lote_id:
-            stmt_lote_lk = select(Lote).where(Lote.id == ingresso.lote_id).with_for_update()
-            res_lote_lk = await session.execute(stmt_lote_lk)
-            lote_lk = res_lote_lk.scalars().first()
-            if lote_lk and lote_lk.quantidade_resgatada > 0:
-                lote_lk.quantidade_resgatada -= 1
-                session.add(lote_lk)
+        # A cota já consumida permanece ocupada; cancelamentos não reabrem lotes.
 
     # 3. Atualiza os dados da solicitação
     solic.status = "aprovado"
@@ -981,7 +974,7 @@ async def aprovar_cancelamento(
         status_code=200,
         content={
             "sucesso": True,
-            "mensagem": "Cancelamento aprovado com sucesso! O ingresso foi cancelado e a vaga foi devolvida ao lote."
+            "mensagem": "Cancelamento aprovado com sucesso! O ingresso foi cancelado e a ocupação do lote foi mantida."
         }
     )
 

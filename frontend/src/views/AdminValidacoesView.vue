@@ -562,9 +562,9 @@ async function confirmarRejeicao() {
       />
 
       <KpiCard
-        title="Rejeitados / Vagas Devolvidas"
+        title="Rejeitados / Ocupação Mantida"
         :value="kpis.total_rejeitados"
-        subtitle="Vagas liberadas para outros servidores"
+        subtitle="Resgates rejeitados continuam ocupando o lote"
         icon="bi bi-x-circle-fill"
         variant="danger"
       />
@@ -1049,7 +1049,7 @@ async function confirmarRejeicao() {
 
         <p class="text-warning small mb-0">
           <i class="bi bi-exclamation-triangle me-1"></i>
-          Esta ação liberará a vaga para o lote e enviará um e-mail formal ao solicitante.
+          Esta ação manterá a ocupação do lote. O e-mail formal ao solicitante ficará aguardando liberação do Administrador Geral.
         </p>
       </div>
 

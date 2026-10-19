@@ -413,7 +413,7 @@ async def send_cancellation_result_email_async(
             🎫 Status do Ingresso: CANCELADO
           </strong>
           <p style="margin: 0; font-size: 13px; color: #cbd5e1; line-height: 1.5;">
-            Seu ingresso anterior foi anulado e a vaga foi devolvida ao lote do evento. O QR Code anterior foi desativado na portaria.
+            Seu ingresso anterior foi anulado e continua contabilizado na ocupação do lote do evento. O QR Code anterior foi desativado na portaria.
           </p>
         </div>
         """

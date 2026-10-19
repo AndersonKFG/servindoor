@@ -120,7 +120,7 @@ async function handleAprovarCancelamento() {
 
   const confirmado = await confirmModal({
     title: 'Aprovar Cancelamento',
-    message: 'Deseja realmente APROVAR o cancelamento deste ingresso?\n\nO ingresso será anulado automaticamente, a vaga será devolvida ao lote e o servidor receberá um e-mail de confirmação.',
+    message: 'Deseja realmente APROVAR o cancelamento deste ingresso?\n\nO ingresso será anulado automaticamente, continuará contabilizado na ocupação do lote e o servidor receberá um e-mail de confirmação.',
     confirmText: 'Aprovar Cancelamento',
     variant: 'danger'
   })
