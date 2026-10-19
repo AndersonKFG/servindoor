@@ -138,6 +138,23 @@ class TestOcupacaoCancelamentos(unittest.IsolatedAsyncioTestCase):
         self.assertIn("continua contabilizado na ocupação do lote", html)
         self.assertNotIn("vaga foi devolvida", html)
 
+    async def test_listagem_administrativa_retorna_motivo_do_participante_e_aceita_legado_sem_motivo(self):
+        solicitacao = await self.session.get(SolicitacaoCancelamento, 1)
+        motivo = 'Compromisso familiar.\nNão poderei comparecer <por motivos pessoais>.'
+        solicitacao.motivo = motivo
+        await self.session.commit()
+        async with self.sessions() as session:
+            response = await cancelamento.listar_solicitacoes_cancelamento(session=session, admin=self.admin)
+        dados = json.loads(response.body)["solicitacoes"][0]
+        self.assertEqual(dados["motivo"], motivo)
+        self.assertIsNone(dados["motivo_rejeicao"])
+
+        solicitacao.motivo = None
+        await self.session.commit()
+        async with self.sessions() as session:
+            response = await cancelamento.listar_solicitacoes_cancelamento(session=session, admin=self.admin)
+        self.assertIsNone(json.loads(response.body)["solicitacoes"][0]["motivo"])
+
 
 if __name__ == "__main__":
     unittest.main()

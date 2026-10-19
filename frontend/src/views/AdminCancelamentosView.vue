@@ -564,6 +564,13 @@ function getStatusBadge(status) {
           </div>
         </div>
 
+        <section class="modal-section">
+          <h4 class="modal-section-heading">
+            <i class="bi bi-chat-left-text text-cyan me-2"></i> Motivo de cancelamento
+          </h4>
+          <p class="modal-field-value text-pre-wrap mb-0">{{ solicitacaoSelecionada.motivo || 'Não informado pelo participante.' }}</p>
+        </section>
+
         <!-- QUADRO COMPARATIVO DE FOTOS LADO A LADO -->
         <div class="side-by-side-grid">
           

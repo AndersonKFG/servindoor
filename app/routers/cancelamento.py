@@ -840,6 +840,7 @@ async def listar_solicitacoes_cancelamento(
             "status": s.status,
             "criado_em": formatar_data_sp(s.criado_em) if s.criado_em else "-",
             "analisado_em": formatar_data_sp(s.analisado_em),
+            "motivo": s.motivo,
             "motivo_rejeicao": s.motivo_rejeicao,
             "analisado_por_nome": s.analisado_por.nome if s.analisado_por else None,
             "foto_ao_vivo_url": s.foto_ao_vivo_url,
