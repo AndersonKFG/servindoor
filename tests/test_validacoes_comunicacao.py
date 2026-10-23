@@ -52,7 +52,8 @@ class TestValidacoesComunicacao(unittest.IsolatedAsyncioTestCase):
         self.db = Session(self.engine, expire_on_commit=False)
         self.db.execute(text("""CREATE TABLE email_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT, subject TEXT,
-            html_body TEXT, sender_type TEXT, qr_image BLOB, ticket_image BLOB
+            html_body TEXT, sender_type TEXT, qr_image BLOB, ticket_image BLOB,
+            idempotency_key TEXT UNIQUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )"""))
         self.admin = Usuario(id=10000, cpf="11144477735", nome="Admin", role=UserRole.admin_geral)
         self.db.add_all([self.admin, Lote(id=1, nome="Lote"), Secretaria(id=1, nome="Secretaria")])
@@ -189,6 +190,39 @@ class TestValidacoesComunicacao(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as error:
             await self.individual(3)
         self.assertEqual(error.exception.status_code, 400)
+
+    async def test_marcacao_perdida_nao_reenvia_e_kpi_consulta_registro_duravel(self):
+        self.criar(1)
+        self.criar(2, status="rejeitado")
+        self.salvar()
+        await self.lote()
+        self.db.execute(text("UPDATE solicitacoes_validacao SET comunicado = false, comunicado_em = NULL"))
+        self.db.commit()
+        self.db.expunge_all()
+        self.png.reset_mock()
+        self.assertEqual((await self.lote())["total_enfileirados"], 0)
+        self.db.execute(text("CREATE TABLE resgate_jobs (solicitacao_id INTEGER, status TEXT, job_type TEXT)"))
+        listing = await routes.listar_solicitacoes_validacao(
+            status_filtro="todos", secretaria_id=None, session=self.session,
+            validador=self.admin, page=1, limit=25, busca="",
+        )
+        data = json.loads(listing.body)
+        self.assertEqual(data["kpis"]["total_comunicacao_pendente"], 0)
+        self.assertTrue(all(s["comunicado"] and s["comunicado_em"] for s in data["solicitacoes"]))
+        await self.individual(1)
+        await self.individual(2)
+        self.assertEqual((self.emails(), self.pendentes()), (2, 0))
+        self.png.assert_not_called()
+
+    async def test_fila_deduplica_mesmo_se_chamador_repetir_mesma_chave(self):
+        from app.services.email_queue import enqueue_email
+
+        for _ in range(2):
+            self.assertTrue(await enqueue_email(
+                "pessoa@example.invalid", "Ingresso", "html", "ticket",
+                session=self.session, idempotency_key="validacao:1:aprovado",
+            ))
+        self.assertEqual(self.emails(), 1)
 
     async def test_somente_admin_geral_pode_enfileirar(self):
         self.admin = Usuario(cpf="52998224725", nome="Validador", role=UserRole.validador)

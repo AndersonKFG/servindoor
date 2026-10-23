@@ -36,6 +36,7 @@ from app.services.lotes_ocultos import conferir_autorizacao, configuracao, insta
 from app.core.validators import normalizar_data_nascimento, formatar_telefone, validar_email
 from app.services.validacao_servidor_service import ServidorValidationService
 from app.services.resgate_jobs import enqueue_external_validation, get_external_validation_status
+from app.services.validacao_comunicacao import chave_comunicacao
 from app.services.reserva_batch import reserva_batch_service
 from app.core.events import lote_event_hub
 
@@ -955,7 +956,8 @@ async def processar_resgate(
                 enqueued = await send_ticket_email_async(usuario_nome=usuario.nome,
                     usuario_email=usuario.email, ingresso_token=ingresso.qr_code_token,
                     lote_nome=lote.nome, secretaria_nome=secretaria_nome, setor=usuario.setor,
-                    cpf_formatado=cpf_limpo, session=session)
+                    cpf_formatado=cpf_limpo, session=session,
+                    idempotency_key=chave_comunicacao(solic.id, solic.status))
                 if not enqueued:
                     raise HTTPException(503, "Não foi possível registrar o envio do ingresso. Tente novamente.")
             elif usuario.email:

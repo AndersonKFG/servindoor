@@ -62,7 +62,7 @@ class TestResgateConfirmation(unittest.IsolatedAsyncioTestCase):
                     status VARCHAR NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    sent_at TIMESTAMPTZ, last_error TEXT
+                    sent_at TIMESTAMPTZ, last_error TEXT, idempotency_key VARCHAR UNIQUE
                 )
             """))
             await conn.execute(text(RESGATE_JOBS_DDL))

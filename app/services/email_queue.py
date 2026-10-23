@@ -22,6 +22,7 @@ async def enqueue_email(
     ticket_image: Optional[bytes] = None,
     *,
     session: Optional[AsyncSession] = None,
+    idempotency_key: Optional[str] = None,
 ) -> bool:
     """Persiste o e-mail; com session, participa da transação do chamador."""
     statement = text("""
@@ -39,13 +40,23 @@ async def enqueue_email(
         "qr_image": qr_image,
         "ticket_image": ticket_image,
     }
+    if idempotency_key is not None:
+        statement = text("""
+            INSERT INTO email_queue
+                (recipient, subject, html_body, sender_type, qr_image, ticket_image, idempotency_key)
+            VALUES
+                (:recipient, :subject, :html_body, :sender_type, :qr_image, :ticket_image, :idempotency_key)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING id
+        """)
+        parameters["idempotency_key"] = idempotency_key
     try:
         if session is not None:
-            email_id = (await session.execute(statement, parameters)).scalar_one()
+            email_id = (await session.execute(statement, parameters)).scalar_one_or_none()
             logger.info("E-mail id=%s tipo=%s registrado na transação", email_id, sender_type)
         else:
             async with async_session() as own_session:
-                email_id = (await own_session.execute(statement, parameters)).scalar_one()
+                email_id = (await own_session.execute(statement, parameters)).scalar_one_or_none()
                 await own_session.commit()
             logger.info("E-mail id=%s tipo=%s enfileirado", email_id, sender_type)
         return True

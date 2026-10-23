@@ -19,6 +19,7 @@ from app.core.deps import get_current_admin_geral, get_current_validador
 from app.core.cpf import formatar_cpf, validar_cpf_matematico
 from app.core.security import formatar_data_sp
 from app.services.lotes_ocultos import exigir_gestao_lote
+from app.services.validacao_comunicacao import chave_comunicacao, comunicacao_registrada_em, email_queue
 from app.services.email_service import (
     send_ticket_email_async,
     send_validation_rejection_email_async
@@ -165,7 +166,8 @@ async def listar_solicitacoes_validacao(
     escopo_stmt = (
         select(
             SolicitacaoValidacao.id, SolicitacaoValidacao.status,
-            SolicitacaoValidacao.identificado_api, SolicitacaoValidacao.comunicado,
+            SolicitacaoValidacao.identificado_api,
+            or_(SolicitacaoValidacao.comunicado.is_(True), comunicacao_registrada_em().is_not(None)).label("comunicado"),
             secretaria_efetiva.label("secretaria_id"),
             Secretaria.nome.label("secretaria_nome"), Usuario.nome, Usuario.cpf,
         )
@@ -246,7 +248,12 @@ async def listar_solicitacoes_validacao(
     res = await session.execute(stmt)
     selecionadas = res.scalars().all()
     estados_externos = {}
+    comunicacoes = {}
     if selecionadas:
+        comunicacoes = dict((await session.execute(
+            select(SolicitacaoValidacao.id, comunicacao_registrada_em())
+            .where(SolicitacaoValidacao.id.in_([s.id for s in selecionadas]))
+        )).all())
         estados_externos = dict((await session.execute(text("""
             SELECT solicitacao_id, status FROM resgate_jobs
             WHERE job_type = 'external_validation'
@@ -267,8 +274,8 @@ async def listar_solicitacoes_validacao(
             "analisado_em": formatar_data_sp(s.analisado_em),
             "analisado_por_nome": s.analisado_por.nome if s.analisado_por else None,
             "motivo_rejeicao": s.motivo_rejeicao,
-            "comunicado": bool(getattr(s, "comunicado", False)),
-            "comunicado_em": formatar_data_sp(getattr(s, "comunicado_em", None)),
+            "comunicado": bool(s.comunicado or comunicacoes.get(s.id)),
+            "comunicado_em": formatar_data_sp(s.comunicado_em or comunicacoes.get(s.id)),
             "lote_nome": l.nome if l else "Lote Geral",
             "avulso": bool(l and l.oculto),
             "pode_gerenciar": is_superadmin or not (l and l.oculto),
@@ -591,6 +598,16 @@ async def comunicar_solicitacao_validacao(
 
 async def _enfileirar_comunicacao_validacao(solic: SolicitacaoValidacao, session: AsyncSession) -> str:
     """Fila e liberação são persistidas juntas, sem confirmar entrega pelo SMTP."""
+    chave = chave_comunicacao(solic.id, solic.status)
+    registro = (await session.execute(
+        select(email_queue.c.created_at).where(email_queue.c.idempotency_key == chave)
+    )).first()
+    if registro:
+        solic.comunicado = True
+        solic.comunicado_em = registro[0]
+        session.add(solic)
+        return "Esta comunicação já foi registrada na fila de e-mails."
+
     if not solic.usuario or not solic.usuario.email:
         raise HTTPException(status_code=400, detail="O servidor não possui e-mail cadastrado para comunicação.")
 
@@ -620,6 +637,7 @@ async def _enfileirar_comunicacao_validacao(solic: SolicitacaoValidacao, session
             setor=u.setor,
             cpf_formatado=cpf_fmt,
             session=session,
+            idempotency_key=chave,
         )
         msg = f"Ingresso enfileirado para envio ao e-mail {u.email}."
     else:
@@ -629,6 +647,7 @@ async def _enfileirar_comunicacao_validacao(solic: SolicitacaoValidacao, session
             lote_nome=l.nome if l else "Lote Oficial",
             motivo=solic.motivo_rejeicao or "Vínculo de servidor público municipal não confirmado pela secretaria.",
             session=session,
+            idempotency_key=chave,
         )
         msg = f"Notificação de indeferimento enfileirada para o e-mail {u.email}."
 
@@ -662,6 +681,7 @@ async def comunicar_em_lote_admin(
 
     condicoes = [
         SolicitacaoValidacao.comunicado.is_(False),
+        comunicacao_registrada_em().is_(None),
         SolicitacaoValidacao.status.in_(["aprovado", "rejeitado"]),
     ]
     if tipo_filtro == "aprovados":

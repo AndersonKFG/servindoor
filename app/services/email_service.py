@@ -150,6 +150,7 @@ async def send_ticket_email_async(
     cpf_formatado: str = None,
     *,
     session: Optional[AsyncSession] = None,
+    idempotency_key: Optional[str] = None,
 ) -> bool:
     """Envia o ingresso digital 9:16 por e-mail em background com apresentação limpa e focada exclusivamente no ingresso"""
     if not usuario_email or "@" not in usuario_email:
@@ -207,7 +208,8 @@ async def send_ticket_email_async(
 </html>
 """
 
-    return await enqueue_email(usuario_email, subject, html, "ticket", ticket_image=ticket_bytes, session=session)
+    return await enqueue_email(usuario_email, subject, html, "ticket", ticket_image=ticket_bytes,
+                               session=session, idempotency_key=idempotency_key)
 
 
 async def send_custom_message_email_async(
@@ -725,6 +727,7 @@ async def send_validation_rejection_email_async(
     motivo: str = None,
     *,
     session: Optional[AsyncSession] = None,
+    idempotency_key: Optional[str] = None,
 ) -> bool:
     """Informa ao participante que sua solicitação de ingresso foi indeferida na validação manual"""
     if not usuario_email or "@" not in usuario_email:
@@ -790,7 +793,8 @@ async def send_validation_rejection_email_async(
 </body>
 </html>
 """
-    return await enqueue_email(usuario_email, assunto, html, "communications", session=session)
+    return await enqueue_email(usuario_email, assunto, html, "communications",
+                               session=session, idempotency_key=idempotency_key)
 
 
 async def send_team_credentials_email_async(

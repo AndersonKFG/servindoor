@@ -34,6 +34,7 @@ class TestLotesOcultos(unittest.IsolatedAsyncioTestCase):
         async with self.engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
             await conn.execute(text("CREATE TABLE resgate_jobs (solicitacao_id INTEGER, job_type VARCHAR, status VARCHAR)"))
+            await conn.execute(text("CREATE TABLE email_queue (id INTEGER PRIMARY KEY, idempotency_key VARCHAR UNIQUE, created_at TIMESTAMP)"))
         self.sessions = sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
         self.app = FastAPI()
         for router in (admin.router, avulsos.router, public.router, resgate.router, validacoes.router):

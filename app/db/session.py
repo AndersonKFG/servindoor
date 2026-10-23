@@ -128,6 +128,12 @@ async def migrar_fuso_lotes(conn: AsyncConnection) -> None:
             ))
 
 
+async def migrar_idempotencia_emails(conn: AsyncConnection) -> None:
+    """Mantém mensagens legadas sem chave e deduplica as comunicações identificadas."""
+    await conn.execute(text("ALTER TABLE email_queue ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR"))
+    await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_email_queue_idempotency ON email_queue (idempotency_key)"))
+
+
 async def init_db():
     """Inicializa automaticamente todas as tabelas oficiais do sistema"""
     from app.models.all_models import (
@@ -165,6 +171,7 @@ async def init_db():
             )
         """))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_email_queue_pending ON email_queue (status, next_attempt_at, id)"))
+        await migrar_idempotencia_emails(conn)
         await conn.execute(text("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS secretarias_validador VARCHAR;"))
         await conn.execute(text("ALTER TABLE logs_acesso ADD COLUMN IF NOT EXISTS operador_id INTEGER;"))
         await conn.execute(text("ALTER TABLE logs_acesso ADD COLUMN IF NOT EXISTS ingresso_id INTEGER;"))

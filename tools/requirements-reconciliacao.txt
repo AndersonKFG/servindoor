@@ -1,0 +1,2 @@
+# Dependência adicional apenas para conferir o QR dos anexos históricos.
+zxing-cpp==3.1.1

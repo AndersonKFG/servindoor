@@ -23,6 +23,7 @@ class TestValidacoesPaginacao(unittest.IsolatedAsyncioTestCase):
         self.engine = create_engine("sqlite://")
         SQLModel.metadata.create_all(self.engine)
         self.db = Session(self.engine, expire_on_commit=False)
+        self.db.execute(text("CREATE TABLE email_queue (id INTEGER PRIMARY KEY, idempotency_key TEXT UNIQUE, created_at TIMESTAMP)"))
         self.db.execute(text("CREATE TABLE resgate_jobs (solicitacao_id INTEGER, status TEXT, job_type TEXT)"))
         self.db.add_all([Secretaria(id=i, nome=f"Secretaria {i}") for i in (1, 2, 3)])
         self.db.add(Lote(id=1, nome="Lote de teste"))

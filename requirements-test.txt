@@ -1,3 +1,4 @@
 -r requirements.txt
+-r tools/requirements-reconciliacao.txt
 aiosqlite
 httpx
