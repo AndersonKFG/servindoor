@@ -29,7 +29,8 @@ function create(local = storage(), session = storage()) {
     window: { location: { protocol: 'https:' } }, console, FormData, URL, Date, Math, setTimeout, clearTimeout, setInterval, clearInterval,
     fetch: async (url, options) => { calls.push({ url, options }); return responder(url, options); },
   });
-  vm.runInContext(source + '\nglobalThis.api = { form, tokenReserva, envioPendente, errorMessage, submitting, handleSubmit, carregarDadosResgate, updateCountdown, reservaExpiraEmMs, showModalExpirado, validarCpfNoServidor, showModalDesistidaOutroNavegador, limparEnvioPendente };', context);
+  // Este ensaio não monta componentes filhos; simula a consulta legal com controles desativados.
+  vm.runInContext(source + '\nlegalConsent.value = { loaded: true, required: false };\nglobalThis.api = { form, tokenReserva, envioPendente, errorMessage, submitting, handleSubmit, carregarDadosResgate, updateCountdown, reservaExpiraEmMs, showModalExpirado, validarCpfNoServidor, showModalDesistidaOutroNavegador, limparEnvioPendente, legalConsent };', context);
   const api = context.api;
   api.form.value = { cpf: '529.982.247-25', nome: 'Original', data_nascimento: '1990-01-01', secretaria_id: '1', setor: 'Teste', vinculo: 'Efetivo', telefone: '81999999999', email: 'test@example.invalid', foto_base64: 'data:image/jpeg;base64,dGVzdA==' };
   api.tokenReserva.value = 'same-token';
@@ -105,4 +106,24 @@ assert.ok(reloadWithoutPhoto.calls[0].url.includes('/resgate-confirmado?'));
 assert.equal(reloadWithoutPhoto.routes.length, 1);
 assert.equal(reloadWithoutPhoto.api.envioPendente.value, null);
 
-console.log('Front recovery: network retry, frozen payload, 500, expiry, CPF guard, F5 same token, async validation race, and confirmed commit without photo passed.');
+// No resgate, a ação de enviar registra a concordância e preserva as versões no retry.
+const legal = create();
+legal.api.legalConsent.value = { loaded: true, required: true, termsId: 11, privacyId: 12 };
+assert.equal(legal.calls.length, 0);
+await legal.api.handleSubmit();
+assert.equal(legal.calls[0].options.body.get('legal_accepted'), 'true');
+assert.equal(legal.calls[0].options.body.get('legal_terms_id'), '11');
+assert.equal(legal.calls[0].options.body.get('legal_privacy_id'), '12');
+legal.api.legalConsent.value = { loaded: true, required: true, termsId: 21, privacyId: 22 };
+legal.respond(url => url.includes('/resgate-confirmado?') ? notConfirmed() : success());
+await legal.api.handleSubmit();
+assert.equal(legal.calls[2].options.body.get('legal_terms_id'), '11');
+assert.equal(legal.calls[2].options.body.get('legal_privacy_id'), '12');
+assert.equal(first.calls[0].options.body.get('legal_accepted'), null);
+const unavailableLegal = create();
+unavailableLegal.api.legalConsent.value = { loaded: true, required: true };
+await unavailableLegal.api.handleSubmit();
+assert.equal(unavailableLegal.calls.length, 0);
+assert.match(unavailableLegal.api.errorMessage.value, /consultar os documentos/);
+
+console.log('Front recovery: retries, frozen payload/versions, 500, expiry, CPF guard, F5, photo recovery and legal agreement on form submission passed.');

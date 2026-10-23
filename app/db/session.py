@@ -172,6 +172,8 @@ async def init_db():
         """))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_email_queue_pending ON email_queue (status, next_attempt_at, id)"))
         await migrar_idempotencia_emails(conn)
+        from app.db.legal_migration import migrate_legal
+        await migrate_legal(conn)
         await conn.execute(text("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS secretarias_validador VARCHAR;"))
         await conn.execute(text("ALTER TABLE logs_acesso ADD COLUMN IF NOT EXISTS operador_id INTEGER;"))
         await conn.execute(text("ALTER TABLE logs_acesso ADD COLUMN IF NOT EXISTS ingresso_id INTEGER;"))

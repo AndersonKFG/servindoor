@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import smtplib
 import time
 from typing import Optional
 
@@ -98,13 +99,33 @@ async def email_queue_worker(stop_event: asyncio.Event) -> None:
                         settings.SMTP_HOST or "não configurado", settings.SMTP_PORT,
                         bool(settings.SMTP_USER and settings.SMTP_PASSWORD))
             async with async_session() as session:
-                await session.execute(text("UPDATE email_queue SET status = 'queued' WHERE status = 'sending'"))
+                # SMTP não oferece exactly-once. Se um processo morreu após DATA,
+                # um comunicado legal exige reconciliação antes de novo envio.
+                await session.execute(text("UPDATE email_queue SET status='uncertain', last_error='dispatch_interrupted' WHERE status='sending' AND sender_type='legal'"))
+                await session.execute(text("UPDATE email_queue SET status = 'queued' WHERE status = 'sending' AND sender_type <> 'legal'"))
                 await session.commit()
 
             interval = 1 / max(1, min(settings.EMAIL_SEND_RATE_PER_SECOND, 13))
             last_dispatch = 0.0
             while not stop_event.is_set():
+                # Usa a eleição, os limites e o backoff da fila existente.
+                # Nenhuma campanha é criada pelo worker ou pela publicação.
+                from app.services.legal import prepare_legal_batch
+                async with async_session() as legal_session:
+                    try:
+                        await prepare_legal_batch(legal_session)
+                    except Exception as exc:
+                        await legal_session.rollback()
+                        logger.error("Falha ao preparar lote legal: %s", type(exc).__name__)
                 async with async_session() as session:
+                    await session.execute(text("""
+                        UPDATE email_queue q SET status='failed', last_error='legal_link_expired',
+                            html_body='[link legal expirado antes do envio]'
+                        FROM legal_invitations i
+                        WHERE q.sender_type='legal' AND q.status='queued' AND i.expires_at <= NOW()
+                          AND q.idempotency_key='legal:' || CAST(i.id AS VARCHAR) || ':' || CAST(i.generation AS VARCHAR)
+                    """))
+                    await session.commit()
                     sent_today = await session.scalar(text("""
                         SELECT COUNT(*) FROM email_queue
                         WHERE status = 'sent' AND (sent_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date
@@ -116,6 +137,10 @@ async def email_queue_worker(stop_event: asyncio.Event) -> None:
                         SELECT id, recipient, subject, html_body, sender_type, qr_image, ticket_image, attempts
                         FROM email_queue
                         WHERE status = 'queued' AND next_attempt_at <= NOW()
+                          AND (sender_type NOT IN ('legal', 'legal_test') OR EXISTS (
+                              SELECT 1 FROM legal_config WHERE id=1 AND communications_enabled=TRUE
+                                AND (sender_type='legal_test' OR voluntary_enabled=TRUE)
+                          ))
                         ORDER BY id
                         LIMIT 1
                         FOR UPDATE SKIP LOCKED
@@ -144,6 +169,7 @@ async def email_queue_worker(stop_event: asyncio.Event) -> None:
                 logger.info("Enviando e-mail id=%s tipo=%s tentativa=%s remetente=%s",
                             row["id"], row["sender_type"], attempt, sender[0])
                 error_detail = "SMTP delivery failed"
+                uncertain = False
                 try:
                     ok = await asyncio.to_thread(
                         _send_smtp_email_sync,
@@ -155,6 +181,11 @@ async def email_queue_worker(stop_event: asyncio.Event) -> None:
                 except Exception as exc:
                     ok = False
                     error_detail = f"{type(exc).__name__}: {exc}"[:1000]
+                    if row["sender_type"] in {"legal", "legal_test"}:
+                        error_detail = type(exc).__name__
+                    uncertain = row["sender_type"] == "legal" and isinstance(
+                        exc, (smtplib.SMTPServerDisconnected, TimeoutError, ConnectionError, OSError)
+                    ) and not isinstance(exc, smtplib.SMTPResponseException)
                     logger.error("Falha SMTP e-mail id=%s tentativa=%s: %s",
                                  row["id"], attempt, error_detail)
                 async with async_session() as session:
@@ -162,6 +193,12 @@ async def email_queue_worker(stop_event: asyncio.Event) -> None:
                         await session.execute(text("""
                             UPDATE email_queue SET status = 'sent', sent_at = NOW(), last_error = NULL WHERE id = :id
                         """), {"id": row["id"]})
+                        if row["sender_type"] == "legal":
+                            await session.execute(text("UPDATE email_queue SET html_body='[comunicado legal enviado]' WHERE id=:id"), {"id": row["id"]})
+                    elif uncertain:
+                        await session.execute(text("""
+                            UPDATE email_queue SET status='uncertain', last_error=:error WHERE id=:id
+                        """), {"id": row["id"], "error": error_detail})
                     elif row["attempts"] + 1 >= 5:
                         await session.execute(text("""
                             UPDATE email_queue SET status = 'failed', last_error = :error
@@ -177,6 +214,8 @@ async def email_queue_worker(stop_event: asyncio.Event) -> None:
                     await session.commit()
                 if ok:
                     logger.info("E-mail id=%s aceito pelo servidor SMTP", row["id"])
+                elif uncertain:
+                    logger.error("E-mail legal id=%s exige reconciliação com o provedor antes de reenviar", row["id"])
                 elif attempt >= 5:
                     logger.error("E-mail id=%s falhou após %s tentativas", row["id"], attempt)
                 else:
@@ -204,5 +243,7 @@ def _sender_for_type(sender_type: str) -> tuple[str, str]:
         "security": (settings.SMTP_FROM_SECURITY, f"{settings.SMTP_FROM_NAME} | Segurança"),
         "communications": (settings.SMTP_FROM_COMMUNICATIONS, f"{settings.SMTP_FROM_NAME} | Comunicados"),
         "team": (settings.SMTP_FROM_TEAM, f"{settings.SMTP_FROM_NAME} | Equipe"),
+        "legal": (settings.SMTP_FROM_COMMUNICATIONS, f"{settings.SMTP_FROM_NAME} | Comunicados"),
+        "legal_test": (settings.SMTP_FROM_COMMUNICATIONS, f"{settings.SMTP_FROM_NAME} | Comunicados"),
     }
     return senders.get(sender_type, senders["ticket"])

@@ -98,6 +98,9 @@ def _send_smtp_email_sync(
         # o endereço inteiro como encoded-word, invalidando o cabeçalho From.
         msg["From"] = formataddr((from_name or settings.SMTP_FROM_NAME, from_email))
         msg["To"] = to_email
+        if queue_id is not None:
+            # Identidade estável nas retentativas; não contém dados nem tokens do participante.
+            msg["Message-ID"] = f"<servindoor-queue-{queue_id}@servindoor.com.br>"
 
         msg_alternative = MIMEMultipart("alternative")
         msg.attach(msg_alternative)

@@ -269,6 +269,11 @@ function toggleMobileMenu() {
               </li>
 
               <!-- Equipe & Acessos (Admin & Admin Geral) -->
+              <li v-if="isAdminGeral">
+                <router-link to="/admin/documentos-legais" class="nav-center-link">
+                  <i class="bi bi-file-earmark-lock text-cyan"></i><span>Documentos Legais</span>
+                </router-link>
+              </li>
               <li v-if="isAdmin">
                 <router-link to="/admin/usuarios" class="nav-center-link">
                   <i class="bi bi-person-gear text-purple"></i>
@@ -417,6 +422,12 @@ function toggleMobileMenu() {
                 <router-link to="/admin/validacoes" class="mobile-nav-link" @click="mobileMenuOpen = false">
                   <i class="bi bi-person-check-fill me-2 text-emerald"></i>
                   <span>Validações de Servidores</span>
+                </router-link>
+              </li>
+
+              <li v-if="isAdminGeral">
+                <router-link to="/admin/documentos-legais" class="mobile-nav-link" @click="mobileMenuOpen = false">
+                  <i class="bi bi-file-earmark-lock me-2 text-cyan"></i><span>Documentos Legais</span>
                 </router-link>
               </li>
 

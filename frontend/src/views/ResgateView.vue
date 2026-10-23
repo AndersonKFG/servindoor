@@ -7,6 +7,9 @@ import { getTabReservationToken, saveTabReservationToken, clearTabReservationTok
 import WebcamCapture from '../components/WebcamCapture.vue'
 import Modal from '../components/Modal.vue'
 import ExclusiveLotAccess from '../components/ExclusiveLotAccess.vue'
+import LegalConsent from '../components/LegalConsent.vue'
+
+const legalConsent = ref({ loaded: false, required: false })
 
 const route = useRoute()
 const router = useRouter()
@@ -279,7 +282,7 @@ function registrarEnvioPendente(payload) {
   // O rascunho guarda uma única cópia da foto. Enquanto o resultado é incerto,
   // alterações na tela não substituem os dados que serão reenviados.
   salvarRascunhoFormulario(true)
-  envioPendente.value = { token: tokenReserva.value, cpf: payload.cpf, payload: { ...payload }, completo: payloadDeEnvioCompleto(payload) }
+  envioPendente.value = { token: tokenReserva.value, cpf: payload.cpf, payload: { ...payload, legalConsent: { ...legalConsent.value } }, completo: payloadDeEnvioCompleto(payload) }
   try {
     sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify({
       token: tokenReserva.value, cpf: payload.cpf, salvoEm: Date.now()
@@ -961,6 +964,10 @@ function validarFormularioParaEnvio() {
     errorMessage.value = 'Reserva de vaga expirada ou não encontrada. Por favor, recarregue a página.'
     return false
   }
+  if (!legalConsent.value.loaded || (legalConsent.value.required && (!legalConsent.value.termsId || !legalConsent.value.privacyId))) {
+    errorMessage.value = 'Não foi possível consultar os documentos. Recarregue a página antes de concluir.'
+    return false
+  }
   return true
 }
 
@@ -1028,6 +1035,13 @@ async function handleSubmit() {
     formData.append('telefone', payload.telefone)
     formData.append('email', payload.email)
     formData.append('foto_base64', payload.foto_base64)
+    const legalSnapshot = payload.legalConsent || legalConsent.value
+    if (legalSnapshot.required) {
+      // A concordância decorre deste envio, após a apresentação do aviso e dos documentos.
+      formData.append('legal_accepted', 'true')
+      formData.append('legal_terms_id', String(legalSnapshot.termsId))
+      formData.append('legal_privacy_id', String(legalSnapshot.privacyId))
+    }
 
     const res = await requisicaoResgate(`/api/lote/${loteId}/resgatar`, {
       method: 'POST',
@@ -1402,6 +1416,7 @@ onUnmounted(() => {
             </div>
 
             <!-- BOTÕES DE AÇÃO: CONCLUIR OU DESISTIR -->
+            <LegalConsent v-model="legalConsent" />
             <div class="submit-wrapper">
               <button
                 type="submit"

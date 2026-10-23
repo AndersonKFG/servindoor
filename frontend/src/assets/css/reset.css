@@ -103,6 +103,10 @@ textarea {
 }
 
 .footer-content-clean {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
   text-align: center;
 }
 

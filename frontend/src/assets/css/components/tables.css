@@ -202,6 +202,47 @@
   gap: 6px;
 }
 
+/* Tabelas com histórico de versões mantêm metadados e ações em colunas estáveis. */
+.custom-table--versioned {
+  min-width: 50rem;
+}
+
+.custom-table--versioned th:first-child {
+  width: 28%;
+}
+
+.custom-table--versioned th:nth-child(2) {
+  width: 10%;
+}
+
+.custom-table th.table-heading--actions {
+  width: 12rem;
+  text-align: right;
+}
+
+.custom-table--versioned .table-user-cell {
+  min-width: 0;
+  gap: var(--space-xs);
+  overflow-wrap: anywhere;
+}
+
+.table-tag--status {
+  padding: var(--space-xs) var(--space-sm);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.table-tag--success {
+  color: var(--success-color);
+  background: color-mix(in srgb, var(--success-color) 12%, transparent);
+}
+
+.table-tag--warning {
+  color: var(--warning-color);
+  background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+}
+
 .table-actions-cell {
   display: flex;
   justify-content: flex-end;

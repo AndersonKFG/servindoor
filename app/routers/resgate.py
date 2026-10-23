@@ -38,6 +38,7 @@ from app.services.validacao_servidor_service import ServidorValidationService
 from app.services.resgate_jobs import enqueue_external_validation, get_external_validation_status
 from app.services.validacao_comunicacao import chave_comunicacao
 from app.services.reserva_batch import reserva_batch_service
+from app.services.legal import validate_redemption, record_acceptance
 from app.core.events import lote_event_hub
 
 router = APIRouter(route_class=ResgateFormRoute)
@@ -915,6 +916,8 @@ async def processar_resgate(
                 await _cancelar_reserva_ativa(session, reserva, codigo)
                 return JSONResponse(status_code=409, content={"codigo": "cpf_ja_atendido" if codigo in ("ingresso_existente", "solicitacao_existente") else codigo, "detail": mensagem})
 
+            legal_pair = await validate_redemption(session, await request.form())
+
             if not usuario:
                 usuario = Usuario(cpf=cpf_limpo, role=UserRole.servidor, nome=nome.strip())
             usuario.nome = nome.strip()
@@ -948,6 +951,8 @@ async def processar_resgate(
             session.add(reserva)
             session.add(lote)
             await session.flush()
+            if legal_pair:
+                await record_acceptance(session, usuario.id, legal_pair, "resgate", f"reserva:{reserva.id}")
             if not imediato:
                 await enqueue_external_validation(session, solic.id)
             if load_form:

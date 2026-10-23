@@ -1,0 +1,38 @@
+app/services/email_service.py:101: trailing whitespace.
+[32m+[m[32m        if queue_id is not None:[m[41m[m
+app/services/email_service.py:102: trailing whitespace.
+[32m+[m[32m            # Identidade estável nas retentativas; não contém dados nem tokens do participante.[m[41m[m
+app/services/email_service.py:103: trailing whitespace.
+[32m+[m[32m            msg["Message-ID"] = f"<servindoor-queue-{queue_id}@servindoor.com.br>"[m[41m[m
+frontend/src/views/ResgateView.vue:10: trailing whitespace.
+[32m+[m[32mimport LegalConsent from '../components/LegalConsent.vue'[m[41m[m
+frontend/src/views/ResgateView.vue:11: trailing whitespace.
+[32m+[m[41m[m
+frontend/src/views/ResgateView.vue:12: trailing whitespace.
+[32m+[m[32mconst legalConsent = ref({ loaded: false, required: false })[m[41m[m
+frontend/src/views/ResgateView.vue:285: trailing whitespace.
+[32m+[m[32m  envioPendente.value = { token: tokenReserva.value, cpf: payload.cpf, payload: { ...payload, legalConsent: { ...legalConsent.value } }, completo: payloadDeEnvioCompleto(payload) }[m[41m[m
+frontend/src/views/ResgateView.vue:967: trailing whitespace.
+[32m+[m[32m  if (!legalConsent.value.loaded || (legalConsent.value.required && (!legalConsent.value.termsId || !legalConsent.value.privacyId))) {[m[41m[m
+frontend/src/views/ResgateView.vue:968: trailing whitespace.
+[32m+[m[32m    errorMessage.value = 'Não foi possível consultar os documentos. Recarregue a página antes de concluir.'[m[41m[m
+frontend/src/views/ResgateView.vue:969: trailing whitespace.
+[32m+[m[32m    return false[m[41m[m
+frontend/src/views/ResgateView.vue:970: trailing whitespace.
+[32m+[m[32m  }[m[41m[m
+frontend/src/views/ResgateView.vue:1038: trailing whitespace.
+[32m+[m[32m    const legalSnapshot = payload.legalConsent || legalConsent.value[m[41m[m
+frontend/src/views/ResgateView.vue:1039: trailing whitespace.
+[32m+[m[32m    if (legalSnapshot.required) {[m[41m[m
+frontend/src/views/ResgateView.vue:1040: trailing whitespace.
+[32m+[m[32m      // A concordância decorre deste envio, após a apresentação do aviso e dos documentos.[m[41m[m
+frontend/src/views/ResgateView.vue:1041: trailing whitespace.
+[32m+[m[32m      formData.append('legal_accepted', 'true')[m[41m[m
+frontend/src/views/ResgateView.vue:1042: trailing whitespace.
+[32m+[m[32m      formData.append('legal_terms_id', String(legalSnapshot.termsId))[m[41m[m
+frontend/src/views/ResgateView.vue:1043: trailing whitespace.
+[32m+[m[32m      formData.append('legal_privacy_id', String(legalSnapshot.privacyId))[m[41m[m
+frontend/src/views/ResgateView.vue:1044: trailing whitespace.
+[32m+[m[32m    }[m[41m[m
+frontend/src/views/ResgateView.vue:1419: trailing whitespace.
+[32m+[m[32m            <LegalConsent v-model="legalConsent" />[m[41m[m

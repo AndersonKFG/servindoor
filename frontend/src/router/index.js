@@ -25,6 +25,10 @@ import AdminValidacoesView from '../views/AdminValidacoesView.vue'
 import CorrigirFotoView from '../views/CorrigirFotoView.vue'
 
 const routes = [
+  { path: '/termos-de-uso', name: 'termos-de-uso', component: () => import('../views/LegalDocumentView.vue'), meta: { publicoGatekeeper: true } },
+  { path: '/politica-de-privacidade', name: 'politica-de-privacidade', component: () => import('../views/LegalDocumentView.vue'), meta: { publicoGatekeeper: true } },
+  { path: '/confirmar_termos/:token', name: 'confirmar-termos', component: () => import('../views/LegalConfirmationView.vue'), meta: { publicoGatekeeper: true, hideNav: true } },
+  { path: '/admin/documentos-legais', name: 'documentos-legais', component: () => import('../views/AdminLegalView.vue'), meta: { requiresAuth: true, roles: ['admin_geral'] } },
   // Rotas Públicas (Sem necessidade de Login)
   {
     path: '/corrigir-foto',
@@ -121,6 +125,7 @@ let gatekeeperChecked = false
 let gatekeeperEnabled = true
 
 router.beforeEach(async (to, from, next) => {
+  if (to.meta.publicoGatekeeper && to.path !== '/acesso') return next()
   // O token pessoal recebido por e-mail autoriza exclusivamente a troca de foto.
   if (to.name === 'corrigir-foto') return next()
   if (to.name === 'cadastro-avulso') return next()

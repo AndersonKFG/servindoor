@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import Navbar from './components/Navbar.vue'
 import ToastContainer from './components/ToastContainer.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
+import LegalFooterLinks from './components/LegalFooterLinks.vue'
 
 const route = useRoute()
 const isTelao = computed(() => route.path === '/telao' || route.meta?.hideNav === true)
@@ -21,6 +22,7 @@ const isHome = computed(() => route.path === '/')
         <p class="footer-copy">
           &copy; 2026 <strong>Serv indoor</strong> &bull; Todos os direitos reservados.
         </p>
+        <LegalFooterLinks />
       </div>
     </footer>
     <ToastContainer />

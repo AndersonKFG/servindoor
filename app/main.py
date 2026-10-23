@@ -17,6 +17,8 @@ from app.models.all_models import Ingresso, SolicitacaoCancelamento, Solicitacao
 
 # Importando as rotas separadas
 from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq, sponsor_logos, correcao_foto, avulsos
+from app.routers import legal
+from app.core.legal_protection import LegalProtectionMiddleware
 
 _MAX_RESGATE_BODY_BYTES = 6 * 1024 * 1024
 
@@ -132,6 +134,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 app.add_middleware(HttpProtectionMiddleware, max_body_bytes=_MAX_RESGATE_BODY_BYTES)
+app.add_middleware(LegalProtectionMiddleware)
 
 
 # Compressão GZip para respostas rápidas e menor tráfego de rede
@@ -248,6 +251,8 @@ app.include_router(validacoes.router)
 app.include_router(faq.router)
 app.include_router(sponsor_logos.router)
 app.include_router(correcao_foto.router)
+app.include_router(legal.admin_router)
+app.include_router(legal.router)
 
 # Fallback Catch-all para SPA Vue Router (Evita 404 em recarregamento F5)
 VUE_INDEX_PATH = 'app/static/dist/index.html'

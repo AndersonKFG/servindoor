@@ -35,7 +35,8 @@ export default defineConfig({
       },
       '/api': {
         target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
+        // Preserva a origem do frontend para a validação CSRF no backend.
+        changeOrigin: false,
         timeout: 0
       },
       '/static': {
