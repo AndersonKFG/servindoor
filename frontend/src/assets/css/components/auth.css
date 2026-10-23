@@ -3,6 +3,207 @@
    Design System Global — Servindoor 2026
    ========================================================================== */
 
+/* ACESSO EXCLUSIVO: cartão e senha segmentada reutilizáveis. */
+.access-gate {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-xl) var(--space-lg);
+  background: var(--bg-base);
+}
+
+.access-gate__card {
+  width: 100%;
+  max-width: 470px;
+  padding: var(--space-3xl) var(--space-2xl);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-xl);
+  background: var(--modal-bg);
+  box-shadow: var(--card-shadow);
+  text-align: center;
+}
+
+.access-gate__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
+}
+
+.access-gate__logo {
+  width: 72px;
+  height: 56px;
+  object-fit: contain;
+}
+
+.access-gate__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
+  border: 1px solid color-mix(in srgb, var(--serv-magenta) 35%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--serv-magenta) 12%, transparent);
+  color: var(--serv-magenta);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.access-gate__title {
+  margin-bottom: var(--space-sm);
+  color: var(--text-main);
+  font-family: var(--font-display);
+  font-size: clamp(var(--fs-xl), 5vw, var(--fs-2xl));
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.access-gate__description {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.access-gate__form {
+  display: grid;
+  gap: var(--space-xl);
+  margin-top: var(--space-2xl);
+}
+
+.access-gate__label {
+  display: block;
+  margin-bottom: var(--space-md);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.access-gate__code {
+  position: relative;
+}
+
+.access-gate__slots {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.access-gate__slot {
+  display: grid;
+  place-items: center;
+  height: var(--control-height-lg);
+  border: 2px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xl);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.access-gate__slot--filled {
+  border-color: var(--border-accent);
+}
+
+.access-gate__code:focus-within .access-gate__slot--active {
+  border-color: var(--primary-accent);
+  background: color-mix(in srgb, var(--primary-accent) 8%, var(--bg-input));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--primary-accent) 25%, transparent);
+}
+
+.access-gate__slot--error {
+  border-color: var(--danger-color);
+}
+
+.access-gate__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: text;
+  font-size: var(--fs-base);
+}
+
+.access-gate__hint {
+  margin-top: var(--space-md);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.access-gate__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border: 1px solid color-mix(in srgb, var(--danger-color) 35%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger-color) 8%, transparent);
+  color: var(--danger-color);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.access-gate__submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  width: 100%;
+  min-height: var(--control-height-lg);
+  padding: var(--space-lg);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--serv-gradient);
+  color: var(--text-main);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter var(--transition-fast), opacity var(--transition-fast);
+}
+
+.access-gate__submit:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.access-gate__submit:focus-visible {
+  outline: 2px solid var(--primary-accent);
+  outline-offset: 4px;
+}
+
+.access-gate__submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.access-gate__submit .bi {
+  flex: 0 0 auto;
+  font-size: var(--fs-lg);
+}
+
+.access-gate__footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-2xl);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.access-gate__footer .bi {
+  color: var(--primary-accent);
+}
+
+@media (max-width: 480px) {
+  .access-gate__card {
+    padding: var(--space-2xl) var(--space-xl);
+  }
+}
+
 /* LOGIN PAGE & DEVICE TAKEOVER */
 .login-page {
   min-height: 80vh;

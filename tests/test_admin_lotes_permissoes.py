@@ -73,6 +73,7 @@ class TestAdminLotesPermissoes(unittest.IsolatedAsyncioTestCase):
     async def test_admin_nao_gerencia_lotes_ou_backups_nem_por_requisicao_direta(self):
         operations = [
             ("POST", "/admin/lote"),
+            ("POST", "/api/admin/lotes"),
             ("POST", "/admin/lote/1/editar"),
             ("POST", "/admin/lote/1/toggle"),
             ("POST", "/admin/lote/1/encerrar"),

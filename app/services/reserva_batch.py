@@ -212,6 +212,8 @@ class ReservaBatchService:
                 result.lote = lote
             return results
 
+        if lote is not None and lote.oculto:
+            return finish([ReservationResult(404, "lote_inexistente", "Lote não encontrado.") for _ in requests])
         if lote is None or not lote.ativo:
             return finish([ReservationResult(400, "lote_inativo", "Este lote está pausado ou inativo.") for _ in requests])
         if lote.data_abertura and now < lote.data_abertura:

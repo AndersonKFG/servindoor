@@ -18,6 +18,7 @@ from app.models.all_models import Usuario, Lote, Ingresso, Secretaria, Solicitac
 from app.core.deps import get_current_admin_geral, get_current_validador
 from app.core.cpf import formatar_cpf, validar_cpf_matematico
 from app.core.security import formatar_data_sp
+from app.services.lotes_ocultos import exigir_gestao_lote
 from app.services.email_service import (
     send_ticket_email_async,
     send_validation_rejection_email_async
@@ -169,10 +170,12 @@ async def listar_solicitacoes_validacao(
             Secretaria.nome.label("secretaria_nome"), Usuario.nome, Usuario.cpf,
         )
         .select_from(SolicitacaoValidacao)
+        .outerjoin(Lote, Lote.id == SolicitacaoValidacao.lote_id)
         .outerjoin(Usuario, Usuario.id == SolicitacaoValidacao.usuario_id)
         .outerjoin(Secretaria, Secretaria.id == secretaria_efetiva)
     )
     if not acesso_global:
+        escopo_stmt = escopo_stmt.where(Lote.oculto == False)
         escopo_stmt = escopo_stmt.where(or_(
             SolicitacaoValidacao.secretaria_id.in_(allowed_sec_ids),
             Usuario.secretaria_id.in_(allowed_sec_ids),
@@ -267,6 +270,8 @@ async def listar_solicitacoes_validacao(
             "comunicado": bool(getattr(s, "comunicado", False)),
             "comunicado_em": formatar_data_sp(getattr(s, "comunicado_em", None)),
             "lote_nome": l.nome if l else "Lote Geral",
+            "avulso": bool(l and l.oculto),
+            "pode_gerenciar": is_superadmin or not (l and l.oculto),
             "secretaria_nome": sec.nome if sec else "Não informada",
             "secretaria_id": sec.id if sec else None,
             "usuario": {
@@ -318,6 +323,8 @@ async def aprovar_solicitacao_validacao(
     )
     res = await session.execute(stmt)
     solic = res.scalars().first()
+    if solic:
+        await exigir_gestao_lote(session, validador, solic.lote_id)
 
     if not solic:
         raise HTTPException(status_code=404, detail="Solicitação de validação não encontrada.")
@@ -412,7 +419,7 @@ async def aprovar_todos_verificados_api(
     if not is_superadmin:
         solicitacoes = [
             s for s in solicitacoes
-            if (s.secretaria_id in allowed_ids or (s.usuario and s.usuario.secretaria_id in allowed_ids))
+            if not (s.lote and s.lote.oculto) and (s.secretaria_id in allowed_ids or (s.usuario and s.usuario.secretaria_id in allowed_ids))
         ]
 
     if not solicitacoes:
@@ -488,6 +495,8 @@ async def rejeitar_solicitacao_validacao(
     )
     res = await session.execute(stmt)
     solic = res.scalars().first()
+    if solic:
+        await exigir_gestao_lote(session, validador, solic.lote_id)
 
     if not solic:
         raise HTTPException(status_code=404, detail="Solicitação de validação não encontrada.")

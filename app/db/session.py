@@ -74,16 +74,77 @@ async def migrar_fuso_reservas(conn: AsyncConnection) -> None:
     """))
 
 
+async def migrar_lotes_ocultos(conn: AsyncConnection) -> None:
+    """Migração idempotente; o chamador mantém o lock de inicialização."""
+    await conn.execute(text("ALTER TABLE lotes ADD COLUMN IF NOT EXISTS oculto BOOLEAN NOT NULL DEFAULT FALSE"))
+    await conn.execute(text("ALTER TABLE lotes ADD COLUMN IF NOT EXISTS acesso_token VARCHAR"))
+    await conn.execute(text("ALTER TABLE lotes ADD COLUMN IF NOT EXISTS acesso_versao INTEGER NOT NULL DEFAULT 1"))
+    await conn.execute(text("ALTER TABLE lotes ADD COLUMN IF NOT EXISTS acesso_senha_hash VARCHAR"))
+    await conn.execute(text("ALTER TABLE lotes ADD COLUMN IF NOT EXISTS avulso_config TEXT NOT NULL DEFAULT '{}'"))
+    # create_all cria as colunas com defaults do ORM, sem defaults SQL. Clientes
+    # legados que inserem lotes públicos sem esses campos precisam dos mesmos
+    # valores tanto em um banco novo quanto em um banco migrado.
+    await conn.execute(text("ALTER TABLE lotes ALTER COLUMN oculto SET DEFAULT FALSE"))
+    await conn.execute(text("ALTER TABLE lotes ALTER COLUMN acesso_versao SET DEFAULT 1"))
+    await conn.execute(text("ALTER TABLE lotes ALTER COLUMN avulso_config SET DEFAULT '{}'"))
+    await conn.execute(text("ALTER TABLE reservas_ingressos ADD COLUMN IF NOT EXISTS acesso_versao INTEGER"))
+    await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_lotes_acesso_token ON lotes (acesso_token) WHERE acesso_token IS NOT NULL"))
+    await conn.execute(text("""
+        CREATE OR REPLACE FUNCTION preservar_visibilidade_lote() RETURNS trigger AS $$
+        BEGIN
+            IF NEW.oculto IS DISTINCT FROM OLD.oculto THEN
+                RAISE EXCEPTION 'A visibilidade do lote e imutavel';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+    """))
+    await conn.execute(text("DROP TRIGGER IF EXISTS lotes_visibilidade_imutavel ON lotes"))
+    await conn.execute(text("CREATE TRIGGER lotes_visibilidade_imutavel BEFORE UPDATE ON lotes FOR EACH ROW EXECUTE FUNCTION preservar_visibilidade_lote()"))
+
+
+async def migrar_fuso_lotes(conn: AsyncConnection) -> None:
+    """Preserva a hora local das colunas legadas e passa a armazenar instantes.
+
+    Com UTCDateTime, uma coluna TIMESTAMP recebe a conversão para o fuso da
+    sessão PostgreSQL ao gravar e é rotulada como UTC ao ler. Migrar apenas
+    reservas não corrige os lotes existentes. Colunas já migradas são intocadas.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    for coluna in ("data_abertura", "data_fechamento", "deleted_at"):
+        legado = await conn.scalar(text("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = 'lotes'
+                  AND column_name = :coluna AND data_type = 'timestamp without time zone'
+            )
+        """), {"coluna": coluna})
+        if legado:
+            # Os identificadores vêm exclusivamente da lista fixa acima.
+            await conn.execute(text(
+                f"ALTER TABLE lotes ALTER COLUMN {coluna} TYPE TIMESTAMPTZ "
+                f"USING {coluna} AT TIME ZONE 'America/Sao_Paulo'"
+            ))
+
+
 async def init_db():
     """Inicializa automaticamente todas as tabelas oficiais do sistema"""
     from app.models.all_models import (
         Usuario, Lote, Ingresso, Secretaria, ReservaIngresso, LogAcesso, SolicitacaoCorrecaoFoto,
-        Eixo, Premio, Ganhador, EstadoSorteio, GatekeeperTentativa, SolicitacaoCancelamento, BackupLote, TokenExclusaoLote, SolicitacaoValidacao, RateLimitTentativa, FaqItem, SponsorLogo
+        Eixo, Premio, Ganhador, EstadoSorteio, GatekeeperTentativa, SolicitacaoCancelamento, BackupLote, TokenExclusaoLote, SolicitacaoValidacao, RateLimitTentativa, FaqItem, SponsorLogo, ControlePresenca
     )
     async with engine.begin() as conn:
         if "postgresql" in str(engine.url):
             await conn.execute(text("SELECT pg_advisory_xact_lock(7429184);"))
         await conn.run_sync(SQLModel.metadata.create_all)
+        await migrar_fuso_lotes(conn)
+        await migrar_lotes_ocultos(conn)
+        # Preserva a liberação salva entre reinícios e entre os workers.
+        await conn.execute(text("""
+            INSERT INTO controle_presenca (id, liberada) VALUES (1, FALSE)
+            ON CONFLICT (id) DO NOTHING;
+        """))
         # Executa sob o mesmo lock de inicialização e antes de expirar reservas.
         await migrar_fuso_reservas(conn)
         await conn.execute(text("""

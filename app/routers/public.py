@@ -112,6 +112,8 @@ async def coletar_status_lote_para_sse(session: AsyncSession, lote_id: int) -> d
     )).scalars().first()
     if not lote:
         return {}
+    if lote.oculto:
+        return {"oculto": True}
 
     reservas_ativas = (await session.execute(
         select(func.count(ReservaIngresso.id)).where(
@@ -128,7 +130,7 @@ async def obter_lote_relevante(session: AsyncSession, agora: datetime, lote_id: 
         stmt = (
             select(Lote)
             .options(selectinload(Lote.secretaria))
-            .where(Lote.id == lote_id, Lote.deleted_at.is_(None))
+            .where(Lote.id == lote_id, Lote.deleted_at.is_(None), Lote.oculto == False)
         )
         res = await session.execute(stmt)
         return res.scalars().first()
@@ -138,6 +140,7 @@ async def obter_lote_relevante(session: AsyncSession, agora: datetime, lote_id: 
         .options(selectinload(Lote.secretaria))
         .where(
             Lote.ativo == True,
+            Lote.oculto == False,
             Lote.deleted_at.is_(None),
             or_(Lote.data_abertura.is_(None), Lote.data_abertura <= agora),
             or_(Lote.data_fechamento.is_(None), Lote.data_fechamento >= agora),
@@ -155,6 +158,7 @@ async def obter_lote_relevante(session: AsyncSession, agora: datetime, lote_id: 
         .options(selectinload(Lote.secretaria))
         .where(
             Lote.ativo == True,
+            Lote.oculto == False,
             Lote.deleted_at.is_(None),
             Lote.data_abertura > agora
         )
@@ -170,6 +174,7 @@ async def obter_lote_relevante(session: AsyncSession, agora: datetime, lote_id: 
         .options(selectinload(Lote.secretaria))
         .where(
             Lote.ativo == False,
+            Lote.oculto == False,
             Lote.deleted_at.is_(None),
             or_(Lote.data_abertura.is_(None), Lote.data_abertura <= agora),
             or_(Lote.data_fechamento.is_(None), Lote.data_fechamento >= agora)
@@ -184,7 +189,7 @@ async def obter_lote_relevante(session: AsyncSession, agora: datetime, lote_id: 
     stmt_qualquer = (
         select(Lote)
         .options(selectinload(Lote.secretaria))
-        .where(Lote.deleted_at.is_(None))
+        .where(Lote.deleted_at.is_(None), Lote.oculto == False)
         .order_by(Lote.id.desc())
     )
     res_qualquer = await session.execute(stmt_qualquer)
@@ -430,6 +435,7 @@ async def _coletar_base_live_status(
         select(Lote)
         .where(
             Lote.ativo == True,
+            Lote.oculto == False,
             Lote.deleted_at.is_(None),
             Lote.data_abertura.is_not(None),
             Lote.data_abertura > agora
@@ -445,6 +451,7 @@ async def _coletar_base_live_status(
         select(Lote)
         .where(
             Lote.ativo == True,
+            Lote.oculto == False,
             Lote.deleted_at.is_(None),
             or_(
                 and_(Lote.data_fechamento.is_not(None), Lote.data_fechamento <= agora),

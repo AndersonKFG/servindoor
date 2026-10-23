@@ -947,6 +947,7 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="btn-action-icon btn-action-icon--amber action-expandable action-expandable--edit"
+                  v-if="p.pode_gerenciar !== false"
                   :disabled="isIngressoInvalido(p)"
                   :title="isIngressoInvalido(p) ? 'Ingresso extraviado/cancelado não permite edição de dados' : 'Editar Dados do Participante'"
                   aria-label="Editar participante"
@@ -960,6 +961,7 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="btn-action-icon btn-action-icon--amber action-expandable action-expandable--email"
+                  v-if="p.pode_gerenciar !== false"
                   :disabled="isIngressoInvalido(p)"
                   :title="isIngressoInvalido(p) ? 'Ingresso extraviado/cancelado' : 'Enviar E-mail com Ingresso'"
                   aria-label="Enviar e-mail com ingresso"
@@ -972,6 +974,7 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="btn-action-icon btn-action-icon--cyan action-expandable action-expandable--wide"
+                  v-if="p.pode_gerenciar !== false"
                   :disabled="isIngressoInvalido(p) || !p.email"
                   :title="!p.email ? 'Cadastre um e-mail para solicitar a correção' : (isIngressoInvalido(p) ? 'Ingresso extraviado/cancelado' : 'Solicitar correção de foto por e-mail')"
                   aria-label="Solicitar correção de foto"
@@ -988,6 +991,7 @@ onUnmounted(() => {
                   v-if="p.ingresso && !p.ingresso.cancelado"
                   type="button"
                   class="btn-action-icon btn-action-icon--danger action-expandable action-expandable--cancel"
+                  :disabled="p.pode_gerenciar === false"
                   title="Cancelar Ingresso (Extravio Administrativo)"
                   aria-label="Cancelar ingresso"
                   @click="confirmarCancelarIngresso(p)"

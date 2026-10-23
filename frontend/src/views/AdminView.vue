@@ -3,6 +3,8 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from '../composables/useToast'
 import Modal from '../components/Modal.vue'
+import HiddenLotSettings from '../components/HiddenLotSettings.vue'
+import { novaConfiguracaoAvulso } from '../utils/avulsoConfig'
 import KpiCard from '../components/KpiCard.vue'
 import { useAuth } from '../composables/useAuth'
 import { formatarDataHoraSp, paraDatetimeLocalSp } from '../utils/formatters'
@@ -10,6 +12,7 @@ import { formatarDataHoraSp, paraDatetimeLocalSp } from '../utils/formatters'
 const { toast } = useToast()
 
 const router = useRouter()
+const origemSite = window.location.origin
 const { isAdmin, isAdminGeral, checkAuth } = useAuth()
 const loading = ref(true)
 let adminEventSource = null
@@ -29,6 +32,45 @@ const secretarias = ref([])
 const showModalNovo = ref(false)
 const showModalEditar = ref(false)
 const loteEditando = ref(null)
+const configurandoAvulso = ref(null)
+const loteLink = ref(null)
+const senhaRegenerar = ref('')
+const regenerando = ref(false)
+const criandoLote = ref(false)
+
+async function regenerarLink() {
+  if (!loteLink.value || regenerando.value) return
+  regenerando.value = true
+  try {
+    const res = await fetch(`/api/admin/lote/${loteLink.value.id}/regenerar-link`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ senha: senhaRegenerar.value })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.detail || 'Não foi possível regenerar o link.')
+    loteLink.value.acesso_link = data.link
+    senhaRegenerar.value = ''
+    toast.success('Novo link gerado. Os acessos anteriores foram invalidados.')
+    await carregarDadosAdmin(true)
+  } catch (e) { toast.error(e.message) }
+  finally { regenerando.value = false }
+}
+
+async function copiarLink() {
+  try {
+    await navigator.clipboard.writeText(window.location.origin + loteLink.value.acesso_link)
+    toast.success('Link copiado.')
+  } catch { toast.error('Copie o link exibido no campo.') }
+}
+
+function concluirConfiguracaoAvulso() {
+  if (!configurandoAvulso.value) return
+  const editando = !!configurandoAvulso.value.id
+  configurandoAvulso.value = null
+  toast.info(editando
+    ? 'Configurações preparadas. Clique em Salvar Alterações para aplicá-las ao lote.'
+    : 'Configurações preparadas. Clique em Criar Lote para concluir o cadastro.')
+}
 
 const novoLote = ref({
   nome: '',
@@ -36,7 +78,11 @@ const novoLote = ref({
   data_abertura: '',
   data_fechamento: '',
   secretaria_id: '0',
-  ativo: true
+  ativo: true,
+  oculto: false,
+  avulso_config: novaConfiguracaoAvulso(),
+  acesso_senha: '',
+  remover_senha: false
 })
 
 // ==========================================
@@ -162,8 +208,10 @@ async function carregarBackups() {
 // AÇÕES DE LOTES
 // ==========================================
 async function handleCriarLote() {
-  if (!isAdminGeral.value) return
+  if (!isAdminGeral.value || criandoLote.value) return
+  criandoLote.value = true
   try {
+    const ocultoSolicitado = novoLote.value.oculto
     const formData = new FormData()
     formData.append('nome', novoLote.value.nome)
     formData.append('quantidade_total', novoLote.value.quantidade_total)
@@ -175,12 +223,30 @@ async function handleCriarLote() {
     if (novoLote.value.ativo) {
       formData.append('ativo', 'on')
     }
+    formData.append('oculto', String(ocultoSolicitado))
+    if (ocultoSolicitado) {
+      formData.append('avulso_config', JSON.stringify(novoLote.value.avulso_config))
+      formData.append('acesso_senha', novoLote.value.acesso_senha)
+    }
 
-    await fetch('/admin/lote', {
+    const response = await fetch('/api/admin/lotes', {
       method: 'POST',
+      headers: { Accept: 'application/json' },
       body: formData
     })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(response.status === 404
+        ? 'O serviço de criação de lotes precisa ser atualizado. Recarregue a página e tente novamente.'
+        : (data.detail || 'Não foi possível criar o lote.'))
+    }
+    if (data.sucesso !== true || !Number.isInteger(data.id) || data.oculto !== ocultoSolicitado) {
+      throw new Error('O servidor não confirmou as opções do lote. Atualize a página e confira a listagem antes de tentar novamente.')
+    }
 
+    toast.success(ocultoSolicitado
+      ? 'Lote oculto criado com sucesso. O link de acesso está disponível na listagem.'
+      : 'Lote criado com sucesso.')
     showModalNovo.value = false
     novoLote.value = {
       nome: '',
@@ -188,11 +254,16 @@ async function handleCriarLote() {
       data_abertura: '',
       data_fechamento: '',
       secretaria_id: '0',
-      ativo: true
+      ativo: true,
+      oculto: false,
+      avulso_config: novaConfiguracaoAvulso(),
+      acesso_senha: '', remover_senha: false
     }
     await carregarDadosAdmin()
   } catch (e) {
-    toast.error('Erro ao criar lote.')
+    toast.error(e.message || 'Erro ao criar lote.')
+  } finally {
+    criandoLote.value = false
   }
 }
 
@@ -205,7 +276,11 @@ function abrirEditarLote(l) {
     data_abertura: l.model.data_abertura_input ?? paraDatetimeLocalSp(l.model.data_abertura),
     data_fechamento: l.model.data_fechamento_input ?? paraDatetimeLocalSp(l.model.data_fechamento),
     secretaria_id: l.model.secretaria_id ? String(l.model.secretaria_id) : '0',
-    ativo: l.model.ativo
+    ativo: l.model.ativo,
+    oculto: l.model.oculto,
+    tem_senha: l.model.tem_senha,
+    avulso_config: JSON.parse(JSON.stringify(l.model.avulso_config || novaConfiguracaoAvulso())),
+    acesso_senha: '', remover_senha: false
   }
   showModalEditar.value = true
 }
@@ -225,6 +300,11 @@ async function handleSalvarEdicao() {
     if (loteEditando.value.ativo) {
       formData.append('ativo', 'on')
     }
+    if (loteEditando.value.oculto) {
+      formData.append('avulso_config', JSON.stringify(loteEditando.value.avulso_config))
+      if (loteEditando.value.acesso_senha) formData.append('acesso_senha', loteEditando.value.acesso_senha)
+      formData.append('remover_senha', String(loteEditando.value.remover_senha))
+    }
 
     const response = await fetch(`/admin/lote/${loteEditando.value.id}/editar`, {
       method: 'POST',
@@ -235,6 +315,9 @@ async function handleSalvarEdicao() {
       throw new Error(errorData.detail || 'Não foi possível salvar as alterações do lote.')
     }
 
+    toast.success(loteEditando.value.oculto
+      ? 'Lote oculto atualizado. Os acessos anteriores foram invalidados.'
+      : 'Lote atualizado com sucesso.')
     showModalEditar.value = false
     await carregarDadosAdmin()
   } catch (e) {
@@ -245,11 +328,15 @@ async function handleSalvarEdicao() {
 async function handleToggleLote(loteId) {
   if (!isAdminGeral.value) return
   try {
+    const lote = lotes.value.find(item => item.model.id === loteId)?.model
     const response = await fetch(`/admin/lote/${loteId}/toggle`, { method: 'POST' })
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
       throw new Error(errorData.detail || 'Não foi possível alterar o status do lote.')
     }
+    toast.success(lote?.oculto
+      ? 'Status do lote oculto atualizado. Os acessos anteriores foram invalidados.'
+      : 'Status do lote atualizado com sucesso.')
     await carregarDadosAdmin()
   } catch (e) {
     toast.error(e.message || 'Erro ao alternar status do lote.')
@@ -609,6 +696,7 @@ onUnmounted(() => {
               <tr v-for="item in lotes" :key="item.model.id">
                 <td>
                   <strong class="text-white">{{ item.model.nome }}</strong>
+                  <span v-if="item.model.oculto" class="table-tag">Oculto · Cadastro avulso</span>
                   <span class="d-block small text-subtle">#{{ item.model.id }}</span>
                 </td>
                 <td>
@@ -636,6 +724,9 @@ onUnmounted(() => {
                 </td>
                 <td v-if="isAdminGeral" class="text-end">
                   <div class="action-buttons-group">
+                    <button v-if="item.model.oculto" type="button" class="btn-action-icon btn-action-icon--cyan" title="Link do lote oculto" @click="loteLink = { ...item.model }; senhaRegenerar = ''">
+                      <i class="bi bi-link-45deg"></i>
+                    </button>
                     <router-link :to="'/admin/lote/' + item.model.id + '/ingressos'" class="btn-action-icon btn-action-icon--blue" title="Ver Ingressos Resgatados">
                       <i class="bi bi-people-fill"></i>
                     </router-link>
@@ -800,6 +891,11 @@ onUnmounted(() => {
       @close="showModalNovo = false"
     >
       <form @submit.prevent="handleCriarLote">
+        <div class="modal-section">
+          <label class="form-label"><input v-model="novoLote.oculto" type="checkbox" /> Lote oculto para cadastros avulsos</label>
+          <p class="small text-subtle">A condição público/oculto não poderá ser alterada após a criação.</p>
+          <button v-if="novoLote.oculto" type="button" class="btn-secondary" @click="configurandoAvulso = novoLote">Configurações adicionais</button>
+        </div>
         <div class="form-group">
           <label class="form-label" for="novo-nome">Nome do Lote</label>
           <input id="novo-nome" v-model="novoLote.nome" type="text" class="form-control" placeholder="Ex: Lote 01 - Geral" required />
@@ -832,7 +928,7 @@ onUnmounted(() => {
 
         <div class="modal-footer-box">
           <button type="button" class="btn-secondary" @click="showModalNovo = false">Cancelar</button>
-          <button type="submit" class="btn-primary">Criar Lote</button>
+          <button type="submit" class="btn-primary" :disabled="criandoLote">{{ criandoLote ? 'Criando...' : 'Criar Lote' }}</button>
         </div>
       </form>
     </Modal>
@@ -846,6 +942,10 @@ onUnmounted(() => {
       @close="showModalEditar = false"
     >
       <form v-if="loteEditando" @submit.prevent="handleSalvarEdicao">
+        <div v-if="loteEditando.oculto" class="modal-section">
+          <p class="text-subtle">Lote oculto. Salvar alterações invalida os formulários em preenchimento.</p>
+          <button type="button" class="btn-secondary" @click="configurandoAvulso = loteEditando">Configurações adicionais</button>
+        </div>
         <div class="form-group">
           <label class="form-label" for="edit-nome">Nome do Lote</label>
           <input id="edit-nome" v-model="loteEditando.nome" type="text" class="form-control" required />
@@ -881,6 +981,34 @@ onUnmounted(() => {
           <button type="submit" class="btn-primary">Salvar Alterações</button>
         </div>
       </form>
+    </Modal>
+
+    <Modal v-if="isAdminGeral" :show="!!configurandoAvulso" title="Configurações do lote oculto" icon="bi-shield-lock" @close="configurandoAvulso = null">
+      <form v-if="configurandoAvulso" @submit.prevent="concluirConfiguracaoAvulso">
+        <div class="modal-hero-card"><p>Estas opções serão salvas junto com o lote.</p></div>
+        <HiddenLotSettings :config="configurandoAvulso.avulso_config" :secretarias="secretarias" />
+        <section class="modal-section">
+          <label for="avulso-senha" class="form-label">Senha de acesso opcional (6 caracteres)</label>
+          <input id="avulso-senha" v-model="configurandoAvulso.acesso_senha" type="password" class="form-control" minlength="6" maxlength="6" autocomplete="new-password" :disabled="configurandoAvulso.remover_senha" />
+          <p v-if="configurandoAvulso.tem_senha" class="small text-subtle">Deixe em branco para manter a senha atual.</p>
+          <label v-if="configurandoAvulso.tem_senha" class="form-label"><input v-model="configurandoAvulso.remover_senha" type="checkbox" /> Remover a senha atual</label>
+        </section>
+        <div class="modal-footer-grid"><button type="submit" class="btn-primary">Concluir configurações</button></div>
+      </form>
+    </Modal>
+
+    <Modal v-if="isAdminGeral" :show="!!loteLink" title="Acesso ao lote oculto" icon="bi-link-45deg" @close="loteLink = null; senhaRegenerar = ''">
+      <div v-if="loteLink" class="modal-section">
+        <label for="avulso-link" class="form-label">Link atual</label>
+        <input id="avulso-link" :value="origemSite + loteLink.acesso_link" class="form-control" readonly />
+        <div class="modal-footer-grid mt-3"><button type="button" class="btn-secondary" @click="copiarLink">Copiar link</button><a :href="loteLink.acesso_link" target="_blank" rel="noopener noreferrer" class="btn-primary">Abrir formulário</a></div>
+        <form class="modal-section" @submit.prevent="regenerarLink">
+          <p>Regenerar invalida imediatamente o link anterior e os formulários abertos.</p>
+          <label for="senha-regenerar" class="form-label">Sua senha de superadministrador</label>
+          <input id="senha-regenerar" v-model="senhaRegenerar" type="password" class="form-control" autocomplete="current-password" required />
+          <div class="modal-footer-grid mt-3"><button type="submit" class="btn-primary" :disabled="regenerando">{{ regenerando ? 'Gerando…' : 'Regenerar link' }}</button></div>
+        </form>
+      </div>
     </Modal>
 
     <!-- MODAL: EXCLUSÃO DIFICULTOSA E SEGURA DE LOTE -->

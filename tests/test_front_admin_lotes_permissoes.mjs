@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { novaConfiguracaoAvulso } from '../frontend/src/utils/avulsoConfig.js';
 import { createRequire } from 'node:module';
 
 const require = createRequire(new URL('../frontend/package.json', import.meta.url));
@@ -32,8 +33,9 @@ function component(path, geral) {
     useRouter: () => ({ push() {}, currentRoute: Vue.ref({ path: '/admin' }) }),
     useRoute: () => ({ path: '/admin' }),
     formatarDataHoraSp: value => value, paraDatetimeLocalSp: value => value,
-    KpiCard, Modal, FormData,
-    window: { open() { requests.push('download'); } },
+    KpiCard, Modal, FormData, novaConfiguracaoAvulso,
+    HiddenLotSettings: { render() { return null; } },
+    window: { location: { origin: 'https://test' }, open() { requests.push('download'); } },
     fetch: async (url, options) => {
       requests.push({ url, options });
       return { ok: true, status: 200, json: async () => ({ metricas: {}, lotes: [], secretarias: [], backups: [] }) };
@@ -41,7 +43,7 @@ function component(path, geral) {
   });
   vm.runInContext(withoutImports(descriptor.scriptSetup.content) + `\nglobalThis.api = { ${bindings.join(', ')} };`, context);
   const render = new Function('Vue', compile(descriptor.template.content, { mode: 'function', prefixIdentifiers: true }).code)(Vue);
-  const options = { components: { KpiCard, Modal, RouterLink }, setup: () => context.api, render };
+  const options = { components: { KpiCard, Modal, RouterLink, HiddenLotSettings: context.HiddenLotSettings }, setup: () => context.api, render };
   return { api: context.api, requests, mounted, render: () => renderToString(Vue.createSSRApp(options)) };
 }
 

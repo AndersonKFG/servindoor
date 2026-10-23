@@ -6,7 +6,7 @@ import csv
 import io
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List
+from typing import Optional, List, Annotated
 from typing import Literal
 from starlette.concurrency import run_in_threadpool
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, status, Query, BackgroundTasks
@@ -26,6 +26,8 @@ from app.core.deps import get_current_admin, get_current_admin_geral
 from app.core.validators import normalizar_data_nascimento, formatar_telefone, validar_email
 from app.core.events import lote_event_hub
 from app.routers.public import coletar_status_lote_para_sse
+from app.services.lotes_ocultos import (validar_configuracao, configuracao, senha_hash,
+    revogar_acessos, eh_superadmin, exigir_gestao_participante, instante_utc)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -59,9 +61,11 @@ def calcular_status_lote(lote: Lote) -> dict:
     3. Se data_abertura <= agora <= data_fechamento -> Período de resgate ativo (pode toggle pausar/despausar)
     """
     agora = datetime.now(timezone.utc)
+    abertura = instante_utc(lote.data_abertura) if lote.oculto and lote.data_abertura else lote.data_abertura
+    fechamento = instante_utc(lote.data_fechamento) if lote.oculto and lote.data_fechamento else lote.data_fechamento
     
     # 1. Encerrado pelo horário final
-    if lote.data_fechamento and agora > lote.data_fechamento:
+    if fechamento and agora > fechamento:
         return {
             "key": "encerrado",
             "label": "Encerrado",
@@ -72,7 +76,7 @@ def calcular_status_lote(lote: Lote) -> dict:
         }
     
     # 2. Agendado para o futuro (o período é soberano, aguardando abertura)
-    if lote.data_abertura and agora < lote.data_abertura:
+    if abertura and agora < abertura:
         return {
             "key": "agendado",
             "label": "Agendado",
@@ -118,6 +122,7 @@ def dados_status_lote_sse(lote: Lote) -> dict:
     status_lote = calcular_status_lote(lote)
     return {
         "status_slug": status_lote["key"],
+        "oculto": lote.oculto,
         "status_label": status_lote["label"],
         "badge_class": status_lote["badge_class"]
     }
@@ -223,6 +228,10 @@ async def api_lotes_admin(
                     "quantidade_resgatada": item["model"].quantidade_resgatada,
                     **_horarios_lote_para_formulario(item["model"]),
                     "ativo": item["model"].ativo,
+                    "oculto": item["model"].oculto,
+                    "avulso_config": configuracao(item["model"]) if item["model"].oculto and eh_superadmin(current_user) else None,
+                    "acesso_link": "/" + item["model"].acesso_token if item["model"].oculto and item["model"].acesso_token and eh_superadmin(current_user) else None,
+                    "tem_senha": bool(item["model"].acesso_senha_hash) if eh_superadmin(current_user) else None,
                     "secretaria_id": item["model"].secretaria_id,
                     "secretaria": {"id": item["model"].secretaria.id, "nome": item["model"].secretaria.nome} if item["model"].secretaria else None
                 },
@@ -233,7 +242,7 @@ async def api_lotes_admin(
             } for item in lotes_processados
         ],
         "secretarias": [{"id": s.id, "nome": s.nome} for s in secretarias]
-    })
+    }, headers={"Cache-Control": "no-store"})
 
 @router.get("/admin")
 async def painel_admin(
@@ -260,6 +269,7 @@ async def painel_admin(
     )
 
 @router.post("/admin/lote")
+@router.post("/api/admin/lotes")
 async def criar_lote(
     nome: str = Form(...),
     quantidade_total: int = Form(...),
@@ -267,10 +277,16 @@ async def criar_lote(
     data_fechamento: Optional[str] = Form(None),
     secretaria_id: Optional[str] = Form(None),
     ativo: Optional[str] = Form(None),
+    oculto: Annotated[bool, Form()] = False,
+    avulso_config: Annotated[str, Form()] = "{}",
+    acesso_senha: Annotated[str, Form()] = "",
     session: AsyncSession = Depends(get_session),
-    current_user: Usuario = Depends(get_current_admin_geral)
+    current_user: Usuario = Depends(get_current_admin_geral),
+    request: Request = None,
 ):
     agora = datetime.now(timezone.utc)
+    if quantidade_total < 1 or not nome.strip():
+        raise HTTPException(400, "Informe nome e capacidade válidos.")
     dt_abertura = _datetime_utc(data_abertura, security.TZ_SAO_PAULO)
     dt_fechamento = _datetime_utc(data_fechamento, security.TZ_SAO_PAULO) if data_fechamento and data_fechamento.strip() else None
 
@@ -282,6 +298,10 @@ async def criar_lote(
 
     sec_id = int(secretaria_id) if secretaria_id and secretaria_id.strip() and secretaria_id != "0" else None
     esta_ativo = True if dt_abertura > agora or ativo in ["on", "true", "1", True] else False
+    try:
+        config = await validar_configuracao(json.loads(avulso_config), session, sec_id) if oculto else "{}"
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Configuração inválida.")
 
     novo_lote = Lote(
         nome=nome.strip(),
@@ -290,7 +310,11 @@ async def criar_lote(
         data_abertura=dt_abertura,
         data_fechamento=dt_fechamento,
         secretaria_id=sec_id,
-        ativo=esta_ativo
+        ativo=esta_ativo,
+        oculto=oculto,
+        acesso_token=secrets.token_urlsafe(32) if oculto else None,
+        acesso_senha_hash=senha_hash(acesso_senha) if oculto else None,
+        avulso_config=config,
     )
     
     session.add(novo_lote)
@@ -308,6 +332,14 @@ async def criar_lote(
         **(await coletar_status_lote_para_sse(session, novo_lote.id))
     })
 
+    if request is not None and request.url.path == "/api/admin/lotes":
+        return JSONResponse({
+            "sucesso": True,
+            "id": novo_lote.id,
+            "oculto": novo_lote.oculto,
+            "avulso_config": configuracao(novo_lote) if novo_lote.oculto else None,
+            **_horarios_lote_para_formulario(novo_lote),
+        }, status_code=201, headers={"Cache-Control": "no-store"})
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 @router.post("/admin/lote/{lote_id}/editar")
@@ -319,12 +351,37 @@ async def editar_lote(
     data_fechamento: Optional[str] = Form(None),
     secretaria_id: Optional[str] = Form(None),
     ativo: Optional[str] = Form(None),
+    avulso_config: Annotated[Optional[str], Form()] = None,
+    acesso_senha: Annotated[Optional[str], Form()] = None,
+    remover_senha: Annotated[bool, Form()] = False,
+    oculto: Annotated[Optional[bool], Form()] = None,
     session: AsyncSession = Depends(get_session),
-    current_user: Usuario = Depends(get_current_admin_geral)
+    current_user: Usuario = Depends(get_current_admin_geral),
+    request: Request = None,
 ):
-    lote = await session.get(Lote, lote_id)
+    lote = await session.get(Lote, lote_id, with_for_update=True)
     if not lote:
         raise HTTPException(status_code=404, detail="Lote não encontrado")
+    visibilidade_enviada = "oculto" in await request.form() if request is not None else oculto is not None
+    if visibilidade_enviada and oculto != lote.oculto:
+        raise HTTPException(400, "A condição público/oculto só pode ser definida na criação.")
+    reservas = await session.scalar(select(func.count(ReservaIngresso.id)).where(
+        ReservaIngresso.lote_id == lote_id, ReservaIngresso.status == "ativa",
+        ReservaIngresso.expira_em > datetime.now(timezone.utc)))
+    if not nome.strip() or quantidade_total < max(1, lote.quantidade_resgatada + (reservas or 0)):
+        raise HTTPException(400, "A capacidade não pode ser menor que as vagas já ocupadas ou reservadas.")
+    if lote.oculto:
+        sec = int(secretaria_id) if secretaria_id and secretaria_id != "0" else None
+        try:
+            lote.avulso_config = await validar_configuracao(
+                json.loads(avulso_config) if avulso_config is not None else configuracao(lote), session, sec)
+        except (ValueError, TypeError):
+            raise HTTPException(400, "Configuração inválida.")
+        if remover_senha:
+            lote.acesso_senha_hash = None
+        elif acesso_senha:
+            lote.acesso_senha_hash = senha_hash(acesso_senha)
+        await revogar_acessos(lote, session)
 
     agora = datetime.now(timezone.utc)
     dt_abertura = _datetime_utc(data_abertura, security.TZ_SAO_PAULO)
@@ -371,7 +428,7 @@ async def toggle_lote(
     session: AsyncSession = Depends(get_session),
     current_user: Usuario = Depends(get_current_admin_geral)
 ):
-    lote = await session.get(Lote, lote_id)
+    lote = await session.get(Lote, lote_id, with_for_update=True)
     if not lote:
         raise HTTPException(status_code=404, detail="Lote não encontrado")
 
@@ -382,6 +439,8 @@ async def toggle_lote(
             detail=f"Não é permitido pausar/despausar este lote. {st['motivo_bloqueio']}"
         )
 
+    if lote.oculto:
+        await revogar_acessos(lote, session)
     lote.ativo = not lote.ativo
     session.add(lote)
     await session.commit()
@@ -397,16 +456,39 @@ async def toggle_lote(
 
     return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
 
+
+@router.post("/api/admin/lote/{lote_id}/regenerar-link")
+async def regenerar_link_lote(lote_id: int, request: Request,
+    session: AsyncSession = Depends(get_session),
+    admin: Usuario = Depends(get_current_admin_geral)):
+    body = await request.json()
+    senha = body.get("senha", "")
+    lote = (await session.execute(select(Lote).where(
+        Lote.id == lote_id, Lote.oculto == True, Lote.deleted_at.is_(None)
+    ).with_for_update())).scalars().first()
+    if not lote:
+        raise HTTPException(404, "Lote oculto não encontrado.")
+    from app.routers.avulsos import limitar
+    await limitar(session, request, lote, "regeneracao", 5)
+    if not isinstance(senha, str) or not admin.senha_hash or not await run_in_threadpool(security.verify_password, senha, admin.senha_hash):
+        await session.commit()
+        raise HTTPException(401, "Senha de administrador incorreta.")
+    await revogar_acessos(lote, session, novo_link=True)
+    await session.commit()
+    return JSONResponse({"link": "/" + lote.acesso_token}, headers={"Cache-Control": "no-store"})
+
 @router.post("/admin/lote/{lote_id}/encerrar")
 async def encerrar_lote_agora(
     lote_id: int,
     session: AsyncSession = Depends(get_session),
     current_user: Usuario = Depends(get_current_admin_geral)
 ):
-    lote = await session.get(Lote, lote_id)
+    lote = await session.get(Lote, lote_id, with_for_update=True)
     if not lote:
         raise HTTPException(status_code=404, detail="Lote não encontrado")
 
+    if lote.oculto:
+        await revogar_acessos(lote, session)
     lote.data_fechamento = datetime.now(timezone.utc)
     session.add(lote)
     await session.commit()
@@ -676,7 +758,10 @@ async def confirmar_exclusao_lote(
             "data_abertura": lote.data_abertura.isoformat() if lote.data_abertura else None,
             "data_fechamento": lote.data_fechamento.isoformat() if lote.data_fechamento else None,
             "secretaria_id": lote.secretaria_id,
-            "ativo": lote.ativo
+            "ativo": lote.ativo,
+            "oculto": lote.oculto,
+            "avulso_config": configuracao(lote),
+            "acesso_senha_hash": lote.acesso_senha_hash,
         },
         "total_ingressos": len(snapshot_ingressos),
         "ingressos": snapshot_ingressos
@@ -711,7 +796,9 @@ async def confirmar_exclusao_lote(
             session.add(ing)
 
     # Limpa reservas transitórias não concluídas
-    stmt_reservas = select(ReservaIngresso).where(ReservaIngresso.lote_id == lote_id)
+    stmt_reservas = select(ReservaIngresso).where(
+        ReservaIngresso.lote_id == lote_id, ReservaIngresso.utilizada == False,
+        ReservaIngresso.status != "concluida")
     res_res = await session.execute(stmt_reservas)
     for r in res_res.scalars().all():
         await session.delete(r)
@@ -723,6 +810,7 @@ async def confirmar_exclusao_lote(
         "tipo": "LOTE_ATUALIZADO",
         "lote_id": lote_id,
         "deletado": True,
+        "oculto": lote.oculto,
         "ativo": False
     })
 
@@ -811,10 +899,12 @@ async def restaurar_backup_lote(
         raise HTTPException(status_code=404, detail="Backup não encontrado.")
 
     # 1. Recupera o lote no banco ou recria
-    lote = await session.get(Lote, backup.lote_id)
+    lote = await session.get(Lote, backup.lote_id, with_for_update=True)
     if lote:
         lote.deleted_at = None
         lote.ativo = True
+        if lote.oculto:
+            await revogar_acessos(lote, session, novo_link=True)
         session.add(lote)
 
         # SEC-13: Reativa APENAS os ingressos que estavam ativos no snapshot e cujo usuário não possui outro ativo
@@ -846,6 +936,10 @@ async def restaurar_backup_lote(
             lote_data = dados.get("lote", {})
             novo_lote = Lote(
                 nome=lote_data.get("nome", backup.lote_nome),
+                oculto=bool(lote_data.get("oculto", False)),
+                acesso_token=secrets.token_urlsafe(32) if lote_data.get("oculto") else None,
+                avulso_config=await validar_configuracao(lote_data.get("avulso_config", {}), session, lote_data.get("secretaria_id")),
+                acesso_senha_hash=lote_data.get("acesso_senha_hash"),
                 quantidade_total=lote_data.get("quantidade_total", 100),
                 quantidade_resgatada=lote_data.get("quantidade_resgatada", 0),
                 data_abertura=_datetime_utc(lote_data["data_abertura"]) if lote_data.get("data_abertura") else None,
@@ -855,6 +949,7 @@ async def restaurar_backup_lote(
             )
             session.add(novo_lote)
             await session.flush()
+            lote = novo_lote
 
             for ing_d in dados.get("ingressos", []):
                 # SEC-13: Só recria ingressos que estavam ativos no snapshot
@@ -889,7 +984,8 @@ async def restaurar_backup_lote(
     await lote_event_hub.broadcast("LOTE_ATUALIZADO", {
         "tipo": "LOTE_ATUALIZADO",
         "lote_id": backup.lote_id,
-        "restaurado": True
+        "restaurado": True,
+        "oculto": lote.oculto,
     })
 
     return JSONResponse({
@@ -957,6 +1053,10 @@ async def importar_backup_lote_json(
 
     novo_lote = Lote(
         nome=novo_nome,
+        oculto=bool(lote_info.get("oculto", False)),
+        acesso_token=secrets.token_urlsafe(32) if lote_info.get("oculto") else None,
+        avulso_config=await validar_configuracao(lote_info.get("avulso_config", {}), session, lote_info.get("secretaria_id")),
+        acesso_senha_hash=lote_info.get("acesso_senha_hash"),
         quantidade_total=lote_info.get("quantidade_total", max(len(ingressos_info), 100)),
         quantidade_resgatada=len(ingressos_info),
         data_abertura=_datetime_utc(lote_info["data_abertura"]) if lote_info.get("data_abertura") else None,
@@ -1030,7 +1130,8 @@ async def importar_backup_lote_json(
     await lote_event_hub.broadcast("LOTE_ATUALIZADO", {
         "tipo": "LOTE_ATUALIZADO",
         "lote_id": novo_lote.id,
-        "importado": True
+        "importado": True,
+        "oculto": novo_lote.oculto,
     })
 
     return JSONResponse({
@@ -1190,6 +1291,7 @@ async def cancelar_ingresso(
     ingresso = res.scalars().first()
     if not ingresso:
         raise HTTPException(status_code=404, detail="Ingresso não encontrado ou já cancelado.")
+    await exigir_gestao_participante(session, admin, ingresso.usuario_id)
 
     data = {}
     try:
@@ -1445,7 +1547,9 @@ async def listar_participantes_admin(
     res_lotes = await session.execute(
         select(Lote).where(Lote.deleted_at.is_(None)).order_by(Lote.id.asc())
     )
-    lista_lotes = [{"id": l.id, "nome": l.nome} for l in res_lotes.scalars().all()]
+    lotes_visualizados = res_lotes.scalars().all()
+    ids_lotes_ocultos = set((await session.execute(select(Lote.id).where(Lote.oculto == True))).scalars().all())
+    lista_lotes = [{"id": l.id, "nome": l.nome} for l in lotes_visualizados]
 
     res_sec = await session.execute(
         select(Secretaria).order_by(Secretaria.nome.asc())
@@ -1642,6 +1746,10 @@ async def listar_participantes_admin(
 
         lista_participantes_todos.append({
             "id": u.id,
+            "pode_gerenciar": eh_superadmin(admin) or not (
+                any(i.lote and i.lote.oculto for i in u.ingressos)
+                or any(s.lote_id in ids_lotes_ocultos for s in u.solicitacoes_validacao)
+            ),
             "cpf": u.cpf,
             "cpf_formatado": cpf_fmt,
             "nome": u.nome,
@@ -1752,6 +1860,7 @@ async def editar_participante_admin(
     atualizem nome completo, vínculo, secretaria, setor, telefone,
     data de nascimento e e-mail de um participante.
     """
+    await exigir_gestao_participante(session, admin, participante_id)
     try:
         data = await request.json()
     except Exception:
@@ -2124,6 +2233,7 @@ async def editar_usuario_admin(
     stmt = select(Usuario).where(Usuario.id == usuario_id)
     res = await session.execute(stmt)
     usuario = res.scalars().first()
+    await exigir_gestao_participante(session, admin, usuario_id)
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 
@@ -2243,6 +2353,7 @@ async def enviar_email_usuario_admin(
     )
     res = await session.execute(stmt)
     usuario = res.scalars().first()
+    await exigir_gestao_participante(session, admin, usuario_id)
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 
@@ -2298,6 +2409,7 @@ async def excluir_usuario_admin(
     stmt = select(Usuario).where(Usuario.id == usuario_id, Usuario.deleted_at.is_(None))
     res = await session.execute(stmt)
     usuario = res.scalars().first()
+    await exigir_gestao_participante(session, admin, usuario_id)
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado ou já excluído.")
 
@@ -2340,6 +2452,7 @@ async def redefinir_senha_usuario_email_admin(
     stmt = select(Usuario).where(Usuario.id == usuario_id, Usuario.deleted_at.is_(None))
     res = await session.execute(stmt)
     u = res.scalars().first()
+    await exigir_gestao_participante(session, admin, usuario_id)
     if not u:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
 

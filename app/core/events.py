@@ -127,6 +127,8 @@ class LoteEventHub:
         self, payload: str, version: int, event_type: str, data: dict,
         *, invalidate_cache: bool = True,
     ):
+        if data.get("oculto"):
+            return
         if invalidate_cache:
             self._invalidate_cache()
         self._recent_events.append((version, event_type, data, payload))
@@ -182,7 +184,9 @@ class LoteEventHub:
                 self._enqueue(q, self._payload("RESERVA_ATUALIZADA", visible))
 
     async def broadcast(self, event_type: str, data: Dict[str, Any], *, invalidate_cache: bool = True) -> bool:
-        """Mantém o contrato imediato das alterações administrativas."""
+        """Mantém o contrato imediato das alterações administrativas públicas."""
+        if data.get("oculto"):
+            return True
         version = self.next_version()
         meta = dict(data, state_version=version, timestamp_ms=int(time.time() * 1000))
         meta.setdefault("event_id", uuid.uuid4().hex)
@@ -375,6 +379,8 @@ class LoteEventHub:
             for lote_id in dirty:
                 try:
                     status = await self._snapshot_loader(lote_id)
+                    if status.get("oculto"):
+                        continue
                     public_status = {
                         key: value for key, value in status.items()
                         if key in self._PUBLIC_STATUS_FIELDS

@@ -836,6 +836,7 @@ async def listar_solicitacoes_cancelamento(
 
         lista_formatada.append({
             "id": s.id,
+            "pode_gerenciar": "admin_geral" in admin.get_roles_list() or not (lote and lote.oculto),
             "protocolo": f"CAN-{s.id:06d}",
             "status": s.status,
             "criado_em": formatar_data_sp(s.criado_em) if s.criado_em else "-",
@@ -903,6 +904,9 @@ async def aprovar_cancelamento(
     )
     res = await session.execute(stmt)
     solic = res.scalars().first()
+    if solic:
+        from app.services.lotes_ocultos import exigir_gestao_participante
+        await exigir_gestao_participante(session, admin, solic.usuario_id)
 
     if not solic:
         raise HTTPException(status_code=404, detail="Solicitação de cancelamento não encontrada.")
@@ -1010,6 +1014,9 @@ async def rejeitar_cancelamento(
     )
     res = await session.execute(stmt)
     solic = res.scalars().first()
+    if solic:
+        from app.services.lotes_ocultos import exigir_gestao_participante
+        await exigir_gestao_participante(session, admin, solic.usuario_id)
 
     if not solic:
         raise HTTPException(status_code=404, detail="Solicitação de cancelamento não encontrada.")

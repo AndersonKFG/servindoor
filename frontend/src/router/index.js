@@ -102,6 +102,12 @@ const routes = [
     name: 'portaria',
     component: PortariaView,
     meta: { requiresAuth: true, roles: ['admin_geral', 'admin', 'portaria'] }
+  },
+  {
+    path: '/:hiddenToken([A-Za-z0-9_-]{43})',
+    name: 'cadastro-avulso',
+    component: ResgateView,
+    meta: { hideNav: true }
   }
 ]
 
@@ -117,6 +123,7 @@ let gatekeeperEnabled = true
 router.beforeEach(async (to, from, next) => {
   // O token pessoal recebido por e-mail autoriza exclusivamente a troca de foto.
   if (to.name === 'corrigir-foto') return next()
+  if (to.name === 'cadastro-avulso') return next()
 
   // 1. REGRA ESTRITA DO TELÃO: sempre exige autenticação pelo SITE_ACCESS_PIN
   if (to.path === '/telao') {

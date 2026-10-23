@@ -31,7 +31,9 @@ from app.models.all_models import (
 )
 from app.core.security import extrair_ip_cliente, formatar_data_sp, TZ_SAO_PAULO
 from app.core.cpf import limpar_cpf, mascarar_cpf, validar_cpf_matematico
-from app.services.email_service import send_validation_pending_email_async
+from app.services.email_service import send_validation_pending_email_async, send_ticket_email_async
+from app.services.lotes_ocultos import conferir_autorizacao, configuracao, instante_utc, VINCULOS
+from app.core.validators import normalizar_data_nascimento, formatar_telefone, validar_email
 from app.services.validacao_servidor_service import ServidorValidationService
 from app.services.resgate_jobs import enqueue_external_validation, get_external_validation_status
 from app.services.reserva_batch import reserva_batch_service
@@ -307,6 +309,8 @@ async def verificar_e_registrar_rate_limit_db(ip: str, session: Optional[AsyncSe
 
 def _publicar_mudanca_reserva(reserva: ReservaIngresso, tipo: str, **dados) -> None:
     """O commit é autoritativo; a entrega SSE não participa da resposta HTTP."""
+    if reserva.acesso_versao is not None:
+        return
     try:
         lote_event_hub.publish_reservation_change({
             "tipo": tipo, "lote_id": reserva.lote_id,
@@ -447,6 +451,7 @@ async def validar_cpf_resgate(
         .where(
             ReservaIngresso.status == "ativa",
             ReservaIngresso.expira_em <= agora_val,
+            ReservaIngresso.acesso_versao.is_(None),
             or_(
                 ReservaIngresso.cpf == cpf_limpo,
                 ReservaIngresso.browser_token_hash == current_browser_hash
@@ -521,6 +526,7 @@ async def status_reserva(
 
     if not reserva:
         return JSONResponse(content={"status": "inexistente", "ativa": False, "motivo": "nao_encontrada"})
+    conferir_autorizacao(request, await session.get(Lote, reserva.lote_id))
 
     if reserva.status == "concluida" or reserva.utilizada:
         return JSONResponse(content={"status": "utilizada", "ativa": False, "motivo": "utilizada"})
@@ -580,6 +586,7 @@ async def desistir_reserva(
     reserva = res.scalars().first()
 
     if reserva and reserva.status == "ativa" and not reserva.utilizada:
+        conferir_autorizacao(request, await session.get(Lote, reserva.lote_id))
         # Valida que quem está desistindo é o navegador detentor da reserva
         if reserva.browser_token_hash and reserva.browser_token_hash != current_browser_hash:
             return JSONResponse(
@@ -689,6 +696,9 @@ def _resposta_resgate_confirmado(request, solic, identificado_api=None, validaca
         "mensagem": "Seu resgate foi realizado com sucesso! Nossa equipe e o sistema validarão seu cadastro em até 72h.",
         "redirect_url": f"/sucesso/analise?solicitacao_id={solic.id}&token={solic.token}",
     }
+    if request.url.path.startswith("/api/avulso/"):
+        content["mensagem"] = ("Cadastro aprovado. O ingresso foi enfileirado para envio por e-mail."
+            if solic.status == "aprovado" else "Cadastro recebido e aguardando análise do superadministrador.")
     response = JSONResponse(content=content)
     response.set_cookie(key=f"solic_claim_{solic.id}", value=solic.token,
         max_age=86400 * 3, httponly=True, secure=is_conexao_segura(request), samesite="lax")
@@ -714,6 +724,7 @@ async def recuperar_confirmacao_resgate(
     cpf: str = Query(...), session: AsyncSession = Depends(get_session),
 ):
     """Recupera o recibo após uma resposta perdida, sem reenviar foto/formulário."""
+    conferir_autorizacao(request, await session.get(Lote, lote_id))
     payload = validar_browser_token(request.cookies.get(COOKIE_BROWSER_ID))
     if not payload:
         raise HTTPException(status_code=403, detail="A identidade do navegador é necessária para recuperar o resgate.")
@@ -799,13 +810,33 @@ async def processar_resgate(
     reserva = (await session.execute(stmt_reserva)).scalars().first()
     if not reserva:
         raise HTTPException(status_code=400, detail="Reserva de vaga inválida ou não encontrada.")
+    lote_inicial = await session.get(Lote, lote_id)
+    conferir_autorizacao(request, lote_inicial)
+    sem_prazo = bool(lote_inicial.oculto and not configuracao(lote_inicial)["temporizado"])
+    if lote_inicial.oculto:
+        if reserva.acesso_versao != lote_inicial.acesso_versao or reserva.browser_token_hash != browser_hash:
+            raise HTTPException(403, "Formulário invalidado. Reinicie pelo link do lote.")
+        cfg = configuracao(lote_inicial)
+        valores = {"secretaria_id": secretaria_id, "setor": setor, "vinculo": vinculo}
+        for campo, regra in cfg["campos"].items():
+            if regra["modo"] == "fixo" and str(valores[campo]).strip() != regra["valor"]:
+                raise HTTPException(400, "Um campo travado foi alterado. Reinicie o formulário.")
+        try:
+            normalizar_data_nascimento(data_nascimento)
+            telefone = formatar_telefone(telefone)
+            email = validar_email(email)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if not nome.strip() or not setor.strip() or not telefone or not email or vinculo not in VINCULOS:
+            raise HTTPException(400, "Preencha corretamente todos os campos obrigatórios.")
     # Se o token_reserva UUID bateu, permite confirmacao mesmo se o cookie de navegador foi perdido (ex: mobile/webview)
     if False and reserva.browser_token_hash and reserva.browser_token_hash != browser_hash:
         raise HTTPException(status_code=403, detail="A identidade do navegador não corresponde à reserva iniciada.")
     recovered = await _recuperar_resgate_confirmado(session, reserva, cpf_limpo, request)
     if recovered:
         return recovered
-    if reserva.status != "ativa" or reserva.utilizada or reserva.expira_em <= datetime.now(timezone.utc):
+    expira_em = instante_utc(reserva.expira_em) if lote_inicial.oculto else reserva.expira_em
+    if reserva.status != ("rascunho" if sem_prazo else "ativa") or reserva.utilizada or (not sem_prazo and expira_em <= datetime.now(timezone.utc)):
         return JSONResponse(status_code=400, content={"codigo": "reserva_expirada", "detail": "A reserva expirou ou foi encerrada. Inicie um novo resgate."})
 
     load_form = request.headers.get("x-load-test-form") == "1"
@@ -846,6 +877,9 @@ async def processar_resgate(
                     Lote.id == lote_id, Lote.deleted_at.is_(None)
                 ).with_for_update())).scalars().first()
             reserva = (await session.execute(stmt_reserva.with_for_update().execution_options(populate_existing=True))).scalars().first()
+            conferir_autorizacao(request, lote)
+            if lote.oculto and (reserva is None or reserva.acesso_versao != lote.acesso_versao):
+                raise HTTPException(403, "Formulário invalidado. Reinicie pelo link do lote.")
             if not reserva or reserva.id != reserva_id:
                 raise HTTPException(status_code=400, detail="Reserva inválida.")
             # Se o token_reserva UUID bateu, permite confirmacao mesmo se o cookie de navegador foi perdido
@@ -855,13 +889,22 @@ async def processar_resgate(
             if recovered:
                 return recovered
             agora = datetime.now(timezone.utc)
-            if reserva.status != "ativa" or reserva.utilizada or reserva.expira_em <= agora:
+            expira_em = instante_utc(reserva.expira_em) if lote.oculto else reserva.expira_em
+            if reserva.status != ("rascunho" if sem_prazo else "ativa") or reserva.utilizada or (not sem_prazo and expira_em <= agora):
                 return JSONResponse(status_code=400, content={"codigo": "reserva_expirada", "detail": "A reserva expirou ou foi encerrada. Inicie um novo resgate."})
-            if not lote or not lote.ativo or (lote.data_abertura and agora < lote.data_abertura) or (lote.data_fechamento and agora > lote.data_fechamento):
+            abertura = instante_utc(lote.data_abertura) if lote.oculto and lote.data_abertura else lote.data_abertura
+            fechamento = instante_utc(lote.data_fechamento) if lote.oculto and lote.data_fechamento else lote.data_fechamento
+            if not lote.ativo or (abertura and agora < abertura) or (fechamento and agora > fechamento):
                 await _cancelar_reserva_ativa(session, reserva, "lote_indisponivel")
                 raise HTTPException(status_code=400, detail="Este lote está indisponível para resgate.")
             if lote.quantidade_resgatada >= lote.quantidade_total:
                 raise HTTPException(status_code=400, detail="Todos os ingressos deste lote já foram resgatados.")
+            if sem_prazo:
+                ativas = await session.scalar(select(func.count(ReservaIngresso.id)).where(
+                    ReservaIngresso.lote_id == lote_id, ReservaIngresso.status == "ativa",
+                    ReservaIngresso.expira_em > agora))
+                if lote.quantidade_resgatada + (ativas or 0) >= lote.quantidade_total:
+                    raise HTTPException(409, "Todas as vagas estão ocupadas ou em preenchimento.")
             if lote.secretaria_id and lote.secretaria_id != secretaria_id:
                 await _cancelar_reserva_ativa(session, reserva, "secretaria_exclusiva")
                 raise HTTPException(status_code=400, detail="Este lote é exclusivo para outra secretaria.")
@@ -887,6 +930,15 @@ async def processar_resgate(
                 usuario_id=usuario.id, lote_id=lote.id, secretaria_id=secretaria_id,
                 token=secrets.token_urlsafe(32), status="pendente_analise",
                 ip_origem=extrair_ip_cliente(request), identificado_api=False)
+            imediato = lote.oculto and not configuracao(lote)["exige_validacao"]
+            if imediato:
+                solic.status = "aprovado"
+                solic.analisado_em = agora
+                solic.comunicado = True
+                solic.comunicado_em = agora
+                ingresso = Ingresso(usuario_id=usuario.id, lote_id=lote.id,
+                                    qr_code_token=str(uuid.uuid4()))
+                session.add(ingresso)
             session.add(solic)
             reserva.utilizada = True
             reserva.status = "concluida"
@@ -895,10 +947,18 @@ async def processar_resgate(
             session.add(reserva)
             session.add(lote)
             await session.flush()
-            await enqueue_external_validation(session, solic.id)
+            if not imediato:
+                await enqueue_external_validation(session, solic.id)
             if load_form:
                 await session.execute(text("UPDATE resgate_jobs SET status='skipped', finished_at=NOW(), last_error='authorized_load_test' WHERE solicitacao_id=:id"), {"id": solic.id})
-            if usuario.email:
+            if imediato:
+                enqueued = await send_ticket_email_async(usuario_nome=usuario.nome,
+                    usuario_email=usuario.email, ingresso_token=ingresso.qr_code_token,
+                    lote_nome=lote.nome, secretaria_nome=secretaria_nome, setor=usuario.setor,
+                    cpf_formatado=cpf_limpo, session=session)
+                if not enqueued:
+                    raise HTTPException(503, "Não foi possível registrar o envio do ingresso. Tente novamente.")
+            elif usuario.email:
                 enqueued = await send_validation_pending_email_async(usuario_nome=usuario.nome,
                     usuario_email=usuario.email, lote_nome=lote.nome,
                     secretaria_nome=secretaria_nome, session=session)

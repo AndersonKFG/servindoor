@@ -52,6 +52,8 @@ class TestResgateMigrations(unittest.IsolatedAsyncioTestCase):
             await conn.execute(text("CREATE UNIQUE INDEX uq_reserva_cpf_ativa ON reservas_ingressos (cpf) WHERE status = 'ativa'"))
             await conn.execute(text("CREATE UNIQUE INDEX uq_reserva_browser_ativa ON reservas_ingressos (browser_token_hash) WHERE status = 'ativa'"))
             await conn.execute(text("INSERT INTO lotes(id, nome, quantidade_total, quantidade_resgatada, ativo) VALUES (1, 'Teste', 20, 0, TRUE)"))
+            defaults = (await conn.execute(text('SELECT oculto, acesso_versao, avulso_config FROM lotes WHERE id=1'))).one()
+            self.assertEqual(tuple(defaults), (False, 1, '{}'))
             await conn.execute(text("""
                 INSERT INTO reservas_ingressos (token, lote_id, criada_em, expira_em, status, utilizada, cpf, browser_token_hash)
                 VALUES ('original', 1, NOW(), NOW() + INTERVAL '5 minutes', 'ativa', FALSE, '52998224725', 'browser')

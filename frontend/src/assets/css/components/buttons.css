@@ -362,3 +362,49 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* AÇÃO PRINCIPAL EM CARTÕES OPERACIONAIS */
+.btn-operation {
+  min-height: var(--control-height-lg);
+  padding: var(--space-lg);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-base);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.btn-operation--success {
+  background: var(--success-color);
+  color: var(--bg-base);
+}
+
+.btn-operation--danger {
+  background: var(--danger-color);
+  color: var(--white);
+}
+
+.btn-operation:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.btn-operation:focus-visible {
+  outline: 2px solid var(--primary-accent);
+  outline-offset: var(--space-xs);
+}
+
+.btn-operation:disabled {
+  background: var(--bg-input);
+  border-color: var(--border-glass);
+  color: var(--text-muted);
+  box-shadow: none;
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.btn-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+}

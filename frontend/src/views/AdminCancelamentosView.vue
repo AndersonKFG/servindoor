@@ -502,6 +502,7 @@ function getStatusBadge(status) {
           <div class="entity-card-footer justify-end">
             <button
               v-if="item.status === 'pendente_analise'"
+              :disabled="item.pode_gerenciar === false"
               type="button"
               class="btn-card-primary font-outfit"
               @click="abrirComparacao(item)"
@@ -674,7 +675,7 @@ function getStatusBadge(status) {
           </button>
 
           <!-- Se estiver pendente, exibe botões de Decisão -->
-          <template v-if="solicitacaoSelecionada?.status === 'pendente_analise'">
+          <template v-if="solicitacaoSelecionada?.status === 'pendente_analise' && solicitacaoSelecionada?.pode_gerenciar !== false">
             <button
               type="button"
               class="btn-danger"

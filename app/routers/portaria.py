@@ -7,14 +7,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select, desc
 from sqlalchemy.orm import selectinload
 
-from app.core.deps import get_current_staff, get_current_portaria
+from app.core.deps import get_current_staff, get_current_portaria, get_current_admin_geral
 from app.db.session import get_session
-from app.models.all_models import Usuario, Ingresso, LogAcesso, MovimentoTipo, Secretaria
+from app.models.all_models import Usuario, Ingresso, LogAcesso, MovimentoTipo, Secretaria, ControlePresenca
 from app.core.security import extrair_ip_cliente, formatar_data_sp
 from app.core.cpf import limpar_cpf
 
 router = APIRouter()
 VUE_INDEX_PATH = "app/static/dist/index.html"
+
+
+@router.get("/api/portaria/liberacao-presenca")
+async def consultar_liberacao_presenca(
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_staff)
+):
+    controle = await session.get(ControlePresenca, 1)
+    return JSONResponse(
+        content={"liberada": bool(controle and controle.liberada)},
+        headers={"Cache-Control": "no-store"}
+    )
+
+
+@router.put("/api/portaria/liberacao-presenca")
+async def definir_liberacao_presenca(
+    liberada: bool = Body(..., embed=True, strict=True),
+    session: AsyncSession = Depends(get_session),
+    current_user: Usuario = Depends(get_current_admin_geral)
+):
+    result = await session.execute(
+        select(ControlePresenca).where(ControlePresenca.id == 1).with_for_update()
+    )
+    controle = result.scalars().first()
+    if controle is None:
+        controle = ControlePresenca(id=1)
+    controle.liberada = liberada
+    controle.alterado_por_id = current_user.id
+    controle.alterado_em = datetime.now(timezone.utc)
+    session.add(controle)
+    await session.commit()
+    return JSONResponse(content={"sucesso": True, "liberada": controle.liberada})
 
 
 @router.get("/portaria")
@@ -178,6 +210,19 @@ async def alterar_status_portaria(
     """
     Registra nova movimentação (entrada ou saida) para o participante com auditoria completa.
     """
+    # O lock compartilhado permite registros simultâneos, mas serializa o
+    # bloqueio geral com as movimentações que já estão em andamento.
+    result = await session.execute(
+        select(ControlePresenca).where(ControlePresenca.id == 1).with_for_update(read=True)
+    )
+    controle = result.scalars().first()
+    if controle is None or not controle.liberada:
+        return JSONResponse(status_code=403, content={
+            "sucesso": False,
+            "codigo": "presenca_bloqueada",
+            "mensagem": "As alterações de presença estão bloqueadas. Aguarde a liberação do Administrador Geral."
+        })
+
     usuario = await session.get(Usuario, usuario_id)
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")

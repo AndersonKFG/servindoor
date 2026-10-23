@@ -62,6 +62,17 @@
   --radius-xl: 20px;
   --radius-pill: 9999px;
 
+  /* ESPAÇAMENTO E TAMANHO DE CONTROLES */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 1.5rem;
+  --space-2xl: 2rem;
+  --space-3xl: 2.5rem;
+  --control-height: 44px;
+  --control-height-lg: 56px;
+
   /* TRANSIÇÕES */
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s ease;

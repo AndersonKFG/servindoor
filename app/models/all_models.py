@@ -1,5 +1,5 @@
 import json
-from sqlalchemy import BigInteger, Column, Text
+from sqlalchemy import BigInteger, Column, DateTime, Text
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List
@@ -201,6 +201,11 @@ class Lote(SQLModel, table=True):
     ativo: bool = Field(default=True)
     secretaria_id: Optional[int] = Field(default=None, foreign_key="secretarias.id", nullable=True)
     deleted_at: Optional[datetime] = Field(default=None, nullable=True)
+    oculto: bool = Field(default=False)
+    acesso_token: Optional[str] = Field(default=None, unique=True, index=True)
+    acesso_versao: int = Field(default=1)
+    acesso_senha_hash: Optional[str] = Field(default=None)
+    avulso_config: str = Field(default="{}", sa_column=Column(Text, nullable=False))
 
     # Relacionamentos
     secretaria: Optional[Secretaria] = Relationship(back_populates="lotes")
@@ -241,9 +246,19 @@ class ReservaIngresso(SQLModel, table=True):
     status: str = Field(default="ativa", index=True)
     browser_token_hash: Optional[str] = Field(default=None, nullable=True, index=True)
     device_fingerprint: Optional[str] = Field(default=None, nullable=True)
+    acesso_versao: Optional[int] = Field(default=None)
 
     # Relacionamentos
     lote: Optional[Lote] = Relationship(back_populates="reservas")
+
+
+class ControlePresenca(SQLModel, table=True):
+    __tablename__ = "controle_presenca"
+
+    id: int = Field(default=1, primary_key=True)
+    liberada: bool = Field(default=False)
+    alterado_por_id: Optional[int] = Field(default=None, foreign_key="usuarios.id", nullable=True)
+    alterado_em: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
 
 
 class LogAcesso(SQLModel, table=True):

@@ -6,12 +6,88 @@ import { getDeviceFingerprint, getDeviceId } from '../composables/useLoteStatus'
 import { getTabReservationToken, saveTabReservationToken, clearTabReservationToken } from '../utils/reservationStorage'
 import WebcamCapture from '../components/WebcamCapture.vue'
 import Modal from '../components/Modal.vue'
+import ExclusiveLotAccess from '../components/ExclusiveLotAccess.vue'
 
 const route = useRoute()
 const router = useRouter()
 const { calibrarComResposta, getSynchronizedServerTime } = useServerTime()
 
-const loteId = route.params.loteId
+const hiddenToken = route.params.hiddenToken || ''
+const avulso = !!hiddenToken
+let loteId = route.params.loteId
+const autorizacaoAvulso = ref('')
+const senhaAvulso = ref('')
+const senhaNecessaria = ref(false)
+const acessoInvalidado = ref(false)
+const confirmacaoAvulso = ref(null)
+const configAvulso = ref(null)
+let avulsoPoll = null
+const temporizado = computed(() => !avulso || configAvulso.value?.temporizado !== false)
+const campoTravado = nome => avulso && configAvulso.value?.campos?.[nome]?.modo === 'fixo'
+
+async function requisicaoResgate(url, options = {}) {
+  if (!avulso) return fetch(url, options)
+  const parsed = new URL(url, window.location.origin)
+  let acao
+  if (parsed.pathname.endsWith('/reservar')) acao = 'iniciar'
+  else if (parsed.pathname.endsWith('/resgate-confirmado')) acao = 'confirmacao'
+  else acao = parsed.pathname.split('/').pop()
+  const headers = new Headers(options.headers || {})
+  headers.set('X-Lote-Acesso', autorizacaoAvulso.value)
+  const response = await fetch(`/api/avulso/${hiddenToken}/${acao}${parsed.search}`, { ...options, headers, cache: 'no-store' })
+  if (response.status === 403 || response.status === 404) {
+    acessoInvalidado.value = true
+    errorMessage.value = 'O acesso foi invalidado. Reabra o link para iniciar um novo formulário.'
+  }
+  return response
+}
+
+function reiniciarAvulso() {
+  limparRascunhoFormulario()
+  limparEnvioPendente()
+  if (autorizacaoAvulso.value && !acessoInvalidado.value) {
+    if (timerInterval) clearInterval(timerInterval)
+    if (avulsoPoll) clearInterval(avulsoPoll)
+    if (debounceCpfTimer) clearTimeout(debounceCpfTimer)
+    confirmacaoAvulso.value = null
+    tokenReserva.value = ''
+    reservaExpiraEmMs.value = null
+    cpfStatus.value = null
+    nascAno.value = ''
+    nascMes.value = ''
+    nascDia.value = ''
+    form.value = { cpf: '', data_nascimento: '', nome: '', secretaria_id: '', setor: '',
+      vinculo: 'Efetivo', telefone: '', email: '', foto_base64: '' }
+    errorMessage.value = ''
+    showModalExpirado.value = false
+    modalFeedback.value.show = false
+    carregarDadosResgate()
+    return
+  }
+  window.location.reload()
+}
+
+async function autorizarAvulso() {
+  const res = await fetch(`/api/avulso/${hiddenToken}/acesso`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ senha: senhaAvulso.value }), cache: 'no-store'
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    senhaNecessaria.value = !!data.senha_necessaria
+    errorMessage.value = data.senha_necessaria && !senhaAvulso.value ? '' : (data.detail || 'Link indisponível.')
+    return false
+  }
+  loteId = data.id
+  lote.value = data
+  configAvulso.value = data.config
+  autorizacaoAvulso.value = data.autorizacao
+  senhaAvulso.value = ''
+  senhaNecessaria.value = false
+  errorMessage.value = ''
+  tokenReserva.value = getTabReservationToken(loteId) || ''
+  return true
+}
 const loading = ref(true)
 const lote = ref(null)
 const secretarias = ref([])
@@ -437,6 +513,13 @@ function aplicarEstadoConsolidadoDaStream(data) {
 }
 
 function connectResgateSSE() {
+  if (avulso) {
+    if (avulsoPoll) clearInterval(avulsoPoll)
+    avulsoPoll = setInterval(() => {
+      if (!acessoInvalidado.value && !confirmacaoAvulso.value) requisicaoResgate('/status').catch(() => {})
+    }, 5000)
+    return
+  }
   if (typeof window === 'undefined' || !window.EventSource) return
   if (resgateEventSource) {
     resgateEventSource.close()
@@ -538,7 +621,7 @@ async function validarCpfNoServidor(digits) {
     validandoCpf.value = true
     cpfStatus.value = null
     const tokenParam = tokenReserva.value ? `&token_reserva=${encodeURIComponent(tokenReserva.value)}` : ''
-    const res = await fetch(`/api/resgate/validar-cpf?cpf=${digits}${tokenParam}`)
+    const res = await requisicaoResgate(`/api/resgate/validar-cpf?cpf=${digits}${tokenParam}`)
     const data = await res.json()
     if (submitting.value || envioPendente.value) return
 
@@ -565,7 +648,7 @@ async function validarCpfNoServidor(digits) {
           tokenReserva.value = ''
           const formData = new FormData()
           formData.append('token_reserva', tok)
-          fetch('/api/resgate/desistir', { method: 'POST', body: formData }).catch(() => {})
+          requisicaoResgate('/api/resgate/desistir', { method: 'POST', body: formData }).catch(() => {})
         }
 
         showModalDesistidaOutroNavegador.value = false
@@ -576,8 +659,8 @@ async function validarCpfNoServidor(digits) {
           subtitulo: data.mensagem || 'Já foi realizado um resgate para este CPF.',
           icone: 'bi-exclamation-triangle-fill',
           corIcone: 'text-warning',
-          btnTexto: 'Voltar à Página Inicial',
-          btnIcone: 'bi-house-door'
+          btnTexto: avulso ? 'Cadastrar outro participante' : 'Voltar à Página Inicial',
+          btnIcone: avulso ? 'bi-person-plus' : 'bi-house-door'
         }
         return
       }
@@ -673,12 +756,16 @@ const isTimerCritical = computed(() => tempoRestanteSegundos.value <= 60)
 async function carregarDadosResgate() {
   try {
     loading.value = true
+    if (avulso && !autorizacaoAvulso.value && !await autorizarAvulso()) {
+      loading.value = false
+      return
+    }
 
     if (restaurarEnvioPendente()) {
       if (await consultarConfirmacaoPendente()) return
       connectResgateSSE()
       try {
-        const secRes = await fetch('/api/secretarias')
+        const secRes = await requisicaoResgate('/api/secretarias')
         if (secRes.ok) secretarias.value = await secRes.json()
       } catch {}
       if (!envioPendente.value.completo) {
@@ -691,7 +778,7 @@ async function carregarDadosResgate() {
     if (route.query.nova === '1') limparRascunhoFormulario()
     const deviceFp = getDeviceFingerprint()
     const deviceId = getDeviceId()
-    const res = await fetch(`/api/lote/${loteId}/reservar?device_fingerprint=${encodeURIComponent(deviceFp)}&device_id=${encodeURIComponent(deviceId)}`, {
+    const res = await requisicaoResgate(`/api/lote/${loteId}/reservar?device_fingerprint=${encodeURIComponent(deviceFp)}&device_id=${encodeURIComponent(deviceId)}`, {
       method: 'POST',
       headers: {
         'Accept': 'application/json',
@@ -765,6 +852,11 @@ async function carregarDadosResgate() {
     }
 
     const dataRes = await res.json()
+    if (avulso) {
+      configAvulso.value = dataRes.config
+      lote.value = dataRes
+      if (temporizado.value) aplicarPrazoReservaDaStream(dataRes)
+    }
     if (dataRes.token_reserva) {
       tokenReserva.value = dataRes.token_reserva
     }
@@ -773,7 +865,7 @@ async function carregarDadosResgate() {
     }
     connectResgateSSE()
     try {
-      const secRes = await fetch('/api/secretarias')
+      const secRes = await requisicaoResgate('/api/secretarias')
       if (secRes.ok) {
         secretarias.value = await secRes.json()
       }
@@ -784,6 +876,11 @@ async function carregarDadosResgate() {
 
 
     restaurarRascunhoFormulario()
+    if (avulso) {
+      for (const [campo, regra] of Object.entries(configAvulso.value.campos)) {
+        if (regra.modo !== 'livre') form.value[campo] = regra.valor
+      }
+    }
     updateCountdown()
     timerInterval = setInterval(updateCountdown, 1000)
     loading.value = false
@@ -797,6 +894,7 @@ async function carregarDadosResgate() {
 function fecharModalFeedback() {
   modalFeedback.value.show = false
   limparRascunhoFormulario()
+  if (avulso) { reiniciarAvulso(); return }
   router.push('/')
 }
 
@@ -816,12 +914,13 @@ async function executarDesistencia() {
     desistindo.value = true
     const formData = new FormData()
     formData.append('token_reserva', tokenReserva.value)
-    const res = await fetch('/api/resgate/desistir', {
+    const res = await requisicaoResgate('/api/resgate/desistir', {
       method: 'POST',
       body: formData
     })
     if (res.ok) apagarCookiePrazoReserva()
     showModalDesistir.value = false
+    if (avulso) { reiniciarAvulso(); return }
     router.push('/')
   } catch (e) {
     router.push('/')
@@ -871,6 +970,12 @@ function finalizarEnvioConfirmado(data) {
   limparEnvioPendente()
   apagarCookiePrazoReserva()
   limparRascunhoFormulario()
+  if (avulso) {
+    confirmacaoAvulso.value = data
+    if (timerInterval) clearInterval(timerInterval)
+    if (avulsoPoll) clearInterval(avulsoPoll)
+    return true
+  }
   router.push(target)
   return true
 }
@@ -880,7 +985,7 @@ async function consultarConfirmacaoPendente() {
   const token = encodeURIComponent(envioPendente.value.token)
   const cpf = encodeURIComponent(envioPendente.value.cpf.replace(/\D/g, ''))
   try {
-    const response = await fetch(`/api/lote/${loteId}/resgate-confirmado?token_reserva=${token}&cpf=${cpf}`, {
+    const response = await requisicaoResgate(`/api/lote/${loteId}/resgate-confirmado?token_reserva=${token}&cpf=${cpf}`, {
       headers: { 'Accept': 'application/json' }, cache: 'no-store', credentials: 'same-origin'
     })
     if (response.ok) return finalizarEnvioConfirmado(await response.json())
@@ -924,7 +1029,7 @@ async function handleSubmit() {
     formData.append('email', payload.email)
     formData.append('foto_base64', payload.foto_base64)
 
-    const res = await fetch(`/api/lote/${loteId}/resgatar`, {
+    const res = await requisicaoResgate(`/api/lote/${loteId}/resgatar`, {
       method: 'POST',
       headers: { 'Accept': 'application/json, text/html' },
       body: formData
@@ -978,6 +1083,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (avulsoPoll) clearInterval(avulsoPoll)
   if (resgateEventSource) {
     resgateEventSource.close()
     resgateEventSource = null
@@ -995,11 +1101,19 @@ onUnmounted(() => {
 
 
 <template>
-  <div class="resgate-page">
-    <div class="app-container">
+  <div :class="{ 'resgate-page': !avulso || autorizacaoAvulso }">
+    <ExclusiveLotAccess
+      v-if="avulso && !autorizacaoAvulso"
+      v-model="senhaAvulso"
+      :loading="loading"
+      :requires-password="senhaNecessaria"
+      :error-message="errorMessage"
+      @submit="carregarDadosResgate"
+    />
+    <div v-else class="app-container">
       
       <!-- Barra Flutuante Superior do Tempo Reservado (Acompanha a rolagem da tela) -->
-      <div class="sticky-timer-bar" :class="{ 'timer-critical': isTimerCritical }">
+      <div v-if="temporizado && (!avulso || autorizacaoAvulso) && !confirmacaoAvulso" class="sticky-timer-bar" :class="{ 'timer-critical': isTimerCritical }">
         <div class="timer-info-left">
           <span class="timer-pill" :class="{ 'critical': isTimerCritical }">
             <i class="bi bi-hourglass-split"></i>
@@ -1022,14 +1136,14 @@ onUnmounted(() => {
       </div>
 
       <!-- Espaçador para a barra flutuante fixa -->
-      <div class="sticky-timer-spacer"></div>
+      <div v-if="temporizado && !confirmacaoAvulso" class="sticky-timer-spacer"></div>
 
       <div class="form-wrapper">
         <div class="vip-card form-card">
           
           <!-- Cabeçalho do Formulário -->
           <div class="form-header">
-            <span v-if="lote" class="vip-badge bg-primary mb-2">
+            <span v-if="lote" class="vip-badge bg-primary">
               <i class="bi bi-ticket-perforated-fill me-1"></i> {{ lote.nome }}
             </span>
             <h2 class="form-title font-outfit">Preencha seus Dados</h2>
@@ -1042,7 +1156,16 @@ onUnmounted(() => {
             <span>{{ errorMessage }}</span>
           </div>
 
-          <form @submit.prevent="handleSubmit">
+          <section v-if="avulso && !temporizado && !confirmacaoAvulso" class="modal-section"><p>Este formulário não tem cronômetro. A vaga será confirmada somente no envio, conforme a disponibilidade do lote.</p></section>
+          <section v-if="avulso && acessoInvalidado" class="modal-section"><button type="button" class="btn-primary" @click="reiniciarAvulso">Reabrir link e reiniciar</button></section>
+          <section v-if="confirmacaoAvulso" class="modal-hero-card">
+            <h3>{{ confirmacaoAvulso.status === 'aprovado' ? 'Ingresso aprovado' : 'Cadastro recebido' }}</h3>
+            <p>{{ confirmacaoAvulso.mensagem }}</p>
+            <p>Protocolo: VAL-{{ String(confirmacaoAvulso.solicitacao_id).padStart(6, '0') }}</p>
+            <button type="button" class="btn-primary" @click="reiniciarAvulso">Cadastrar outro participante</button>
+          </section>
+
+          <form v-if="!avulso || (autorizacaoAvulso && !acessoInvalidado && !confirmacaoAvulso)" @submit.prevent="handleSubmit">
 
             <!-- SEÇÃO 1: IDENTIFICAÇÃO DO SERVIDOR -->
             <div class="form-section">
@@ -1181,6 +1304,7 @@ onUnmounted(() => {
                   <label class="form-label" for="secretaria-selector-button">Secretaria / Órgão <span class="text-danger">*</span></label>
                   <button
                     id="secretaria-selector-button"
+                    :disabled="campoTravado('secretaria_id')"
                     type="button"
                     class="secretaria-select-trigger"
                     aria-haspopup="dialog"
@@ -1205,6 +1329,7 @@ onUnmounted(() => {
                   <label class="form-label" for="setor">Setor / Local de Trabalho <span class="text-danger">*</span></label>
                   <input
                     id="setor"
+                    :readonly="campoTravado('setor')"
                     v-model="form.setor"
                     type="text"
                     class="form-control"
@@ -1215,7 +1340,7 @@ onUnmounted(() => {
 
                 <div class="form-group">
                   <label class="form-label" for="vinculo">Vínculo <span class="text-danger">*</span></label>
-                  <select id="vinculo" v-model="form.vinculo" class="form-select" required>
+                  <select id="vinculo" v-model="form.vinculo" class="form-select" :disabled="campoTravado('vinculo')" required>
                     <option value="Efetivo">Efetivo</option>
                     <option value="Comissionado">Comissionado</option>
                     <option value="Contrato Temporário">Contrato Temporário</option>

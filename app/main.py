@@ -16,7 +16,7 @@ from app.db.session import async_session, init_db
 from app.models.all_models import Ingresso, SolicitacaoCancelamento, SolicitacaoValidacao, Usuario
 
 # Importando as rotas separadas
-from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq, sponsor_logos, correcao_foto
+from app.routers import public, resgate, admin, portaria, auth, sorteios, gatekeeper, cancelamento, validacoes, faq, sponsor_logos, correcao_foto, avulsos
 
 _MAX_RESGATE_BODY_BYTES = 6 * 1024 * 1024
 
@@ -236,6 +236,7 @@ app.mount("/images", StaticFiles(directory="app/static/dist/images"), name="imag
 
 # --- LIGANDO OS FIOS (Incluindo os roteadores) ---
 app.include_router(gatekeeper.router)
+app.include_router(avulsos.router)
 app.include_router(public.router)
 app.include_router(auth.router)
 app.include_router(resgate.router)
@@ -261,5 +262,8 @@ async def catch_all_spa(full_path: str):
     ):
         raise HTTPException(status_code=404, detail='Recurso não encontrado.')
     if os.path.exists(VUE_INDEX_PATH):
-        return FileResponse(VUE_INDEX_PATH)
+        return FileResponse(VUE_INDEX_PATH, headers={
+            "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex",
+            "Cache-Control": "no-store",
+        })
     raise HTTPException(status_code=404, detail='Página não encontrada.')

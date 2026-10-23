@@ -790,6 +790,7 @@ async function confirmarRejeicao() {
             <div class="actions-left">
               <button
                 v-if="s.status === 'pendente_analise'"
+                :disabled="s.pode_gerenciar === false"
                 type="button"
                 class="btn-card-primary font-outfit"
                 @click="abrirModalAnalise(s)"
@@ -985,7 +986,7 @@ async function confirmarRejeicao() {
         <div class="d-flex align-items-center justify-content-end gap-2 w-100">
           <button type="button" class="btn-secondary" @click="showModalAnalise = false">Fechar</button>
 
-          <template v-if="solicitacaoSelecionada?.status === 'pendente_analise'">
+          <template v-if="solicitacaoSelecionada?.status === 'pendente_analise' && solicitacaoSelecionada?.pode_gerenciar !== false">
             <button
               type="button"
               class="btn-danger"

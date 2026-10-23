@@ -21,6 +21,7 @@ from app.core.validators import validar_email
 from app.db.session import get_session
 from app.models.all_models import SolicitacaoCorrecaoFoto, Usuario
 from app.services.email_service import send_photo_correction_email_async
+from app.services.lotes_ocultos import exigir_gestao_participante
 
 router = APIRouter()
 FOTOS_DIR = Path("app/static/uploads/fotos")
@@ -69,6 +70,7 @@ async def solicitar_correcao_foto(
     admin: Usuario = Depends(get_current_admin),
 ):
     # O mesmo lock serializa reenvios administrativos e trocas de foto.
+    await exigir_gestao_participante(session, admin, participante_id)
     usuario = (await session.execute(select(Usuario).where(
         Usuario.id == participante_id, Usuario.deleted_at.is_(None), Usuario.ativo == True
     ).with_for_update())).scalars().first()

@@ -237,12 +237,16 @@ class TestResgateConfirmation(unittest.IsolatedAsyncioTestCase):
         await self.assert_one_confirmation()
         self.assertEqual(await self.scalar("SELECT COUNT(*) FROM usuarios"), 1)
 
-    async def test_cookie_diferente_nao_recupera_confirmacao(self):
+    async def test_post_recupera_sem_cookie_com_token_e_cpf_corretos(self):
         token, cookie = await self.reserve()
-        await self.confirm(token, cookie)
+        original = json.loads((await self.confirm(token, cookie)).body)
+        recuperado = json.loads((await self.confirm(token, "", photo="")).body)
+        self.assertEqual(recuperado['solicitacao_id'], original['solicitacao_id'])
+        # O POST público preserva a recuperação em webviews sem cookie. O GET
+        # continua exigindo o cookie assinado, coberto pelos testes abaixo.
         with self.assertRaises(HTTPException) as caught:
-            await self.confirm(token, "", photo="")
-        self.assertEqual(caught.exception.status_code, 403)
+            await self.confirm(token, "", cpf=CPF_B, photo="")
+        self.assertEqual(caught.exception.status_code, 409)
         await self.assert_one_confirmation()
 
     async def test_recupera_recibo_por_get_sem_foto_ou_novo_envio(self):
